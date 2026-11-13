@@ -113,11 +113,11 @@ impl Storage {
             let now = Utc::now().timestamp_millis();
             let _ = self.conn.execute(
                 "INSERT OR IGNORE INTO collections (name, color_hex, created_at) VALUES (?1, ?2, ?3)",
-                params!["常用指令", "#10B981", now],
+                params!["常用指令", "#52525B", now],
             );
             let _ = self.conn.execute(
                 "INSERT OR IGNORE INTO collections (name, color_hex, created_at) VALUES (?1, ?2, ?3)",
-                params!["代码片段", "#0EA5E9", now],
+                params!["代码片段", "#71717A", now],
             );
         }
         Ok(())

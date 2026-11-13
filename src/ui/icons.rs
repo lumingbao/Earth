@@ -29,7 +29,7 @@ pub fn draw_earth_emblem(ui: &mut Ui, size: f32, palette: &EarthPalette, paused:
         let ring_color = if paused {
             palette.text_secondary
         } else {
-            Color32::from_rgb(236, 253, 245)
+            Color32::from_rgb(228, 228, 231)
         };
         let pts: Vec<egui::Pos2> = (0..=20)
             .map(|i| {
@@ -63,7 +63,7 @@ pub fn icon_button(
             p.rect_stroke(
                 rect,
                 CornerRadius::same(7),
-                Stroke::new(1.0, palette.accent),
+                Stroke::new(1.0, palette.border_strong),
                 egui::StrokeKind::Inside,
             );
         } else if response.hovered() {

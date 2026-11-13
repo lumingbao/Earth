@@ -106,8 +106,14 @@ cp "${ICNS_PATH}" "${APP_BUNDLE}/Contents/Resources/Earth.icns"
 sed "s/__VERSION__/${VERSION}/g" "${ROOT_DIR}/packaging/macos/Info.plist" > "${APP_BUNDLE}/Contents/Info.plist"
 printf 'APPL????' > "${APP_BUNDLE}/Contents/PkgInfo"
 
-echo "==> 执行 Ad-hoc 代码签名并校验"
-codesign --force --deep --sign - "${APP_BUNDLE}"
+SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')"
+if [[ -n "${SIGN_IDENTITY}" ]]; then
+    echo "==> 使用开发者证书签名: ${SIGN_IDENTITY}"
+    codesign --force --deep --sign "${SIGN_IDENTITY}" "${APP_BUNDLE}"
+else
+    echo "==> 执行 Ad-hoc 代码签名并校验"
+    codesign --force --deep --sign - "${APP_BUNDLE}"
+fi
 codesign --verify --deep --strict "${APP_BUNDLE}"
 
 # 3. 构建 .dmg 安装镜像

@@ -276,9 +276,9 @@ pub enum ThemeMode {
 impl ThemeMode {
     pub fn label(&self) -> &'static str {
         match self {
-            ThemeMode::System => "跟随系统",
-            ThemeMode::Dark => "Earth 深色",
-            ThemeMode::Light => "Earth 浅色",
+            ThemeMode::System => "跟随系统（灰白）",
+            ThemeMode::Dark => "Earth 石墨深灰",
+            ThemeMode::Light => "Earth 灰白",
         }
     }
 }
@@ -371,7 +371,7 @@ impl Default for AppSettings {
             max_history: 200,
             sort_order: SortOrder::LastCopiedAt,
 
-            theme_mode: ThemeMode::System,
+            theme_mode: ThemeMode::Light,
             popup_position: PopupPosition::Cursor,
             pin_position: PinPosition::Bottom,
             image_height: 40.0,

@@ -67,7 +67,7 @@ impl Default for SettingsState {
             new_ignore_type: String::new(),
             new_ignore_regex: String::new(),
             new_collection_name: String::new(),
-            new_collection_color: "#10B981".to_string(),
+            new_collection_color: "#52525B".to_string(),
             editing_collection_id: None,
             editing_collection_name: String::new(),
             status_message: None,
@@ -193,7 +193,7 @@ pub fn render_settings_view(
                 palette.card_bg
             };
             let stroke = if active {
-                Stroke::new(1.2, palette.accent)
+                Stroke::new(1.0, palette.border_strong)
             } else {
                 Stroke::new(1.0, palette.border)
             };
@@ -312,6 +312,13 @@ fn render_general_tab(
                     }
                 }
             });
+            if !has_accessibility {
+                ui.label(
+                    RichText::new("若系统设置中已开启开关但此处仍提示未授权，是因为版本更新后签名刷新：请在系统设置「辅助功能」中选中 Earth 点击「-」移除后重新添加（或开关一次）。")
+                        .size(11.0)
+                        .color(palette.text_muted),
+                );
+            }
         }
         #[cfg(not(target_os = "macos"))]
         let _ = has_accessibility;
@@ -448,7 +455,7 @@ fn shortcut_row(
             palette.surface_bg
         };
         let stroke = if is_recording {
-            Stroke::new(1.2, palette.accent)
+            Stroke::new(1.0, palette.border_strong)
         } else {
             Stroke::new(1.0, palette.border)
         };
@@ -946,7 +953,7 @@ fn render_advanced_tab(
                     .hint_text("新分组名称（如：SQL 模板）")
                     .desired_width(210.0),
             );
-            for hex in ["#10B981", "#0EA5E9", "#F59E0B", "#EC4899", "#8B5CF6"] {
+            for hex in ["#27272A", "#52525B", "#71717A", "#A1A1AA", "#78716C"] {
                 let c = parse_hex_color32(hex).unwrap_or(palette.accent);
                 let selected = state.new_collection_color == hex;
                 let (rect, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::click());

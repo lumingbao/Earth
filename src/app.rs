@@ -296,7 +296,9 @@ impl EarthApp {
             }
             self.hide_popup(ctx, true);
             std::thread::spawn(|| {
-                let _ = platform::simulate_paste();
+                if let Err(err) = platform::simulate_paste() {
+                    eprintln!("自动粘贴失败: {err}");
+                }
             });
         } else {
             self.hide_popup(ctx, true);
@@ -318,7 +320,9 @@ impl EarthApp {
             }
             self.hide_popup(ctx, true);
             std::thread::spawn(|| {
-                let _ = platform::simulate_paste();
+                if let Err(err) = platform::simulate_paste() {
+                    eprintln!("自动粘贴失败: {err}");
+                }
             });
         } else {
             self.popup_state.status_banner = Some(("✓ 已复制加工结果到剪贴板".to_string(), false));

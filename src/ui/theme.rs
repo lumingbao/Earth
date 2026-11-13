@@ -25,53 +25,49 @@ pub struct EarthPalette {
 }
 
 impl EarthPalette {
-    pub fn resolve(mode: ThemeMode, system_dark: bool) -> Self {
-        let dark = match mode {
-            ThemeMode::System => system_dark,
-            ThemeMode::Dark => true,
-            ThemeMode::Light => false,
-        };
+    pub fn resolve(mode: ThemeMode, _system_dark: bool) -> Self {
+        let dark = matches!(mode, ThemeMode::Dark);
         if dark {
             Self {
                 is_dark: true,
-                window_bg: Color32::from_rgb(18, 22, 28),
-                surface_bg: Color32::from_rgb(24, 30, 38),
-                card_bg: Color32::from_rgb(31, 38, 48),
-                row_hover_bg: Color32::from_rgb(36, 45, 58),
-                row_selected_bg: Color32::from_rgba_unmultiplied(16, 185, 129, 34),
-                border: Color32::from_rgb(44, 54, 68),
-                border_strong: Color32::from_rgb(62, 76, 94),
-                text_primary: Color32::from_rgb(236, 242, 248),
-                text_secondary: Color32::from_rgb(156, 169, 186),
-                text_muted: Color32::from_rgb(108, 121, 138),
-                accent: Color32::from_rgb(16, 185, 129),
-                accent_soft: Color32::from_rgba_unmultiplied(16, 185, 129, 28),
-                accent_secondary: Color32::from_rgb(56, 189, 248),
-                pin_amber: Color32::from_rgb(245, 158, 11),
+                window_bg: Color32::from_rgb(24, 24, 27),
+                surface_bg: Color32::from_rgb(32, 32, 35),
+                card_bg: Color32::from_rgb(39, 39, 42),
+                row_hover_bg: Color32::from_rgb(46, 46, 51),
+                row_selected_bg: Color32::from_rgb(56, 56, 62),
+                border: Color32::from_rgb(52, 52, 58),
+                border_strong: Color32::from_rgb(72, 72, 80),
+                text_primary: Color32::from_rgb(244, 244, 245),
+                text_secondary: Color32::from_rgb(161, 161, 170),
+                text_muted: Color32::from_rgb(113, 113, 122),
+                accent: Color32::from_rgb(228, 228, 231),
+                accent_soft: Color32::from_rgb(56, 56, 62),
+                accent_secondary: Color32::from_rgb(161, 161, 170),
+                pin_amber: Color32::from_rgb(161, 161, 170),
                 danger: Color32::from_rgb(248, 113, 113),
-                keycap_bg: Color32::from_rgb(40, 49, 62),
-                keycap_text: Color32::from_rgb(188, 200, 214),
+                keycap_bg: Color32::from_rgb(46, 46, 51),
+                keycap_text: Color32::from_rgb(180, 180, 188),
             }
         } else {
             Self {
                 is_dark: false,
-                window_bg: Color32::from_rgb(247, 249, 252),
+                window_bg: Color32::from_rgb(247, 247, 248),
                 surface_bg: Color32::from_rgb(255, 255, 255),
-                card_bg: Color32::from_rgb(241, 245, 249),
-                row_hover_bg: Color32::from_rgb(238, 243, 249),
-                row_selected_bg: Color32::from_rgba_unmultiplied(13, 148, 136, 26),
-                border: Color32::from_rgb(220, 227, 236),
-                border_strong: Color32::from_rgb(196, 207, 220),
-                text_primary: Color32::from_rgb(15, 23, 42),
-                text_secondary: Color32::from_rgb(71, 85, 105),
-                text_muted: Color32::from_rgb(125, 138, 155),
-                accent: Color32::from_rgb(13, 148, 136),
-                accent_soft: Color32::from_rgba_unmultiplied(13, 148, 136, 22),
-                accent_secondary: Color32::from_rgb(2, 132, 199),
-                pin_amber: Color32::from_rgb(217, 119, 6),
+                card_bg: Color32::from_rgb(239, 239, 241),
+                row_hover_bg: Color32::from_rgb(241, 241, 243),
+                row_selected_bg: Color32::from_rgb(232, 232, 236),
+                border: Color32::from_rgb(230, 230, 233),
+                border_strong: Color32::from_rgb(212, 212, 216),
+                text_primary: Color32::from_rgb(24, 24, 27),
+                text_secondary: Color32::from_rgb(82, 82, 91),
+                text_muted: Color32::from_rgb(142, 142, 147),
+                accent: Color32::from_rgb(39, 39, 42),
+                accent_soft: Color32::from_rgb(230, 230, 234),
+                accent_secondary: Color32::from_rgb(113, 113, 122),
+                pin_amber: Color32::from_rgb(113, 113, 122),
                 danger: Color32::from_rgb(220, 38, 38),
-                keycap_bg: Color32::from_rgb(233, 238, 245),
-                keycap_text: Color32::from_rgb(71, 85, 105),
+                keycap_bg: Color32::from_rgb(239, 239, 241),
+                keycap_text: Color32::from_rgb(113, 113, 122),
             }
         }
     }
@@ -107,13 +103,13 @@ impl EarthPalette {
         visuals.widgets.hovered.bg_fill = self.row_hover_bg;
         visuals.widgets.hovered.weak_bg_fill = self.row_hover_bg;
         visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, self.text_primary);
-        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, self.accent);
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, self.border_strong);
         visuals.widgets.hovered.corner_radius = CornerRadius::same(8);
 
         visuals.widgets.active.bg_fill = self.accent_soft;
         visuals.widgets.active.weak_bg_fill = self.accent_soft;
         visuals.widgets.active.fg_stroke = Stroke::new(1.0, self.accent);
-        visuals.widgets.active.bg_stroke = Stroke::new(1.2, self.accent);
+        visuals.widgets.active.bg_stroke = Stroke::new(1.0, self.border_strong);
         visuals.widgets.active.corner_radius = CornerRadius::same(8);
 
         style.visuals = visuals;

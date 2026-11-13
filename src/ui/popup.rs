@@ -56,6 +56,7 @@ pub struct PopupState {
     pub active_transform: Option<(i64, QuickActionKind, Result<String, String>)>,
     pub show_about_modal: bool,
     pub status_banner: Option<(String, bool)>,
+    pub dismissed_accessibility_banner: bool,
     pub scroll_to_selection: bool,
 }
 
@@ -74,6 +75,7 @@ impl Default for PopupState {
             active_transform: None,
             show_about_modal: false,
             status_banner: None,
+            dismissed_accessibility_banner: false,
             scroll_to_selection: false,
         }
     }
@@ -179,20 +181,27 @@ pub fn render_popup_view(
         if clear_banner {
             state.status_banner = None;
         }
-    } else if cfg!(target_os = "macos") && !has_accessibility && settings.auto_paste {
+    } else if cfg!(target_os = "macos")
+        && !has_accessibility
+        && settings.auto_paste
+        && !state.dismissed_accessibility_banner
+    {
         egui::Frame::NONE
-            .fill(Color32::from_rgba_unmultiplied(245, 158, 11, 26))
-            .stroke(Stroke::new(1.0, palette.pin_amber))
+            .fill(palette.card_bg)
+            .stroke(Stroke::new(1.0, palette.border_strong))
             .corner_radius(CornerRadius::same(8))
             .inner_margin(egui::Margin::symmetric(8, 5))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new("⚠ 未授权「辅助功能」权限，自动粘贴将退化为仅复制")
-                            .size(11.5)
-                            .color(palette.pin_amber),
+                        RichText::new("⚠ 辅助功能未对当前版本生效（若已开启，请在设置中先点「-」移除旧记录再重开）")
+                            .size(11.0)
+                            .color(palette.text_secondary),
                     );
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.small_button("×").clicked() {
+                            state.dismissed_accessibility_banner = true;
+                        }
                         if ui.small_button("去授权").clicked() {
                             actions.push(PopupAction::OpenAccessibilitySettings);
                         }
@@ -641,7 +650,7 @@ fn capsule_button(
         palette.card_bg
     };
     let stroke = if active {
-        Stroke::new(1.0, palette.accent)
+        Stroke::new(1.0, palette.border_strong)
     } else {
         Stroke::new(1.0, palette.border)
     };
@@ -774,11 +783,7 @@ fn render_item_row(
     } else {
         Color32::TRANSPARENT
     };
-    let row_stroke = if selected {
-        Stroke::new(1.0, palette.accent)
-    } else {
-        Stroke::NONE
-    };
+    let row_stroke = Stroke::NONE;
 
     let frame = egui::Frame::NONE
         .fill(row_fill)
@@ -1328,7 +1333,7 @@ fn render_preview_pane(
                             ui.add_space(4.0);
                             egui::Frame::NONE
                                 .fill(palette.card_bg)
-                                .stroke(Stroke::new(1.0, palette.accent))
+                                .stroke(Stroke::new(1.0, palette.border_strong))
                                 .corner_radius(CornerRadius::same(7))
                                 .inner_margin(egui::Margin::same(8))
                                 .show(ui, |ui| {
@@ -1563,14 +1568,10 @@ fn render_banner(
     } else {
         palette.accent
     };
-    let bg = if is_warn {
-        Color32::from_rgba_unmultiplied(245, 158, 11, 26)
-    } else {
-        palette.accent_soft
-    };
+    let bg = palette.card_bg;
     egui::Frame::NONE
         .fill(bg)
-        .stroke(Stroke::new(1.0, fg))
+        .stroke(Stroke::new(1.0, palette.border_strong))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(egui::Margin::symmetric(8, 5))
         .show(ui, |ui| {
