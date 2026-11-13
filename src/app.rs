@@ -99,7 +99,7 @@ impl EarthApp {
             popup_state.status_banner = Some((warn, true));
         }
 
-        let initial_size = (470.0, 550.0);
+        let initial_size = (424.0, 520.0);
         let prev_app = platform::capture_frontmost_app();
         let (x, y) = platform::compute_popup_origin(
             settings.popup_position,
@@ -185,12 +185,12 @@ impl EarthApp {
         match self.view_mode {
             ViewMode::Launcher => {
                 if self.popup_state.preview_open {
-                    (860.0, 560.0)
+                    (760.0, 520.0)
                 } else {
-                    (470.0, 550.0)
+                    (424.0, 520.0)
                 }
             }
-            ViewMode::Settings => (680.0, 570.0),
+            ViewMode::Settings => (520.0, 530.0),
         }
     }
 

@@ -924,7 +924,7 @@ fn render_advanced_tab(
             ui.add(
                 egui::TextEdit::singleline(&mut state.new_collection_name)
                     .hint_text("新分组名称（如：SQL 模板）")
-                    .desired_width(210.0),
+                    .desired_width(160.0),
             );
             for hex in ["#27272A", "#52525B", "#71717A", "#A1A1AA", "#78716C"] {
                 let c = parse_hex_color32(hex).unwrap_or(palette.accent);

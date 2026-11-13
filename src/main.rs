@@ -30,8 +30,8 @@ fn main() -> eframe::Result<()> {
         .with_always_on_top()
         .with_taskbar(false)
         .with_resizable(true)
-        .with_inner_size([470.0, 550.0])
-        .with_min_inner_size([400.0, 400.0])
+        .with_inner_size([424.0, 520.0])
+        .with_min_inner_size([380.0, 380.0])
         .with_icon(icon);
 
     #[allow(unused_mut)]

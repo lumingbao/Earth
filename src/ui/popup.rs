@@ -212,7 +212,7 @@ pub fn render_popup_view(
 
     let (body_rect, _) = ui.allocate_exact_size(vec2(total_width, body_height), Sense::hover());
     let (left_rect, right_rect) = if state.preview_open {
-        let lw = (body_rect.width() * 0.45).clamp(260.0, 360.0);
+        let lw = (body_rect.width() * 0.45).clamp(240.0, 320.0);
         let l = egui::Rect::from_min_max(
             body_rect.min,
             pos2(body_rect.min.x + lw, body_rect.max.y),
@@ -620,7 +620,7 @@ fn render_filter_strip(
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 5.0;
+                ui.spacing_mut().item_spacing.x = 4.5;
                 let pills = [
                     (CategoryFilter::All, "全部"),
                     (CategoryFilter::Text, "文本"),
@@ -1539,12 +1539,13 @@ fn render_footer(
         );
 
         let ignore_lbl = if settings.ignore_next_event {
-            "✓ 将忽略下次复制"
+            "✓ 忽略下次"
         } else {
             "忽略下次"
         };
         if ui
             .small_button(RichText::new(ignore_lbl).size(11.0))
+            .on_hover_text("忽略下一次系统剪贴板复制")
             .clicked()
         {
             actions.push(PopupAction::ToggleIgnoreNext);
@@ -1557,7 +1558,8 @@ fn render_footer(
             let (quit_s, prefs_s, clear_s) = ("Ctrl+Q", "Ctrl+,", "Ctrl+Alt+⌫");
 
             if ui
-                .small_button(RichText::new(format!("退出 {quit_s}")).size(11.5))
+                .small_button(RichText::new("退出").size(11.5))
+                .on_hover_text(format!("退出 Earth ({quit_s})"))
                 .clicked()
             {
                 actions.push(PopupAction::Quit);
@@ -1566,17 +1568,19 @@ fn render_footer(
                 state.show_about_modal = true;
             }
             if ui
-                .small_button(RichText::new(format!("偏好设置 {prefs_s}")).size(11.5))
+                .small_button(RichText::new("设置").size(11.5))
+                .on_hover_text(format!("偏好设置 ({prefs_s})"))
                 .clicked()
             {
                 actions.push(PopupAction::OpenSettings);
             }
             if ui
                 .small_button(
-                    RichText::new(format!("清除 {clear_s}"))
+                    RichText::new("清除")
                         .size(11.5)
                         .color(palette.danger),
                 )
+                .on_hover_text(format!("清除未固定记录 ({clear_s})"))
                 .clicked()
             {
                 actions.push(PopupAction::ClearUnpinned);
