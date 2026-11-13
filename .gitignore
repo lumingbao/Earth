@@ -1,0 +1,7 @@
+/target/
+/dist/
+**/*.rs.bk
+*.pdb
+.DS_Store
+earth.db*
+settings.json

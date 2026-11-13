@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>Earth 智能剪贴板</title>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <choices-outline>
+        <line choice="io.earth.Earth.choice"/>
+    </choices-outline>
+    <choice id="io.earth.Earth.choice" visible="false">
+        <pkg-ref id="io.earth.Earth.pkg"/>
+    </choice>
+    <pkg-ref id="io.earth.Earth.pkg" version="__VERSION__" onConclusion="none">Earth-component.pkg</pkg-ref>
+</installer-gui-script>
