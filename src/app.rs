@@ -4,7 +4,7 @@ use crate::clipboard::{
 };
 use crate::hotkey::GlobalHotkeyController;
 use crate::model::{
-    truncate_chars, ActiveAppInfo, AppSettings, ClipItem, Collection, PasteBehavior,
+    truncate_chars, ActiveAppInfo, AppSettings, ClipItem, Collection, PasteBehavior, ThemeMode,
 };
 use crate::platform;
 use crate::search::{filter_and_search, SearchResultItem};
@@ -52,6 +52,10 @@ pub struct EarthApp {
     prev_app: Option<ActiveAppInfo>,
     quitting: bool,
     dialog_open: bool,
+    last_applied_theme: Option<(ThemeMode, bool)>,
+    cached_palette: EarthPalette,
+    cached_accessibility: bool,
+    last_accessibility_check: Instant,
 }
 
 impl EarthApp {
@@ -115,6 +119,8 @@ impl EarthApp {
         cc.egui_ctx.send_viewport_cmd(ViewportCommand::Focus);
         platform::activate_self_window();
 
+        let cached_palette = EarthPalette::resolve(settings.theme_mode, false);
+        let cached_accessibility = platform::has_accessibility_permission();
         let mut app = Self {
             storage,
             shared_settings,
@@ -139,6 +145,10 @@ impl EarthApp {
             prev_app,
             quitting: false,
             dialog_open: false,
+            last_applied_theme: None,
+            cached_palette,
+            cached_accessibility,
+            last_accessibility_check: Instant::now(),
         };
         app.sync_tray();
         app.recompute_search();
@@ -161,8 +171,18 @@ impl EarthApp {
             sup.ignore_next_once = self.settings.ignore_next_event;
         }
         let _ = self.storage.save_settings(&self.settings);
-        let _ = self.storage.enforce_history_limit(self.settings.max_history);
-        self.reload_items();
+        let unpinned_count = self
+            .items
+            .iter()
+            .filter(|it| !it.pinned && it.collection_id.is_none())
+            .count();
+        if unpinned_count > self.settings.max_history {
+            let _ = self.storage.enforce_history_limit(self.settings.max_history);
+            self.reload_items();
+        } else {
+            self.search_dirty = true;
+            self.sync_tray();
+        }
     }
 
     fn sync_tray(&mut self) {
@@ -190,7 +210,7 @@ impl EarthApp {
                     (424.0, 520.0)
                 }
             }
-            ViewMode::Settings => (520.0, 530.0),
+            ViewMode::Settings => (424.0, 520.0),
         }
     }
 
@@ -457,10 +477,19 @@ impl eframe::App for EarthApp {
             .system_theme()
             .map(|t| t == egui::Theme::Dark)
             .unwrap_or_else(|| ctx.theme() == egui::Theme::Dark);
-        let palette = EarthPalette::resolve(self.settings.theme_mode, system_dark);
-        palette.apply_to_ctx(&ctx);
+        let theme_key = (self.settings.theme_mode, system_dark);
+        if self.last_applied_theme != Some(theme_key) {
+            self.cached_palette = EarthPalette::resolve(self.settings.theme_mode, system_dark);
+            self.cached_palette.apply_to_ctx(&ctx);
+            self.last_applied_theme = Some(theme_key);
+        }
+        let palette = self.cached_palette;
 
-        let has_accessibility = platform::has_accessibility_permission();
+        if self.last_accessibility_check.elapsed() > Duration::from_secs(2) {
+            self.cached_accessibility = platform::has_accessibility_permission();
+            self.last_accessibility_check = Instant::now();
+        }
+        let has_accessibility = self.cached_accessibility;
         let panel_rect = ctx.content_rect();
 
         egui::CentralPanel::default()
@@ -496,8 +525,6 @@ impl eframe::App for EarthApp {
                                 if self.search_dirty {
                                     self.recompute_search();
                                 }
-                                let results = self.cached_results.clone();
-                                let collections = self.collections.clone();
                                 let total_items = self.items.len();
 
                                 let actions = render_popup_view(
@@ -505,8 +532,8 @@ impl eframe::App for EarthApp {
                                     &ctx,
                                     PopupViewData {
                                         settings: &mut self.settings,
-                                        results: &results,
-                                        collections: &collections,
+                                        results: &self.cached_results,
+                                        collections: &self.collections,
                                         palette: &palette,
                                         storage_bytes: self.storage_bytes,
                                         total_items,
@@ -563,6 +590,7 @@ impl eframe::App for EarthApp {
                                         }
                                         PopupAction::OpenSettings => {
                                             self.view_mode = ViewMode::Settings;
+                                            ctx.request_repaint();
                                         }
                                         PopupAction::TogglePause => {
                                             self.settings.paused = !self.settings.paused;
@@ -611,14 +639,13 @@ impl eframe::App for EarthApp {
                                 }
                             }
                             ViewMode::Settings => {
-                                let collections = self.collections.clone();
                                 let item_count = self.items.len();
                                 let actions = render_settings_view(
                                     ui,
                                     &ctx,
                                     SettingsViewData {
                                         settings: &mut self.settings,
-                                        collections: &collections,
+                                        collections: &self.collections,
                                         palette: &palette,
                                         storage_bytes: self.storage_bytes,
                                         item_count,
@@ -632,6 +659,7 @@ impl eframe::App for EarthApp {
                                         SettingsAction::CloseSettings => {
                                             self.view_mode = ViewMode::Launcher;
                                             self.popup_state.request_search_focus = true;
+                                            ctx.request_repaint();
                                         }
                                         SettingsAction::SettingsChanged => {
                                             self.persist_settings();

@@ -735,35 +735,53 @@ fn render_items_list(
         .id_salt("earth_history_scroll")
         .auto_shrink([false, false])
         .max_width(list_avail_w)
-        .show(ui, |ui| {
+        .show_viewport(ui, |ui, viewport| {
             ui.set_max_width(list_avail_w);
+            let origin_y = ui.cursor().min.y;
+            let vis_min_y = viewport.min.y - 240.0;
+            let vis_max_y = viewport.max.y + 240.0;
             let mut seen_pinned_sep = false;
             let mut prev_pinned: Option<bool> = None;
 
             for (idx, res) in results.iter().enumerate() {
                 let item = &res.item;
                 if let Some(prev) = prev_pinned
-                    && prev != item.pinned && !seen_pinned_sep {
-                        seen_pinned_sep = true;
-                        ui.add_space(2.0);
-                        ui.separator();
-                        ui.add_space(2.0);
-                    }
+                    && prev != item.pinned
+                    && !seen_pinned_sep
+                {
+                    seen_pinned_sep = true;
+                    ui.add_space(2.0);
+                    ui.separator();
+                    ui.add_space(2.0);
+                }
                 prev_pinned = Some(item.pinned);
 
                 let selected = state.selected_id == Some(item.id);
-                let shortcut_num = if idx < 9 { Some(idx + 1) } else { None };
-                let resp = render_item_row(
-                    ui,
-                    res,
-                    shortcut_num,
-                    selected,
-                    settings,
-                    collections,
-                    state,
-                    palette,
-                    actions,
-                );
+                let row_height = match item.kind {
+                    ClipKind::Image => settings.image_height.max(28.0) + 12.0,
+                    _ => 34.0,
+                };
+                let rel_y = ui.cursor().min.y - origin_y;
+                let in_viewport =
+                    (rel_y + row_height >= vis_min_y && rel_y <= vis_max_y) || selected;
+
+                let resp = if in_viewport {
+                    let shortcut_num = if idx < 9 { Some(idx + 1) } else { None };
+                    render_item_row(
+                        ui,
+                        res,
+                        shortcut_num,
+                        selected,
+                        settings,
+                        collections,
+                        state,
+                        palette,
+                        actions,
+                    )
+                } else {
+                    ui.allocate_exact_size(vec2(list_avail_w, row_height), Sense::hover())
+                        .1
+                };
 
                 if selected && state.scroll_to_selection {
                     resp.scroll_to_me(Some(Align::Center));

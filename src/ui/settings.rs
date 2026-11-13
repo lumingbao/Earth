@@ -177,6 +177,7 @@ pub fn render_settings_view(
 
     // 5-Tab Bar matching Maccy's screenshot layout
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 5.0;
         let tabs = [
             (SettingsTab::General, "通用"),
             (SettingsTab::Storage, "存储"),
@@ -184,7 +185,7 @@ pub fn render_settings_view(
             (SettingsTab::Ignore, "忽略与隐私"),
             (SettingsTab::Advanced, "高级与收藏"),
         ];
-        let tab_width = (ui.available_width() - 24.0) / tabs.len() as f32;
+        let tab_width = (ui.available_width() - 20.0) / tabs.len() as f32;
         for (tab, label) in tabs {
             let active = state.active_tab == tab;
             let fill = if active {
@@ -202,8 +203,8 @@ pub fn render_settings_view(
             } else {
                 palette.text_secondary
             };
-            let btn = egui::Button::new(RichText::new(label).size(12.5).color(text_color))
-                .min_size(vec2(tab_width, 32.0))
+            let btn = egui::Button::new(RichText::new(label).size(12.0).color(text_color))
+                .min_size(vec2(tab_width, 30.0))
                 .fill(fill)
                 .stroke(stroke)
                 .corner_radius(CornerRadius::same(8));
@@ -440,7 +441,7 @@ fn shortcut_row(
     let mut changed = false;
     let is_recording = state.recording == Some(target);
     ui.horizontal(|ui| {
-        ui.allocate_ui(vec2(105.0, 24.0), |ui| {
+        ui.allocate_ui(vec2(86.0, 24.0), |ui| {
             ui.label(label);
         });
 
@@ -460,7 +461,7 @@ fn shortcut_row(
             Stroke::new(1.0, palette.border)
         };
         let btn = egui::Button::new(RichText::new(text).size(12.0))
-            .min_size(vec2(180.0, 26.0))
+            .min_size(vec2(170.0, 26.0))
             .fill(fill)
             .stroke(stroke)
             .corner_radius(CornerRadius::same(13));
@@ -556,7 +557,7 @@ fn render_storage_tab(
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("清除未固定历史").clicked() {
+            if ui.button("清除未固定").clicked() {
                 actions.push(SettingsAction::ClearHistory(false));
             }
             if ui
@@ -568,7 +569,7 @@ fn render_storage_tab(
             {
                 actions.push(SettingsAction::ClearHistory(true));
             }
-            if ui.button("导出记录为 JSON...").clicked() {
+            if ui.button("导出 JSON...").clicked() {
                 actions.push(SettingsAction::ExportJson);
             }
         });
@@ -924,7 +925,7 @@ fn render_advanced_tab(
             ui.add(
                 egui::TextEdit::singleline(&mut state.new_collection_name)
                     .hint_text("新分组名称（如：SQL 模板）")
-                    .desired_width(160.0),
+                    .desired_width(132.0),
             );
             for hex in ["#27272A", "#52525B", "#71717A", "#A1A1AA", "#78716C"] {
                 let c = parse_hex_color32(hex).unwrap_or(palette.accent);

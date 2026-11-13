@@ -99,33 +99,63 @@ pub fn detect_sensitive_label(input: &str) -> Option<String> {
 
 pub fn mask_sensitive_preview(input: &str) -> String {
     let trimmed = input.trim();
-    let chars: Vec<char> = trimmed.chars().collect();
-    if chars.len() <= 10 {
+    let mut head = trimmed.chars();
+    let prefix: String = head.by_ref().take(4).collect();
+    if head.take(7).count() < 7 {
         return "••••••••".to_string();
     }
-    let prefix: String = chars.iter().take(4).collect();
-    let suffix: String = chars[chars.len().saturating_sub(4)..].iter().collect();
+    let suffix_rev: Vec<char> = trimmed.chars().rev().take(4).collect();
+    let suffix: String = suffix_rev.into_iter().rev().collect();
     format!("{}••••••••••••{}", prefix, suffix)
 }
 
 pub fn format_display_line(input: &str, show_special_symbols: bool) -> String {
+    const MAX_PREVIEW_CHARS: usize = 120;
+    let mut out = String::with_capacity(MAX_PREVIEW_CHARS.min(input.len()));
+    let mut count = 0usize;
+
     if !show_special_symbols {
-        return input
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
+        for line in input.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            if !out.is_empty() {
+                out.push(' ');
+                count += 1;
+                if count >= MAX_PREVIEW_CHARS {
+                    break;
+                }
+            }
+            for ch in line.chars() {
+                out.push(ch);
+                count += 1;
+                if count >= MAX_PREVIEW_CHARS {
+                    return out;
+                }
+            }
+        }
+        return out;
     }
 
-    let mut out = String::with_capacity(input.len());
     for ch in input.chars() {
         match ch {
-            '\n' => out.push('↵'),
+            '\n' => {
+                out.push('↵');
+                count += 1;
+            }
             '\r' => {}
-            '\t' => out.push('⇥'),
-            ' ' => out.push('·'),
-            _ => out.push(ch),
+            '\t' => {
+                out.push('⇥');
+                count += 1;
+            }
+            ' ' => {
+                out.push('·');
+                count += 1;
+            }
+            _ => {
+                out.push(ch);
+                count += 1;
+            }
+        }
+        if count >= MAX_PREVIEW_CHARS {
+            break;
         }
     }
     out
