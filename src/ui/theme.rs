@@ -47,77 +47,77 @@ impl EarthPalette {
         if dark {
             Self {
                 is_dark: true,
-                window_bg: Color32::from_rgb(20, 20, 20),       // #141414 AntD dark base
-                surface_bg: Color32::from_rgb(31, 31, 31),      // #1F1F1F AntD dark container
-                card_bg: Color32::from_rgb(38, 38, 38),         // #262626 AntD dark fill tertiary
-                row_hover_bg: Color32::from_rgb(44, 44, 44),    // AntD dark item hover
-                row_selected_bg: Color32::from_rgb(17, 29, 44), // #111D2C AntD darkItemSelectedBg
-                border: Color32::from_rgb(66, 66, 66),          // #424242 AntD dark colorBorder
-                border_subtle: Color32::from_rgb(48, 48, 48),   // #303030 AntD dark colorBorderSecondary
-                border_strong: Color32::from_rgb(21, 65, 126),  // #15417E AntD dark colorPrimaryBorder
-                text_primary: Color32::from_rgb(230, 230, 230), // rgba(255,255,255,0.88)
-                text_secondary: Color32::from_rgb(166, 166, 166), // rgba(255,255,255,0.65)
-                text_muted: Color32::from_rgb(115, 115, 115),   // rgba(255,255,255,0.45)
-                accent: Color32::from_rgb(22, 119, 255),        // #1677FF AntD brand blue
-                accent_hover: Color32::from_rgb(64, 150, 255),  // #4096FF
-                accent_active: Color32::from_rgb(21, 84, 173),  // #1554AD
-                accent_soft: Color32::from_rgb(17, 29, 44),     // #111D2C dark colorPrimaryBg
-                accent_text: Color32::from_rgb(64, 150, 255),   // #4096FF legible dark primary text
-                accent_secondary: Color32::from_rgb(19, 168, 168), // #13A8A8 AntD dark cyan
-                pin_amber: Color32::from_rgb(216, 150, 20),     // #D89614 AntD dark gold
-                success: Color32::from_rgb(73, 170, 25),        // #49AA19 AntD dark green
-                success_bg: Color32::from_rgb(22, 35, 18),      // #162312 AntD dark colorSuccessBg
-                success_border: Color32::from_rgb(39, 73, 22),  // #274916 AntD dark colorSuccessBorder
-                success_text: Color32::from_rgb(106, 190, 57),  // #6ABE39
-                warning_bg: Color32::from_rgb(43, 33, 17),      // #2B2111 AntD dark colorWarningBg
-                warning_border: Color32::from_rgb(89, 66, 20),  // #594214 AntD dark colorWarningBorder
-                warning_text: Color32::from_rgb(232, 179, 57),  // #E8B339
-                danger: Color32::from_rgb(220, 68, 70),         // #DC4446 AntD dark red
-                danger_bg: Color32::from_rgb(42, 18, 21),       // #2A1215 AntD dark colorErrorBg
-                danger_border: Color32::from_rgb(88, 24, 28),   // #58181C AntD dark colorErrorBorder
-                danger_text: Color32::from_rgb(232, 110, 107),  // #E86E6B
-                info_bg: Color32::from_rgb(17, 26, 44),         // #111A2C AntD dark colorInfoBg
-                info_border: Color32::from_rgb(21, 57, 91),     // #15395B AntD dark colorInfoBorder
-                keycap_bg: Color32::from_rgb(38, 38, 38),
-                keycap_text: Color32::from_rgb(166, 166, 166),
+                window_bg: Color32::from_rgb(11, 16, 32),       // #0B1020 deep midnight slate
+                surface_bg: Color32::from_rgb(19, 26, 45),      // #131A2D elevated dark card
+                card_bg: Color32::from_rgb(27, 36, 59),         // #1B243B secondary container / pill fill
+                row_hover_bg: Color32::from_rgb(31, 41, 68),    // #1F2944 subtle cobalt hover
+                row_selected_bg: Color32::from_rgb(28, 41, 82), // #1C2952 royal blue tint selection
+                border: Color32::from_rgb(42, 54, 86),          // #2A3656 dark outline
+                border_subtle: Color32::from_rgb(30, 40, 68),   // #1E2844 hairline divider
+                border_strong: Color32::from_rgb(69, 110, 253), // #456EFD active cobalt outline
+                text_primary: Color32::from_rgb(241, 245, 249), // #F1F5F9 crisp cool white
+                text_secondary: Color32::from_rgb(148, 163, 184), // #94A3B8 slate secondary
+                text_muted: Color32::from_rgb(100, 116, 139),   // #64748B slate muted
+                accent: Color32::from_rgb(69, 110, 253),        // #456EFD Electric Royal Blue
+                accent_hover: Color32::from_rgb(102, 136, 254), // #6688FE brighter hover cobalt
+                accent_active: Color32::from_rgb(47, 85, 235),  // #2F55EB pressed cobalt
+                accent_soft: Color32::from_rgb(25, 37, 74),     // #19254A dark cobalt soft tint
+                accent_text: Color32::from_rgb(129, 158, 255),  // #819EFF legible cobalt text
+                accent_secondary: Color32::from_rgb(96, 165, 250), // #60A5FA periwinkle companion
+                pin_amber: Color32::from_rgb(245, 158, 11),     // #F59E0B warm pro amber
+                success: Color32::from_rgb(34, 197, 94),        // #22C55E vibrant emerald
+                success_bg: Color32::from_rgb(17, 41, 30),      // dark emerald soft
+                success_border: Color32::from_rgb(28, 77, 50),
+                success_text: Color32::from_rgb(74, 222, 128),
+                warning_bg: Color32::from_rgb(46, 33, 16),
+                warning_border: Color32::from_rgb(92, 65, 24),
+                warning_text: Color32::from_rgb(251, 191, 36),
+                danger: Color32::from_rgb(239, 68, 68),         // #EF4444 vibrant coral red
+                danger_bg: Color32::from_rgb(51, 20, 26),       // dark coral soft
+                danger_border: Color32::from_rgb(102, 34, 42),
+                danger_text: Color32::from_rgb(248, 113, 113),
+                info_bg: Color32::from_rgb(24, 34, 68),
+                info_border: Color32::from_rgb(49, 71, 138),
+                keycap_bg: Color32::from_rgb(27, 36, 59),
+                keycap_text: Color32::from_rgb(148, 163, 184),
                 on_accent: Color32::from_rgb(255, 255, 255),
             }
         } else {
             Self {
                 is_dark: false,
-                window_bg: Color32::from_rgb(245, 245, 245),    // #F5F5F5 AntD surface-layout
-                surface_bg: Color32::from_rgb(255, 255, 255),   // #FFFFFF AntD surface
-                card_bg: Color32::from_rgb(250, 250, 250),      // #FAFAFA AntD surface-container
-                row_hover_bg: Color32::from_rgb(245, 245, 245), // #F5F5F5 AntD controlItemBgHover
-                row_selected_bg: Color32::from_rgb(230, 244, 255), // #E6F4FF AntD menu-item-selected
-                border: Color32::from_rgb(217, 217, 217),       // #D9D9D9 AntD outline / colorBorder
-                border_subtle: Color32::from_rgb(240, 240, 240), // #F0F0F0 AntD outline-variant
-                border_strong: Color32::from_rgb(145, 202, 255), // #91CAFF AntD colorPrimaryBorder
-                text_primary: Color32::from_rgb(31, 31, 31),    // #1F1F1F rgba(0,0,0,0.88)
-                text_secondary: Color32::from_rgb(89, 89, 89),  // #595959 rgba(0,0,0,0.65)
-                text_muted: Color32::from_rgb(140, 140, 140),   // #8C8C8C rgba(0,0,0,0.45)
-                accent: Color32::from_rgb(22, 119, 255),        // #1677FF AntD Daybreak Blue
-                accent_hover: Color32::from_rgb(64, 150, 255),  // #4096FF AntD colorPrimaryHover
-                accent_active: Color32::from_rgb(9, 88, 217),   // #0958D9 AntD colorPrimaryActive
-                accent_soft: Color32::from_rgb(230, 244, 255),  // #E6F4FF AntD colorPrimaryBg
-                accent_text: Color32::from_rgb(9, 88, 217),     // #0958D9 AntD blue-7
-                accent_secondary: Color32::from_rgb(19, 194, 194), // #13C2C2 AntD Cyan
-                pin_amber: Color32::from_rgb(250, 173, 20),     // #FAAD14 AntD Calendula Gold
-                success: Color32::from_rgb(82, 196, 26),        // #52C41A AntD Polar Green
-                success_bg: Color32::from_rgb(246, 255, 237),   // #F6FFED AntD alert-success
-                success_border: Color32::from_rgb(183, 235, 143), // #B7EB8F
-                success_text: Color32::from_rgb(56, 158, 13),   // #389E0D
-                warning_bg: Color32::from_rgb(255, 251, 230),   // #FFFBE6 AntD alert-warning
-                warning_border: Color32::from_rgb(255, 229, 143), // #FFE58F
-                warning_text: Color32::from_rgb(212, 136, 6),   // #D48806
-                danger: Color32::from_rgb(255, 77, 79),         // #FF4D4F AntD Dust Red
-                danger_bg: Color32::from_rgb(255, 242, 240),    // #FFF2F0 AntD alert-error
-                danger_border: Color32::from_rgb(255, 204, 199), // #FFCCC7
-                danger_text: Color32::from_rgb(207, 19, 34),    // #CF1322
-                info_bg: Color32::from_rgb(230, 244, 255),      // #E6F4FF AntD alert-info
-                info_border: Color32::from_rgb(145, 202, 255),  // #91CAFF
-                keycap_bg: Color32::from_rgb(250, 250, 250),    // #FAFAFA
-                keycap_text: Color32::from_rgb(89, 89, 89),     // #595959
+                window_bg: Color32::from_rgb(248, 249, 253),    // #F8F9FD GOSTOCK cool off-white canvas
+                surface_bg: Color32::from_rgb(255, 255, 255),   // #FFFFFF pure white elevated cards
+                card_bg: Color32::from_rgb(241, 244, 249),      // #F1F4F9 soft grayish-blue pill/search fill
+                row_hover_bg: Color32::from_rgb(243, 245, 250), // #F3F5FA soft hover surface
+                row_selected_bg: Color32::from_rgb(239, 244, 255), // #EFF4FF GOSTOCK active cobalt tint
+                border: Color32::from_rgb(226, 232, 240),       // #E2E8F0 crisp light hairline
+                border_subtle: Color32::from_rgb(236, 239, 244), // #ECEFF4 ultra-light divider
+                border_strong: Color32::from_rgb(199, 213, 254), // #C7D5FE royal blue tint border
+                text_primary: Color32::from_rgb(5, 9, 20),      // #050914 GOSTOCK deep ink slate
+                text_secondary: Color32::from_rgb(100, 116, 139), // #64748B GOSTOCK cool slate
+                text_muted: Color32::from_rgb(113, 127, 148),   // #717F94 muted slate caption
+                accent: Color32::from_rgb(69, 110, 253),        // #456EFD GOSTOCK Electric Royal Blue
+                accent_hover: Color32::from_rgb(94, 131, 254),  // #5E83FE hover cobalt
+                accent_active: Color32::from_rgb(47, 85, 235),  // #2F55EB pressed cobalt
+                accent_soft: Color32::from_rgb(239, 246, 255),  // #EFF6FF GOSTOCK soft edit/info blue
+                accent_text: Color32::from_rgb(52, 87, 213),    // #3457D5 high-contrast cobalt label
+                accent_secondary: Color32::from_rgb(124, 155, 255), // #7C9BFF soft periwinkle ramp
+                pin_amber: Color32::from_rgb(245, 158, 11),     // #F59E0B GOSTOCK golden amber crown
+                success: Color32::from_rgb(34, 197, 94),        // #22C55E GOSTOCK emerald green
+                success_bg: Color32::from_rgb(220, 252, 231),   // #DCFCE7 pastel emerald
+                success_border: Color32::from_rgb(187, 247, 208), // #BBF7D0
+                success_text: Color32::from_rgb(22, 163, 74),   // #16A34A
+                warning_bg: Color32::from_rgb(254, 243, 199),   // #FEF3C7 pastel amber
+                warning_border: Color32::from_rgb(253, 230, 138), // #FDE68A
+                warning_text: Color32::from_rgb(180, 83, 9),    // #B45309
+                danger: Color32::from_rgb(239, 68, 68),         // #EF4444 GOSTOCK coral red
+                danger_bg: Color32::from_rgb(254, 226, 226),    // #FEE2E2 GOSTOCK pastel delete surface
+                danger_border: Color32::from_rgb(254, 202, 202), // #FECACA
+                danger_text: Color32::from_rgb(220, 38, 38),    // #DC2626
+                info_bg: Color32::from_rgb(239, 246, 255),      // #EFF6FF
+                info_border: Color32::from_rgb(199, 213, 254),  // #C7D5FE
+                keycap_bg: Color32::from_rgb(241, 244, 249),    // #F1F4F9
+                keycap_text: Color32::from_rgb(100, 116, 139),  // #64748B
                 on_accent: Color32::from_rgb(255, 255, 255),
             }
         }
@@ -136,45 +136,45 @@ impl EarthPalette {
         visuals.extreme_bg_color = self.surface_bg;
         visuals.faint_bg_color = self.card_bg;
         visuals.window_stroke = Stroke::new(1.0, self.border_subtle);
-        visuals.window_corner_radius = CornerRadius::same(8);
+        visuals.window_corner_radius = CornerRadius::same(16);
         visuals.selection.bg_fill = self.accent_soft;
         visuals.selection.stroke = Stroke::new(1.0, self.accent);
         visuals.hyperlink_color = self.accent;
         visuals.text_cursor.stroke = Stroke::new(1.5, self.accent);
 
-        // Noninteractive elements (separators / static frames) use subtle border (#F0F0F0 / #303030)
+        // Hairlines / separators (#ECEFF4 light, #1E2844 dark)
         visuals.widgets.noninteractive.bg_fill = self.surface_bg;
         visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, self.text_primary);
         visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, self.border_subtle);
-        visuals.widgets.noninteractive.corner_radius = CornerRadius::same(6);
+        visuals.widgets.noninteractive.corner_radius = CornerRadius::same(12);
 
-        // Default buttons / inputs / selects sit on surface_bg with 1px #D9D9D9 border and 6px radius
+        // GOSTOCK secondary pill/squircle controls sit cleanly on #FFFFFF / #F1F4F9
         visuals.widgets.inactive.bg_fill = self.surface_bg;
         visuals.widgets.inactive.weak_bg_fill = self.surface_bg;
         visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, self.text_primary);
         visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, self.border);
-        visuals.widgets.inactive.corner_radius = CornerRadius::same(6);
+        visuals.widgets.inactive.corner_radius = CornerRadius::same(255);
 
-        // AntD button-default-hover: tint text and border to #4096FF
-        visuals.widgets.hovered.bg_fill = self.row_hover_bg;
-        visuals.widgets.hovered.weak_bg_fill = self.surface_bg;
-        visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, self.accent_hover);
-        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, self.accent_hover);
-        visuals.widgets.hovered.corner_radius = CornerRadius::same(6);
+        // Hover state: soft cobalt tint & #456EFD outline
+        visuals.widgets.hovered.bg_fill = self.accent_soft;
+        visuals.widgets.hovered.weak_bg_fill = self.accent_soft;
+        visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, self.accent_text);
+        visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, self.accent);
+        visuals.widgets.hovered.corner_radius = CornerRadius::same(255);
 
-        // AntD button-default-active: #0958D9 text/border on primary tint
+        // Active / pressed state
         visuals.widgets.active.bg_fill = self.accent_soft;
         visuals.widgets.active.weak_bg_fill = self.accent_soft;
         visuals.widgets.active.fg_stroke = Stroke::new(1.0, self.accent_active);
         visuals.widgets.active.bg_stroke = Stroke::new(1.0, self.accent_active);
-        visuals.widgets.active.corner_radius = CornerRadius::same(6);
+        visuals.widgets.active.corner_radius = CornerRadius::same(255);
 
         // Open ComboBox / dropdown trigger
         visuals.widgets.open.bg_fill = self.surface_bg;
         visuals.widgets.open.weak_bg_fill = self.surface_bg;
         visuals.widgets.open.fg_stroke = Stroke::new(1.0, self.accent);
         visuals.widgets.open.bg_stroke = Stroke::new(1.0, self.accent);
-        visuals.widgets.open.corner_radius = CornerRadius::same(6);
+        visuals.widgets.open.corner_radius = CornerRadius::same(16);
 
         style.visuals = visuals;
         style.spacing.item_spacing = egui::vec2(6.0, 5.0);
@@ -191,6 +191,20 @@ impl EarthPalette {
     }
 }
 
+/// Subtle ambient elevation shadow inspired by Behance GOSTOCK cards.
+pub fn card_shadow(palette: &EarthPalette) -> egui::Shadow {
+    if palette.is_dark {
+        egui::Shadow::NONE
+    } else {
+        egui::Shadow {
+            offset: [0, 3],
+            blur: 14,
+            spread: 0,
+            color: Color32::from_rgba_unmultiplied(5, 9, 20, 10),
+        }
+    }
+}
+
 /// Renders a button with scoped padding so compact/tag/footer buttons keep comfortable breathing room.
 pub fn padded_button(ui: &mut Ui, btn: egui::Button<'_>, padding: egui::Vec2) -> egui::Response {
     ui.scope(|ui| {
@@ -200,20 +214,20 @@ pub fn padded_button(ui: &mut Ui, btn: egui::Button<'_>, padding: egui::Vec2) ->
     .inner
 }
 
-/// Compact Ant Design `sm` button replacement for `ui.small_button` (which forces 0px vertical padding).
+/// Compact pill button replacement for `ui.small_button` with balanced breathing room.
 pub fn compact_button(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
     padded_button(
         ui,
-        egui::Button::new(text).corner_radius(CornerRadius::same(6)),
-        egui::vec2(10.0, 4.5),
+        egui::Button::new(text).corner_radius(CornerRadius::same(255)),
+        egui::vec2(11.0, 4.5),
     )
 }
 
-/// Compact dismiss `"×"` button with balanced padding around the glyph.
+/// Compact dismiss `"×"` button with balanced circular pill padding around the glyph.
 pub fn dismiss_button(ui: &mut Ui) -> egui::Response {
     padded_button(
         ui,
-        egui::Button::new("×").corner_radius(CornerRadius::same(4)),
+        egui::Button::new("×").corner_radius(CornerRadius::same(255)),
         egui::vec2(7.0, 3.0),
     )
 }

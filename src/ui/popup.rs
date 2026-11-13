@@ -14,7 +14,7 @@ use crate::ui::icons::{
     icon_button,
 };
 use crate::ui::theme::{
-    build_highlighted_layout_job, compact_button, dismiss_button, padded_button,
+    build_highlighted_layout_job, card_shadow, compact_button, dismiss_button, padded_button,
     parse_hex_color32, EarthPalette,
 };
 use chrono::{DateTime, Local};
@@ -177,8 +177,9 @@ pub fn render_popup_view(
         egui::Frame::NONE
             .fill(palette.warning_bg)
             .stroke(Stroke::new(1.0, palette.warning_border))
-            .corner_radius(CornerRadius::same(8))
-            .inner_margin(egui::Margin::symmetric(8, 5))
+            .corner_radius(CornerRadius::same(14))
+            .shadow(card_shadow(palette))
+            .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width());
                 ui.horizontal(|ui| {
@@ -464,10 +465,10 @@ fn render_header(
 
         let right_controls_width = 136.0;
         let search_outer_w = (ui.available_width() - right_controls_width).max(90.0);
-        let search_inner_w = (search_outer_w - 16.0).max(74.0);
+        let search_inner_w = (search_outer_w - 24.0).max(74.0);
 
         let frame_fill = if show_search {
-            palette.surface_bg
+            palette.card_bg
         } else {
             Color32::TRANSPARENT
         };
@@ -482,8 +483,8 @@ fn render_header(
         let search_frame = egui::Frame::NONE
             .fill(frame_fill)
             .stroke(Stroke::NONE)
-            .corner_radius(CornerRadius::same(6))
-            .inner_margin(egui::Margin::symmetric(8, 5))
+            .corner_radius(CornerRadius::same(255))
+            .inner_margin(egui::Margin::symmetric(12, 5))
             .show(ui, |ui| {
                 ui.set_min_width(search_inner_w);
                 ui.set_max_width(search_inner_w);
@@ -491,7 +492,7 @@ fn render_header(
                     if show_search {
                         let (icon_rect, _) =
                             ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-                        draw_search_glyph(ui.painter(), icon_rect, palette.text_muted);
+                        draw_search_glyph(ui.painter(), icon_rect, palette.text_secondary);
                     }
 
                     let reserve_right = if show_search { 76.0 } else { 4.0 };
@@ -522,15 +523,15 @@ fn render_header(
                             state.request_search_focus = true;
                         }
 
-                        // Ant Design Blue Tag for search mode indicator
+                        // GOSTOCK pill badge for search mode indicator
                         let mode_btn = egui::Button::new(
                             RichText::new(settings.search_mode.label())
                                 .size(10.5)
                                 .color(palette.accent_text),
                         )
-                        .fill(palette.accent_soft)
+                        .fill(palette.surface_bg)
                         .stroke(Stroke::new(1.0, palette.border_strong))
-                        .corner_radius(CornerRadius::same(4));
+                        .corner_radius(CornerRadius::same(255));
                         if padded_button(ui, mode_btn, vec2(8.0, 2.5))
                             .on_hover_text("点击切换搜索模式：精确 / 模糊 / 正则")
                             .clicked()
@@ -551,21 +552,21 @@ fn render_header(
             let border_color = if search_focused {
                 palette.accent
             } else if search_hovered || search_frame.response.hovered() {
-                palette.accent_hover
+                palette.border_strong
             } else {
-                palette.border
+                palette.border_subtle
             };
             if search_focused {
                 ui.painter().rect_stroke(
                     sr.expand(1.5),
-                    CornerRadius::same(7),
-                    Stroke::new(2.0, tint(palette.accent, 36)),
+                    CornerRadius::same(255),
+                    Stroke::new(2.0, tint(palette.accent, 34)),
                     egui::StrokeKind::Inside,
                 );
             }
             ui.painter().rect_stroke(
                 sr,
-                CornerRadius::same(6),
+                CornerRadius::same(255),
                 Stroke::new(1.0, border_color),
                 egui::StrokeKind::Inside,
             );
@@ -684,13 +685,9 @@ fn capsule_button(
     let fill = if active {
         palette.accent
     } else {
-        palette.surface_bg
+        palette.card_bg
     };
-    let stroke = if active {
-        Stroke::new(1.0, palette.accent)
-    } else {
-        Stroke::new(1.0, palette.border)
-    };
+    let stroke = Stroke::NONE;
     let text_color = if active {
         palette.on_accent
     } else {
@@ -723,7 +720,7 @@ fn capsule_button(
     let btn = egui::Button::new(job)
         .fill(fill)
         .stroke(stroke)
-        .corner_radius(CornerRadius::same(6))
+        .corner_radius(CornerRadius::same(255))
         .min_size(vec2(0.0, 23.0));
     if padded_button(ui, btn, vec2(9.0, 4.5)).clicked() {
         on_click();
@@ -743,7 +740,8 @@ fn render_items_list(
         egui::Frame::NONE
             .fill(palette.surface_bg)
             .stroke(Stroke::new(1.0, palette.border_subtle))
-            .corner_radius(CornerRadius::same(8))
+            .corner_radius(CornerRadius::same(16))
+            .shadow(card_shadow(palette))
             .inner_margin(egui::Margin::same(20))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -852,17 +850,16 @@ fn render_item_row(
     let row_fill = if selected {
         palette.row_selected_bg
     } else {
-        Color32::TRANSPARENT
+        palette.surface_bg
     };
-    let row_stroke = Stroke::NONE;
 
     let row_outer_w = ui.available_width();
     let row_inner_w = (row_outer_w - 16.0).max(80.0);
 
     let frame = egui::Frame::NONE
         .fill(row_fill)
-        .stroke(row_stroke)
-        .corner_radius(CornerRadius::same(6))
+        .stroke(Stroke::NONE)
+        .corner_radius(CornerRadius::same(12))
         .inner_margin(egui::Margin::symmetric(8, 4));
 
     let inner = frame.show(ui, |ui| {
@@ -1009,12 +1006,13 @@ fn render_item_row(
 
                     egui::Frame::NONE
                         .fill(if selected { palette.accent } else { palette.keycap_bg })
-                        .stroke(Stroke::new(
-                            1.0,
-                            if selected { palette.accent } else { palette.border },
-                        ))
-                        .corner_radius(CornerRadius::same(4))
-                        .inner_margin(egui::Margin::symmetric(5, 2))
+                        .stroke(if selected {
+                            Stroke::NONE
+                        } else {
+                            Stroke::new(1.0, palette.border_subtle)
+                        })
+                        .corner_radius(CornerRadius::same(255))
+                        .inner_margin(egui::Margin::symmetric(6, 2))
                         .show(ui, |ui| {
                             ui.label(
                                 RichText::new(label)
@@ -1055,14 +1053,19 @@ fn render_item_row(
     });
 
     let resp = inner.response.interact(Sense::click());
-    if resp.hovered() && state.selected_id != Some(item.id) && !selected {
-        ui.painter().rect_stroke(
-            resp.rect,
-            CornerRadius::same(6),
-            Stroke::new(1.0, palette.accent_hover),
-            egui::StrokeKind::Inside,
-        );
-    }
+    let border_stroke = if selected {
+        Stroke::new(1.2, palette.accent)
+    } else if resp.hovered() && state.selected_id != Some(item.id) {
+        Stroke::new(1.0, palette.border_strong)
+    } else {
+        Stroke::new(1.0, palette.border_subtle)
+    };
+    ui.painter().rect_stroke(
+        resp.rect,
+        CornerRadius::same(12),
+        border_stroke,
+        egui::StrokeKind::Inside,
+    );
 
     if resp.clicked() {
         state.selected_id = Some(item.id);
@@ -1153,7 +1156,8 @@ fn render_preview_pane(
     egui::Frame::NONE
         .fill(palette.surface_bg)
         .stroke(Stroke::new(1.0, palette.border_subtle))
-        .corner_radius(CornerRadius::same(8))
+        .corner_radius(CornerRadius::same(16))
+        .shadow(card_shadow(palette))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_min_size(vec2(inner_w, inner_h));
@@ -1191,8 +1195,8 @@ fn render_preview_pane(
                 egui::Frame::NONE
                     .fill(tag_bg)
                     .stroke(Stroke::new(1.0, tag_border))
-                    .corner_radius(CornerRadius::same(4))
-                    .inner_margin(egui::Margin::symmetric(7, 2))
+                    .corner_radius(CornerRadius::same(255))
+                    .inner_margin(egui::Margin::symmetric(8, 2))
                     .show(ui, |ui| {
                         ui.label(RichText::new(kind_label).size(11.0).color(tag_fg));
                     });
@@ -1221,9 +1225,10 @@ fn render_preview_pane(
                     egui::Button::new(RichText::new("已固定").size(11.5).color(palette.warning_text))
                         .fill(palette.warning_bg)
                         .stroke(Stroke::new(1.0, palette.warning_border))
-                        .corner_radius(CornerRadius::same(6))
+                        .corner_radius(CornerRadius::same(255))
                 } else {
                     egui::Button::new(RichText::new("固定").size(11.5))
+                        .corner_radius(CornerRadius::same(255))
                 };
                 if ui.add(pin_btn).clicked() {
                     actions.push(PopupAction::TogglePin(item.id));
@@ -1274,7 +1279,11 @@ fn render_preview_pane(
                 }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if compact_button(ui, RichText::new("删除").color(palette.danger)).clicked() {
+                    let del_btn = egui::Button::new(RichText::new("删除").color(palette.danger))
+                        .fill(palette.danger_bg)
+                        .stroke(Stroke::new(1.0, palette.danger_border))
+                        .corner_radius(CornerRadius::same(255));
+                    if padded_button(ui, del_btn, vec2(11.0, 4.5)).clicked() {
                         actions.push(PopupAction::DeleteItem(item.id));
                     }
                 });
@@ -1341,7 +1350,7 @@ fn render_preview_pane(
                                 let max_w = ui.available_width().max(120.0);
                                 let max_h = (body_h - 32.0).max(100.0);
                                 let img = egui::Image::from_uri(uri)
-                                    .corner_radius(CornerRadius::same(8));
+                                    .corner_radius(CornerRadius::same(12));
                                 let img = if state.image_actual_size {
                                     img
                                 } else {
@@ -1358,7 +1367,7 @@ fn render_preview_pane(
                                 egui::Frame::NONE
                                     .fill(palette.card_bg)
                                     .stroke(Stroke::new(1.0, palette.border_subtle))
-                                    .corner_radius(CornerRadius::same(8))
+                                    .corner_radius(CornerRadius::same(12))
                                     .inner_margin(egui::Margin::same(8))
                                     .show(ui, |ui| {
                                         ui.set_width(ui.available_width());
@@ -1438,7 +1447,7 @@ fn render_preview_pane(
                             egui::Frame::NONE
                                 .fill(palette.info_bg)
                                 .stroke(Stroke::new(1.0, palette.info_border))
-                                .corner_radius(CornerRadius::same(8))
+                                .corner_radius(CornerRadius::same(14))
                                 .inner_margin(egui::Margin::same(8))
                                 .show(ui, |ui| {
                                     ui.set_width(ui.available_width());
@@ -1463,7 +1472,7 @@ fn render_preview_pane(
                                                     )
                                                     .fill(palette.accent)
                                                     .stroke(Stroke::NONE)
-                                                    .corner_radius(CornerRadius::same(4));
+                                                    .corner_radius(CornerRadius::same(255));
                                                     if padded_button(
                                                         ui,
                                                         paste_btn,
@@ -1574,14 +1583,14 @@ fn render_color_card(
     egui::Frame::NONE
         .fill(palette.card_bg)
         .stroke(Stroke::new(1.0, palette.border_subtle))
-        .corner_radius(CornerRadius::same(8))
+        .corner_radius(CornerRadius::same(14))
         .inner_margin(egui::Margin::same(8))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 let (r, _) = ui.allocate_exact_size(vec2(38.0, 38.0), Sense::hover());
                 ui.painter().rect_filled(
                     r,
-                    CornerRadius::same(6),
+                    CornerRadius::same(10),
                     Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]),
                 );
                 ui.vertical(|ui| {
@@ -1629,7 +1638,10 @@ fn render_footer(
         let footer_btn = |ui: &mut Ui, label: RichText| {
             padded_button(
                 ui,
-                egui::Button::new(label).corner_radius(CornerRadius::same(6)),
+                egui::Button::new(label)
+                    .fill(palette.surface_bg)
+                    .stroke(Stroke::new(1.0, palette.border_subtle))
+                    .corner_radius(CornerRadius::same(255)),
                 vec2(8.0, 4.0),
             )
         };
@@ -1772,8 +1784,9 @@ fn render_banner(
     egui::Frame::NONE
         .fill(bg)
         .stroke(Stroke::new(1.0, border))
-        .corner_radius(CornerRadius::same(8))
-        .inner_margin(egui::Margin::symmetric(8, 5))
+        .corner_radius(CornerRadius::same(14))
+        .shadow(card_shadow(palette))
+        .inner_margin(egui::Margin::symmetric(10, 6))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(msg).size(11.5).color(palette.text_primary));
@@ -1825,7 +1838,7 @@ fn render_about_overlay(ctx: &egui::Context, state: &mut PopupState, palette: &E
                 )
                 .fill(palette.accent)
                 .stroke(Stroke::NONE)
-                .corner_radius(CornerRadius::same(6));
+                .corner_radius(CornerRadius::same(255));
                 if ui.add(close_btn).clicked() {
                     state.show_about_modal = false;
                 }
@@ -1848,4 +1861,123 @@ fn format_epoch_millis(millis: i64) -> String {
         return local.format("%m-%d %H:%M:%S").to_string();
     }
     String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn footer_fits_within_launcher_width() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        let mut settings = AppSettings::default();
+        let collections = vec![
+            Collection { id: 1, name: "常用指令".into(), color_hex: "#456EFD".into(), created_at: 0 },
+            Collection { id: 2, name: "代码片段".into(), color_hex: "#22C55E".into(), created_at: 0 },
+        ];
+        let results: Vec<SearchResultItem> = (1..=10)
+            .map(|id| SearchResultItem {
+                item: ClipItem {
+                    id,
+                    content_hash: format!("h{id}"),
+                    kind: ClipKind::Text,
+                    text_content: Some("https://www.behance.net/gallery/218352145".into()),
+                    html_content: None,
+                    rtf_content: None,
+                    image_path: None,
+                    thumb_path: None,
+                    image_width: None,
+                    image_height: None,
+                    files: Vec::new(),
+                    byte_size: 128,
+                    source_app: Some("Safari浏览器".into()),
+                    source_bundle_id: None,
+                    pinned: false,
+                    collection_id: None,
+                    first_copied_at: 0,
+                    last_copied_at: 0,
+                    copy_count: 1,
+                    sensitive_label: None,
+                    detected_color: None,
+                    is_url: true,
+                },
+                score: 100,
+                matched_indices: HashSet::new(),
+            })
+            .collect();
+        let mut state = PopupState::default();
+
+        if std::path::Path::new("/Library/Fonts/Arial Unicode.ttf").exists()
+            && let Ok(bytes) = std::fs::read("/Library/Fonts/Arial Unicode.ttf")
+        {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "arial_unicode".into(),
+                egui::FontData::from_owned(bytes).into(),
+            );
+            if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                vec.insert(0, "arial_unicode".into());
+            }
+            ctx.set_fonts(fonts);
+        }
+
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(424.0, 520.0))),
+            ..Default::default()
+        };
+
+        let mut min_r = egui::Rect::NOTHING;
+        let mut max_shape_right = 0.0f32;
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(raw.clone(), |ui| {
+                let ctx = ui.ctx().clone();
+                #[allow(deprecated)]
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show_inside(ui, |ui| {
+                        let panel_rect = ui.max_rect();
+                        let outer_rect = panel_rect.shrink(1.0);
+                        let content_rect = outer_rect.shrink(12.0);
+                        let resp = ui.scope_builder(
+                            egui::UiBuilder::new()
+                                .max_rect(content_rect)
+                                .layout(Layout::top_down(Align::Min)),
+                            |ui| {
+                                ui.set_min_size(content_rect.size());
+                                ui.set_max_size(content_rect.size());
+                                let _ = render_popup_view(
+                                    ui,
+                                    &ctx,
+                                    PopupViewData {
+                                        settings: &mut settings,
+                                        results: &results,
+                                        collections: &collections,
+                                        palette: &palette,
+                                        storage_bytes: 109_500,
+                                        total_items: 53,
+                                        has_accessibility: true,
+                                    },
+                                    &mut state,
+                                );
+                            },
+                        );
+                        min_r = resp.response.rect;
+                    });
+            });
+            max_shape_right = out
+                .shapes
+                .iter()
+                .map(|cs| cs.shape.visual_bounding_rect().right())
+                .filter(|r| r.is_finite())
+                .fold(0.0f32, f32::max);
+            out.textures_delta.clear();
+        }
+        assert!(
+            min_r.right() <= 411.5 && max_shape_right <= 411.5,
+            "popup content exceeded right edge: min_r={min_r:?} max_shape_right={max_shape_right}"
+        );
+    }
 }

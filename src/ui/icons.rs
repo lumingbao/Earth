@@ -77,23 +77,32 @@ pub fn icon_button(
     let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::click());
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
+        // Behance GOSTOCK squircle icon container (#F1F4F9 default, #EFF4FF active)
         if active {
-            p.rect_filled(rect, CornerRadius::same(6), palette.accent_soft);
+            p.rect_filled(rect, CornerRadius::same(10), palette.accent_soft);
             p.rect_stroke(
                 rect,
-                CornerRadius::same(6),
+                CornerRadius::same(10),
                 Stroke::new(1.0, palette.border_strong),
                 egui::StrokeKind::Inside,
             );
         } else if response.hovered() {
-            p.rect_filled(rect, CornerRadius::same(6), palette.row_hover_bg);
+            p.rect_filled(rect, CornerRadius::same(10), palette.row_hover_bg);
+            p.rect_stroke(
+                rect,
+                CornerRadius::same(10),
+                Stroke::new(1.0, palette.border),
+                egui::StrokeKind::Inside,
+            );
+        } else {
+            p.rect_filled(rect, CornerRadius::same(10), palette.card_bg);
         }
         let color = if active {
             palette.accent
         } else if response.hovered() {
             palette.accent_hover
         } else {
-            palette.text_secondary
+            palette.text_primary
         };
         draw_fn(p, rect.shrink(size * 0.24), color);
     }

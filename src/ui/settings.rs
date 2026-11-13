@@ -4,7 +4,7 @@ use crate::model::{
     SearchBoxVisibility, SearchMode, SortOrder, ThemeMode,
 };
 use crate::ui::theme::{
-    compact_button, dismiss_button, padded_button, parse_hex_color32, EarthPalette,
+    card_shadow, compact_button, dismiss_button, padded_button, parse_hex_color32, EarthPalette,
 };
 use egui::{vec2, Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
 
@@ -69,7 +69,7 @@ impl Default for SettingsState {
             new_ignore_type: String::new(),
             new_ignore_regex: String::new(),
             new_collection_name: String::new(),
-            new_collection_color: "#1677FF".to_string(),
+            new_collection_color: "#456EFD".to_string(),
             editing_collection_id: None,
             editing_collection_name: String::new(),
             status_message: None,
@@ -147,7 +147,7 @@ pub fn render_settings_view(
         let back_btn = egui::Button::new(RichText::new("← 返回剪贴板").size(12.5))
             .fill(palette.surface_bg)
             .stroke(Stroke::new(1.0, palette.border))
-            .corner_radius(CornerRadius::same(6));
+            .corner_radius(CornerRadius::same(255));
         if ui.add(back_btn).clicked() {
             actions.push(SettingsAction::CloseSettings);
         }
@@ -178,49 +178,60 @@ pub fn render_settings_view(
 
     ui.add_space(6.0);
 
-    // Ant Design Line Tabs (no background fill, primary text + 2px bottom ink bar)
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 5.0;
-        let tabs = [
-            (SettingsTab::General, "通用"),
-            (SettingsTab::Storage, "存储"),
-            (SettingsTab::Appearance, "外观"),
-            (SettingsTab::Ignore, "忽略与隐私"),
-            (SettingsTab::Advanced, "高级与收藏"),
-        ];
-        let tab_width = (ui.available_width() - 20.0) / tabs.len() as f32;
-        for (tab, label) in tabs {
-            let active = state.active_tab == tab;
-            let (rect, resp) = ui.allocate_exact_size(vec2(tab_width, 30.0), egui::Sense::click());
-            let text_color = if active {
-                palette.accent
-            } else if resp.hovered() {
-                palette.accent_hover
-            } else {
-                palette.text_secondary
-            };
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                label,
-                egui::FontId::proportional(12.2),
-                text_color,
-            );
-            if active {
-                ui.painter().line_segment(
-                    [
-                        egui::pos2(rect.left() + 6.0, rect.bottom() - 1.5),
-                        egui::pos2(rect.right() - 6.0, rect.bottom() - 1.5),
-                    ],
-                    Stroke::new(2.0, palette.accent),
-                );
-            }
-            if resp.clicked() {
-                state.active_tab = tab;
-                state.recording = None;
-            }
-        }
-    });
+    // GOSTOCK Segmented Pill Tabs (#F1F4F9 track with #456EFD active pill)
+    egui::Frame::NONE
+        .fill(palette.card_bg)
+        .corner_radius(CornerRadius::same(16))
+        .inner_margin(egui::Margin::same(3))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let tabs = [
+                    (SettingsTab::General, "通用"),
+                    (SettingsTab::Storage, "存储"),
+                    (SettingsTab::Appearance, "外观"),
+                    (SettingsTab::Ignore, "忽略与隐私"),
+                    (SettingsTab::Advanced, "高级与收藏"),
+                ];
+                let tab_width = (ui.available_width() - 16.0) / tabs.len() as f32;
+                for (tab, label) in tabs {
+                    let active = state.active_tab == tab;
+                    let (rect, resp) =
+                        ui.allocate_exact_size(vec2(tab_width, 28.0), egui::Sense::click());
+                    if active {
+                        ui.painter().rect_filled(
+                            rect,
+                            CornerRadius::same(13),
+                            palette.accent,
+                        );
+                    } else if resp.hovered() {
+                        ui.painter().rect_filled(
+                            rect,
+                            CornerRadius::same(13),
+                            palette.accent_soft,
+                        );
+                    }
+                    let text_color = if active {
+                        palette.on_accent
+                    } else if resp.hovered() {
+                        palette.accent_text
+                    } else {
+                        palette.text_secondary
+                    };
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        egui::FontId::proportional(12.0),
+                        text_color,
+                    );
+                    if resp.clicked() {
+                        state.active_tab = tab;
+                        state.recording = None;
+                    }
+                }
+            });
+        });
 
     ui.add_space(6.0);
     ui.separator();
@@ -236,7 +247,8 @@ pub fn render_settings_view(
         egui::Frame::NONE
             .fill(bg)
             .stroke(Stroke::new(1.0, border))
-            .corner_radius(CornerRadius::same(8))
+            .corner_radius(CornerRadius::same(14))
+            .shadow(card_shadow(palette))
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -320,7 +332,7 @@ fn render_general_tab(
                     )
                     .fill(palette.accent)
                     .stroke(Stroke::NONE)
-                    .corner_radius(CornerRadius::same(6));
+                    .corner_radius(CornerRadius::same(255));
                     if ui.add(auth_btn).clicked() {
                         actions.push(SettingsAction::OpenAccessibilitySettings);
                     }
@@ -485,7 +497,7 @@ fn shortcut_row(
         .min_size(vec2(170.0, 26.0))
         .fill(fill)
         .stroke(stroke)
-        .corner_radius(CornerRadius::same(6));
+        .corner_radius(CornerRadius::same(12));
         if ui.add(btn).clicked() {
             state.recording = Some(target);
         }
@@ -583,9 +595,9 @@ fn render_storage_tab(
             if ui
                 .add(
                     egui::Button::new(RichText::new("清空全部（含固定）").color(palette.danger))
-                        .fill(palette.surface_bg)
+                        .fill(palette.danger_bg)
                         .stroke(Stroke::new(1.0, palette.danger_border))
-                        .corner_radius(CornerRadius::same(6)),
+                        .corner_radius(CornerRadius::same(255)),
                 )
                 .clicked()
             {
@@ -851,7 +863,7 @@ fn render_editable_string_list(
         let add_btn = egui::Button::new(RichText::new("添加").color(palette.on_accent))
             .fill(palette.accent)
             .stroke(Stroke::NONE)
-            .corner_radius(CornerRadius::same(6));
+            .corner_radius(CornerRadius::same(255));
         let add_clicked = ui.add(add_btn).clicked()
             || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
         if add_clicked {
@@ -869,8 +881,8 @@ fn render_editable_string_list(
     egui::Frame::NONE
         .fill(palette.card_bg)
         .stroke(Stroke::new(1.0, palette.border_subtle))
-        .corner_radius(CornerRadius::same(8))
-        .inner_margin(egui::Margin::same(6))
+        .corner_radius(CornerRadius::same(12))
+        .inner_margin(egui::Margin::same(8))
         .show(ui, |ui| {
             if list.is_empty() {
                 ui.label(
@@ -953,7 +965,7 @@ fn render_advanced_tab(
                     .hint_text("新分组名称（如：SQL 模板）")
                     .desired_width(132.0),
             );
-            for hex in ["#1677FF", "#13C2C2", "#52C41A", "#722ED1", "#FA8C16"] {
+            for hex in ["#456EFD", "#22C55E", "#F59E0B", "#EC4899", "#8B5CF6"] {
                 let c = parse_hex_color32(hex).unwrap_or(palette.accent);
                 let selected = state.new_collection_color == hex;
                 let (rect, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::click());
@@ -971,7 +983,7 @@ fn render_advanced_tab(
             )
             .fill(palette.accent)
             .stroke(Stroke::NONE)
-            .corner_radius(CornerRadius::same(6));
+            .corner_radius(CornerRadius::same(255));
             if ui.add(create_btn).clicked() && !state.new_collection_name.trim().is_empty() {
                 actions.push(SettingsAction::CreateCollection {
                     name: state.new_collection_name.trim().to_string(),
@@ -1004,7 +1016,7 @@ fn render_advanced_tab(
                         )
                         .fill(palette.accent)
                         .stroke(Stroke::NONE)
-                        .corner_radius(CornerRadius::same(4));
+                        .corner_radius(CornerRadius::same(255));
                         if padded_button(ui, save_btn, vec2(10.0, 4.5)).clicked() || submitted {
                             let trimmed = state.editing_collection_name.trim().to_string();
                             if !trimmed.is_empty() {
@@ -1020,7 +1032,12 @@ fn render_advanced_tab(
                 } else {
                     ui.label(RichText::new(&col.name).size(13.0));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if compact_button(ui, RichText::new("删除").color(palette.danger))
+                        let del_btn =
+                            egui::Button::new(RichText::new("删除").color(palette.danger))
+                                .fill(palette.danger_bg)
+                                .stroke(Stroke::new(1.0, palette.danger_border))
+                                .corner_radius(CornerRadius::same(255));
+                        if padded_button(ui, del_btn, vec2(11.0, 4.5))
                             .on_hover_text("删除分组（不会删除组内记录本身）")
                             .clicked()
                         {
@@ -1042,7 +1059,8 @@ fn section_card(ui: &mut Ui, palette: &EarthPalette, add_contents: impl FnOnce(&
     egui::Frame::NONE
         .fill(palette.surface_bg)
         .stroke(Stroke::new(1.0, palette.border_subtle))
-        .corner_radius(CornerRadius::same(8))
+        .corner_radius(CornerRadius::same(16))
+        .shadow(card_shadow(palette))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_min_width(card_w);
