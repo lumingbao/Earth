@@ -122,21 +122,6 @@ pub fn render_popup_view(
         state.selected_id = None;
     }
 
-    // Auto-open preview timer (Maccy-parity)
-    if settings.auto_open_preview
-        && !state.preview_open
-        && !state.preview_manually_toggled
-        && state.selected_id.is_some()
-    {
-        let delay = std::time::Duration::from_millis(settings.preview_delay_ms);
-        let elapsed = state.selection_changed_at.elapsed();
-        if elapsed >= delay {
-            state.preview_open = true;
-        } else {
-            ctx.request_repaint_after(delay - elapsed);
-        }
-    }
-
     // Handle keyboard shortcuts BEFORE TextEdit steals Up/Down/Enter/Esc
     handle_popup_keyboard(ctx, settings, results, state, &mut actions);
 
@@ -192,12 +177,20 @@ pub fn render_popup_view(
             .corner_radius(CornerRadius::same(8))
             .inner_margin(egui::Margin::symmetric(8, 5))
             .show(ui, |ui| {
+                ui.set_max_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new("⚠ 辅助功能未对当前版本生效（若已开启，请在设置中先点「-」移除旧记录再重开）")
-                            .size(11.0)
-                            .color(palette.text_secondary),
-                    );
+                    let msg_w = (ui.available_width() - 82.0).max(120.0);
+                    ui.allocate_ui(vec2(msg_w, 18.0), |ui| {
+                        ui.set_max_width(msg_w);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new("⚠ 辅助功能未生效（若已开启，请在设置中点「-」移除后重加）")
+                                    .size(11.0)
+                                    .color(palette.text_secondary),
+                            )
+                            .truncate(),
+                        );
+                    });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.small_button("×").clicked() {
                             state.dismissed_accessibility_banner = true;
@@ -214,49 +207,61 @@ pub fn render_popup_view(
     // Main Split Area: Left History List + Optional Right Quick-Peek Workbench
     let footer_reserved = if settings.show_footer_menu { 34.0 } else { 4.0 };
     let body_height = (ui.available_height() - footer_reserved).max(160.0);
+    let total_width = ui.available_width();
+    let split_gap = 8.0;
 
-    ui.allocate_ui_with_layout(
-        vec2(ui.available_width(), body_height),
-        Layout::left_to_right(Align::Min),
+    let (body_rect, _) = ui.allocate_exact_size(vec2(total_width, body_height), Sense::hover());
+    let (left_rect, right_rect) = if state.preview_open {
+        let lw = (body_rect.width() * 0.45).clamp(260.0, 360.0);
+        let l = egui::Rect::from_min_max(
+            body_rect.min,
+            pos2(body_rect.min.x + lw, body_rect.max.y),
+        );
+        let r = egui::Rect::from_min_max(
+            pos2(body_rect.min.x + lw + split_gap, body_rect.min.y),
+            body_rect.max,
+        );
+        (l, Some(r))
+    } else {
+        (body_rect, None)
+    };
+
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(left_rect)
+            .layout(Layout::top_down(Align::Min)),
         |ui| {
-            let list_width = if state.preview_open {
-                (ui.available_width() * 0.45).clamp(290.0, 390.0)
-            } else {
-                ui.available_width()
-            };
-
-            ui.allocate_ui_with_layout(
-                vec2(list_width, body_height),
-                Layout::top_down(Align::Min),
-                |ui| {
-                    render_items_list(ui, settings, results, collections, state, palette, &mut actions);
-                },
-            );
-
-            if state.preview_open {
-                ui.add_space(8.0);
-                let preview_width = ui.available_width().max(260.0);
-                ui.allocate_ui_with_layout(
-                    vec2(preview_width, body_height),
-                    Layout::top_down(Align::Min),
-                    |ui| {
-                        let selected_item = state
-                            .selected_id
-                            .and_then(|sid| results.iter().find(|r| r.item.id == sid))
-                            .map(|r| &r.item);
-                        render_preview_pane(
-                            ui,
-                            selected_item,
-                            collections,
-                            state,
-                            palette,
-                            &mut actions,
-                        );
-                    },
-                );
-            }
+            ui.set_clip_rect(left_rect);
+            ui.set_min_size(left_rect.size());
+            ui.set_max_size(left_rect.size());
+            render_items_list(ui, settings, results, collections, state, palette, &mut actions);
         },
     );
+
+    if let Some(r_rect) = right_rect {
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(r_rect)
+                .layout(Layout::top_down(Align::Min)),
+            |ui| {
+                ui.set_clip_rect(r_rect);
+                ui.set_min_size(r_rect.size());
+                ui.set_max_size(r_rect.size());
+                let selected_item = state
+                    .selected_id
+                    .and_then(|sid| results.iter().find(|r| r.item.id == sid))
+                    .map(|r| &r.item);
+                render_preview_pane(
+                    ui,
+                    selected_item,
+                    collections,
+                    state,
+                    palette,
+                    &mut actions,
+                );
+            },
+        );
+    }
 
     if settings.show_footer_menu {
         ui.add_space(4.0);
@@ -454,8 +459,9 @@ fn render_header(
         let show_search = settings.search_box_visibility == SearchBoxVisibility::Always
             || !state.search_query.is_empty();
 
-        let right_controls_width = 166.0;
-        let search_avail = (ui.available_width() - right_controls_width).max(90.0);
+        let right_controls_width = 136.0;
+        let search_outer_w = (ui.available_width() - right_controls_width).max(90.0);
+        let search_inner_w = (search_outer_w - 16.0).max(74.0);
 
         if show_search {
             egui::Frame::NONE
@@ -464,12 +470,13 @@ fn render_header(
                 .corner_radius(CornerRadius::same(9))
                 .inner_margin(egui::Margin::symmetric(8, 5))
                 .show(ui, |ui| {
-                    ui.set_width(search_avail);
+                    ui.set_min_width(search_inner_w);
+                    ui.set_max_width(search_inner_w);
                     ui.horizontal(|ui| {
                         let (icon_rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
                         draw_search_glyph(ui.painter(), icon_rect, palette.text_muted);
 
-                        let edit_w = (ui.available_width() - 56.0).max(50.0);
+                        let edit_w = (ui.available_width() - 62.0).max(40.0);
                         let resp = ui.add(
                             egui::TextEdit::singleline(&mut state.search_query)
                                 .hint_text("搜索记录...")
@@ -510,7 +517,7 @@ fn render_header(
                     });
                 });
         } else {
-            let drag = ui.allocate_response(vec2(search_avail, 28.0), Sense::drag());
+            let drag = ui.allocate_response(vec2(search_outer_w, 28.0), Sense::drag());
             if drag.drag_started() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
@@ -591,8 +598,11 @@ fn render_filter_strip(
     state: &mut PopupState,
     palette: &EarthPalette,
 ) {
+    let strip_w = ui.available_width();
     ScrollArea::horizontal()
         .id_salt("earth_filter_capsules")
+        .max_width(strip_w)
+        .auto_shrink([false, true])
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -708,10 +718,13 @@ fn render_items_list(
         return;
     }
 
+    let list_avail_w = ui.available_width();
     ScrollArea::vertical()
         .id_salt("earth_history_scroll")
         .auto_shrink([false, false])
+        .max_width(list_avail_w)
         .show(ui, |ui| {
+            ui.set_max_width(list_avail_w);
             let mut seen_pinned_sep = false;
             let mut prev_pinned: Option<bool> = None;
 
@@ -773,6 +786,9 @@ fn render_item_row(
     };
     let row_stroke = Stroke::NONE;
 
+    let row_outer_w = ui.available_width();
+    let row_inner_w = (row_outer_w - 16.0).max(80.0);
+
     let frame = egui::Frame::NONE
         .fill(row_fill)
         .stroke(row_stroke)
@@ -780,9 +796,11 @@ fn render_item_row(
         .inner_margin(egui::Margin::symmetric(8, 4));
 
     let inner = frame.show(ui, |ui| {
-        ui.set_width((ui.available_width() - 4.0).max(120.0));
+        ui.set_min_width(row_inner_w);
+        ui.set_max_width(row_inner_w);
         ui.set_min_height(row_height - 8.0);
         ui.horizontal(|ui| {
+            ui.set_max_width(row_inner_w);
             // Left selection bar
             if selected {
                 let (bar, _) = ui.allocate_exact_size(vec2(3.0, row_height - 14.0), Sense::hover());
@@ -847,9 +865,12 @@ fn render_item_row(
                 right_reserved += 74.0;
             }
 
-            let text_w = (ui.available_width() - right_reserved).max(80.0);
+            let text_w = (ui.available_width() - right_reserved).max(40.0);
             ui.allocate_ui(vec2(text_w, row_height - 10.0), |ui| {
+                ui.set_min_width(text_w);
+                ui.set_max_width(text_w);
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    ui.set_max_width(text_w);
                     match item.kind {
                         ClipKind::Text => {
                             let raw = item.text_content.as_deref().unwrap_or("");
@@ -857,10 +878,13 @@ fn render_item_row(
                             if item.is_sensitive() && settings.enable_privacy_masking && !is_revealed {
                                 let masked = mask_sensitive_preview(raw);
                                 let lbl = item.sensitive_label.as_deref().unwrap_or("敏感");
-                                ui.label(
-                                    RichText::new(format!("[{lbl}] {masked}"))
-                                        .size(12.8)
-                                        .color(palette.text_secondary),
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(format!("[{lbl}] {masked}"))
+                                            .size(12.8)
+                                            .color(palette.text_secondary),
+                                    )
+                                    .truncate(),
                                 );
                             } else {
                                 let formatted = format_display_line(raw, settings.show_special_symbols);
@@ -871,17 +895,21 @@ fn render_item_row(
                                     settings.match_highlight,
                                     palette,
                                     13.0,
+                                    text_w,
                                     selected,
                                 );
-                                ui.label(job);
+                                ui.add(egui::Label::new(job).truncate());
                             }
                         }
                         ClipKind::Image => {
                             let summary = item.summary_line(40);
-                            ui.label(
-                                RichText::new(summary)
-                                    .size(12.2)
-                                    .color(palette.text_secondary),
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(summary)
+                                        .size(12.2)
+                                        .color(palette.text_secondary),
+                                )
+                                .truncate(),
                             );
                         }
                         ClipKind::Files => {
@@ -892,9 +920,10 @@ fn render_item_row(
                                 settings.match_highlight,
                                 palette,
                                 13.0,
+                                text_w,
                                 selected,
                             );
-                            ui.label(job);
+                            ui.add(egui::Label::new(job).truncate());
                         }
                     }
                 });
@@ -1041,14 +1070,16 @@ fn render_preview_pane(
     palette: &EarthPalette,
     actions: &mut Vec<PopupAction>,
 ) {
+    let inner_w = (ui.available_width() - 24.0).max(160.0);
+    let inner_h = (ui.available_height() - 24.0).max(120.0);
     egui::Frame::NONE
         .fill(palette.surface_bg)
         .stroke(Stroke::new(1.0, palette.border))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.set_height(ui.available_height());
+            ui.set_min_size(vec2(inner_w, inner_h));
+            ui.set_max_size(vec2(inner_w, inner_h));
 
             let Some(item) = item else {
                 ui.centered_and_justified(|ui| {

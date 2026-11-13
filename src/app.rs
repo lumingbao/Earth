@@ -201,6 +201,7 @@ impl EarthApp {
         {
             self.last_window_size = target;
             ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(target.0, target.1)));
+            ctx.request_repaint();
         }
     }
 
@@ -459,18 +460,33 @@ impl eframe::App for EarthApp {
         palette.apply_to_ctx(&ctx);
 
         let has_accessibility = platform::has_accessibility_permission();
+        let panel_rect = ctx.content_rect();
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
-                egui::Frame::NONE
-                    .fill(palette.window_bg)
-                    .stroke(Stroke::new(1.0, palette.border))
-                    .corner_radius(CornerRadius::same(14))
-                    .inner_margin(egui::Margin::same(12))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.set_height(ui.available_height());
+                let outer_rect = panel_rect.shrink(1.0);
+                ui.painter().rect_filled(
+                    outer_rect,
+                    CornerRadius::same(14),
+                    palette.window_bg,
+                );
+                ui.painter().rect_stroke(
+                    outer_rect,
+                    CornerRadius::same(14),
+                    Stroke::new(1.0, palette.border),
+                    egui::StrokeKind::Inside,
+                );
+
+                let content_rect = outer_rect.shrink(12.0);
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(content_rect)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                    |ui| {
+                        ui.set_clip_rect(content_rect);
+                        ui.set_min_size(content_rect.size());
+                        ui.set_max_size(content_rect.size());
 
                         match self.view_mode {
                             ViewMode::Launcher => {

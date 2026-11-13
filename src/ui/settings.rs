@@ -649,27 +649,6 @@ fn render_appearance_tab(
             }
         });
 
-        if ui
-            .checkbox(&mut settings.auto_open_preview, "停留后自动展开右侧速览工作台")
-            .changed()
-        {
-            actions.push(SettingsAction::SettingsChanged);
-        }
-        ui.horizontal(|ui| {
-            ui.label("自动预览延迟：");
-            if ui
-                .add(
-                    egui::DragValue::new(&mut settings.preview_delay_ms)
-                        .range(200..=5000)
-                        .speed(50)
-                        .suffix(" ms"),
-                )
-                .changed()
-            {
-                actions.push(SettingsAction::SettingsChanged);
-            }
-        });
-
         ui.horizontal(|ui| {
             ui.label("高亮搜索匹配：");
             egui::ComboBox::from_id_salt("highlight_combo")
@@ -1021,13 +1000,15 @@ fn render_advanced_tab(
 }
 
 fn section_card(ui: &mut Ui, palette: &EarthPalette, add_contents: impl FnOnce(&mut Ui)) {
+    let card_w = (ui.available_width() - 24.0).max(160.0);
     egui::Frame::NONE
         .fill(palette.surface_bg)
         .stroke(Stroke::new(1.0, palette.border))
         .corner_radius(CornerRadius::same(10))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
+            ui.set_min_width(card_w);
+            ui.set_max_width(card_w);
             add_contents(ui);
         });
 }

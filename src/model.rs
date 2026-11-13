@@ -375,7 +375,7 @@ impl Default for AppSettings {
             popup_position: PopupPosition::Cursor,
             pin_position: PinPosition::Bottom,
             image_height: 40.0,
-            auto_open_preview: true,
+            auto_open_preview: false,
             preview_delay_ms: 1200,
             match_highlight: MatchHighlight::Bold,
             show_special_symbols: true,

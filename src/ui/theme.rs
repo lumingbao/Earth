@@ -133,9 +133,18 @@ pub fn build_highlighted_layout_job(
     highlight_mode: MatchHighlight,
     palette: &EarthPalette,
     font_size: f32,
+    max_width: f32,
     _selected: bool,
 ) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob::default();
+    let mut job = egui::text::LayoutJob {
+        wrap: egui::epaint::text::TextWrapping {
+            max_width,
+            max_rows: 1,
+            break_anywhere: true,
+            overflow_character: Some('…'),
+        },
+        ..Default::default()
+    };
     let base_color = palette.text_primary;
 
     if matched_indices.is_empty() {
