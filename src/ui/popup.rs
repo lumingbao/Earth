@@ -444,23 +444,11 @@ fn render_header(
     ui.horizontal(|ui| {
         // Draggable Earth brand badge
         let emblem_resp = draw_earth_emblem(ui, 24.0, palette, settings.paused);
+        if emblem_resp.drag_started() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
         if emblem_resp.hovered() {
             emblem_resp.on_hover_text("拖动移动窗口");
-        }
-
-        if settings.show_app_name_in_search {
-            let title_resp = ui.add(
-                egui::Label::new(
-                    RichText::new("Earth")
-                        .size(14.5)
-                        .strong()
-                        .color(palette.text_primary),
-                )
-                .sense(Sense::drag()),
-            );
-            if title_resp.drag_started() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-            }
         }
 
         let show_search = settings.search_box_visibility == SearchBoxVisibility::Always

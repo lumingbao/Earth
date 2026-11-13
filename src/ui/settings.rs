@@ -708,12 +708,6 @@ fn render_appearance_tab(
             .changed();
 
         ui.horizontal(|ui| {
-            changed |= ui
-                .checkbox(&mut settings.show_app_name_in_search, "在搜索框前显示应用名 Earth")
-                .changed();
-        });
-
-        ui.horizontal(|ui| {
             ui.label("搜索框显示时机：");
             egui::ComboBox::from_id_salt("search_vis_combo")
                 .selected_text(settings.search_box_visibility.label())

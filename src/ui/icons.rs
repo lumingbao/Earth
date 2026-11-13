@@ -2,7 +2,7 @@ use crate::ui::theme::EarthPalette;
 use egui::{pos2, vec2, Color32, CornerRadius, Rect, Sense, Stroke, Ui};
 
 pub fn draw_earth_emblem(ui: &mut Ui, size: f32, palette: &EarthPalette, paused: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::hover());
+    let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::drag());
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         let center = rect.center();
