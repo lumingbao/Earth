@@ -13,7 +13,10 @@ use crate::ui::icons::{
     draw_pin_badge, draw_play_glyph, draw_search_glyph, draw_shield_glyph, draw_split_pane_glyph,
     icon_button,
 };
-use crate::ui::theme::{build_highlighted_layout_job, parse_hex_color32, EarthPalette};
+use crate::ui::theme::{
+    build_highlighted_layout_job, compact_button, dismiss_button, padded_button,
+    parse_hex_color32, EarthPalette,
+};
 use chrono::{DateTime, Local};
 use egui::{
     pos2, vec2, Align, Color32, CornerRadius, FontId, Key, Layout, Modifiers, RichText, ScrollArea,
@@ -172,30 +175,30 @@ pub fn render_popup_view(
         && !state.dismissed_accessibility_banner
     {
         egui::Frame::NONE
-            .fill(palette.card_bg)
-            .stroke(Stroke::new(1.0, palette.border_strong))
+            .fill(palette.warning_bg)
+            .stroke(Stroke::new(1.0, palette.warning_border))
             .corner_radius(CornerRadius::same(8))
             .inner_margin(egui::Margin::symmetric(8, 5))
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    let msg_w = (ui.available_width() - 82.0).max(120.0);
+                    let msg_w = (ui.available_width() - 96.0).max(120.0);
                     ui.allocate_ui(vec2(msg_w, 18.0), |ui| {
                         ui.set_max_width(msg_w);
                         ui.add(
                             egui::Label::new(
                                 RichText::new("⚠ 辅助功能未生效（若已开启，请在设置中点「-」移除后重加）")
                                     .size(11.0)
-                                    .color(palette.text_secondary),
+                                    .color(palette.text_primary),
                             )
                             .truncate(),
                         );
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.small_button("×").clicked() {
+                        if dismiss_button(ui).clicked() {
                             state.dismissed_accessibility_banner = true;
                         }
-                        if ui.small_button("去授权").clicked() {
+                        if compact_button(ui, "去授权").clicked() {
                             actions.push(PopupAction::OpenAccessibilitySettings);
                         }
                     });
@@ -468,21 +471,18 @@ fn render_header(
         } else {
             Color32::TRANSPARENT
         };
-        let frame_stroke = if show_search {
-            Stroke::new(1.0, palette.border)
-        } else {
-            Stroke::NONE
-        };
         let hint = if show_search {
             "搜索记录..."
         } else {
             "直接打字即可搜索..."
         };
 
-        egui::Frame::NONE
+        let mut search_focused = false;
+        let mut search_hovered = false;
+        let search_frame = egui::Frame::NONE
             .fill(frame_fill)
-            .stroke(frame_stroke)
-            .corner_radius(CornerRadius::same(9))
+            .stroke(Stroke::NONE)
+            .corner_radius(CornerRadius::same(6))
             .inner_margin(egui::Margin::symmetric(8, 5))
             .show(ui, |ui| {
                 ui.set_min_width(search_inner_w);
@@ -494,7 +494,7 @@ fn render_header(
                         draw_search_glyph(ui.painter(), icon_rect, palette.text_muted);
                     }
 
-                    let reserve_right = if show_search { 62.0 } else { 4.0 };
+                    let reserve_right = if show_search { 76.0 } else { 4.0 };
                     let edit_w = (ui.available_width() - reserve_right).max(40.0);
                     let mut output = egui::TextEdit::singleline(&mut state.search_query)
                         .id_salt("earth_search_input")
@@ -502,6 +502,8 @@ fn render_header(
                         .frame(egui::Frame::NONE)
                         .desired_width(edit_w)
                         .show(ui);
+                    search_focused = output.response.has_focus();
+                    search_hovered = output.response.hovered();
                     if state.request_search_focus {
                         output.response.request_focus();
                         let end = egui::text::CCursor::new(state.search_query.chars().count());
@@ -511,25 +513,25 @@ fn render_header(
                             .set_char_range(Some(egui::text::CCursorRange::one(end)));
                         output.state.store(ui.ctx(), output.response.id);
                         state.request_search_focus = false;
+                        search_focused = true;
                     }
 
                     if show_search {
-                        if !state.search_query.is_empty() && ui.small_button("×").clicked() {
+                        if !state.search_query.is_empty() && dismiss_button(ui).clicked() {
                             state.search_query.clear();
                             state.request_search_focus = true;
                         }
 
-                        // Cycle Exact / Fuzzy / Regex
+                        // Ant Design Blue Tag for search mode indicator
                         let mode_btn = egui::Button::new(
                             RichText::new(settings.search_mode.label())
                                 .size(10.5)
-                                .color(palette.accent),
+                                .color(palette.accent_text),
                         )
                         .fill(palette.accent_soft)
-                        .stroke(Stroke::NONE)
-                        .corner_radius(CornerRadius::same(5));
-                        if ui
-                            .add(mode_btn)
+                        .stroke(Stroke::new(1.0, palette.border_strong))
+                        .corner_radius(CornerRadius::same(4));
+                        if padded_button(ui, mode_btn, vec2(8.0, 2.5))
                             .on_hover_text("点击切换搜索模式：精确 / 模糊 / 正则")
                             .clicked()
                         {
@@ -543,6 +545,31 @@ fn render_header(
                     }
                 });
             });
+
+        if show_search {
+            let sr = search_frame.response.rect;
+            let border_color = if search_focused {
+                palette.accent
+            } else if search_hovered || search_frame.response.hovered() {
+                palette.accent_hover
+            } else {
+                palette.border
+            };
+            if search_focused {
+                ui.painter().rect_stroke(
+                    sr.expand(1.5),
+                    CornerRadius::same(7),
+                    Stroke::new(2.0, tint(palette.accent, 36)),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            ui.painter().rect_stroke(
+                sr,
+                CornerRadius::same(6),
+                Stroke::new(1.0, border_color),
+                egui::StrokeKind::Inside,
+            );
+        }
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if icon_button(ui, 28.0, false, "偏好设置 (⌘,)", palette, draw_gear_glyph).clicked() {
@@ -655,37 +682,50 @@ fn capsule_button(
     on_click: impl FnOnce(),
 ) {
     let fill = if active {
-        palette.accent_soft
+        palette.accent
     } else {
-        palette.card_bg
+        palette.surface_bg
     };
     let stroke = if active {
-        Stroke::new(1.0, palette.border_strong)
+        Stroke::new(1.0, palette.accent)
     } else {
         Stroke::new(1.0, palette.border)
     };
     let text_color = if active {
-        palette.accent
+        palette.on_accent
     } else {
         palette.text_secondary
     };
 
-    let text = if dot_color.is_some() {
-        format!("● {label}")
-    } else {
-        label.to_string()
-    };
-
-    let mut rich = RichText::new(text).size(11.5).color(text_color);
-    if active {
-        rich = rich.strong();
+    let font = FontId::proportional(11.5);
+    let mut job = egui::text::LayoutJob::default();
+    if let Some(dot) = dot_color {
+        job.append(
+            "● ",
+            0.0,
+            egui::TextFormat {
+                font_id: font.clone(),
+                color: if active { palette.on_accent } else { dot },
+                ..Default::default()
+            },
+        );
     }
-    let btn = egui::Button::new(rich)
+    job.append(
+        label,
+        0.0,
+        egui::TextFormat {
+            font_id: font,
+            color: text_color,
+            ..Default::default()
+        },
+    );
+
+    let btn = egui::Button::new(job)
         .fill(fill)
         .stroke(stroke)
-        .corner_radius(CornerRadius::same(12))
-        .min_size(vec2(0.0, 22.0));
-    if ui.add(btn).clicked() {
+        .corner_radius(CornerRadius::same(6))
+        .min_size(vec2(0.0, 23.0));
+    if padded_button(ui, btn, vec2(9.0, 4.5)).clicked() {
         on_click();
     }
 }
@@ -702,8 +742,8 @@ fn render_items_list(
     if results.is_empty() {
         egui::Frame::NONE
             .fill(palette.surface_bg)
-            .stroke(Stroke::new(1.0, palette.border))
-            .corner_radius(CornerRadius::same(10))
+            .stroke(Stroke::new(1.0, palette.border_subtle))
+            .corner_radius(CornerRadius::same(8))
             .inner_margin(egui::Margin::same(20))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -822,7 +862,7 @@ fn render_item_row(
     let frame = egui::Frame::NONE
         .fill(row_fill)
         .stroke(row_stroke)
-        .corner_radius(CornerRadius::same(8))
+        .corner_radius(CornerRadius::same(6))
         .inner_margin(egui::Margin::symmetric(8, 4));
 
     let inner = frame.show(ui, |ui| {
@@ -851,13 +891,13 @@ fn render_item_row(
                             ui.painter().rect_stroke(
                                 swatch,
                                 CornerRadius::same(4),
-                                Stroke::new(1.0, palette.border_strong),
+                                Stroke::new(1.0, palette.border),
                                 egui::StrokeKind::Inside,
                             );
                         }
                     if item.is_url {
                         let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
-                        draw_link_badge(ui.painter(), r, palette.accent_secondary);
+                        draw_link_badge(ui.painter(), r, palette.accent);
                     } else if item.is_sensitive() && settings.enable_privacy_masking {
                         let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
                         draw_shield_glyph(ui.painter(), r, palette.pin_amber);
@@ -865,7 +905,7 @@ fn render_item_row(
                 }
                 ClipKind::Files => {
                     let (r, _) = ui.allocate_exact_size(vec2(15.0, 15.0), Sense::hover());
-                    draw_file_badge(ui.painter(), r, palette.accent_secondary);
+                    draw_file_badge(ui.painter(), r, palette.success);
                 }
                 ClipKind::Image => {
                     if let Some(thumb) = item.thumb_path.as_deref().or(item.image_path.as_deref()) {
@@ -874,7 +914,7 @@ fn render_item_row(
                         ui.add(
                             egui::Image::from_uri(uri)
                                 .max_size(vec2(h * 2.2, h))
-                                .corner_radius(CornerRadius::same(5)),
+                                .corner_radius(CornerRadius::same(4)),
                         );
                     }
                 }
@@ -968,14 +1008,22 @@ fn render_item_row(
                     let label = format!("Alt+{num}");
 
                     egui::Frame::NONE
-                        .fill(palette.keycap_bg)
-                        .corner_radius(CornerRadius::same(5))
+                        .fill(if selected { palette.accent } else { palette.keycap_bg })
+                        .stroke(Stroke::new(
+                            1.0,
+                            if selected { palette.accent } else { palette.border },
+                        ))
+                        .corner_radius(CornerRadius::same(4))
                         .inner_margin(egui::Margin::symmetric(5, 2))
                         .show(ui, |ui| {
                             ui.label(
                                 RichText::new(label)
                                     .size(10.5)
-                                    .color(palette.keycap_text),
+                                    .color(if selected {
+                                        palette.on_accent
+                                    } else {
+                                        palette.keycap_text
+                                    }),
                             );
                         });
                 }
@@ -1010,8 +1058,8 @@ fn render_item_row(
     if resp.hovered() && state.selected_id != Some(item.id) && !selected {
         ui.painter().rect_stroke(
             resp.rect,
-            CornerRadius::same(8),
-            Stroke::new(1.0, palette.border_strong),
+            CornerRadius::same(6),
+            Stroke::new(1.0, palette.accent_hover),
             egui::StrokeKind::Inside,
         );
     }
@@ -1104,8 +1152,8 @@ fn render_preview_pane(
     let inner_h = (ui.available_height() - 24.0).max(120.0);
     egui::Frame::NONE
         .fill(palette.surface_bg)
-        .stroke(Stroke::new(1.0, palette.border))
-        .corner_radius(CornerRadius::same(10))
+        .stroke(Stroke::new(1.0, palette.border_subtle))
+        .corner_radius(CornerRadius::same(8))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_min_size(vec2(inner_w, inner_h));
@@ -1139,12 +1187,14 @@ fn render_preview_pane(
             let ts_str = format_epoch_millis(item.last_copied_at);
 
             ui.horizontal(|ui| {
+                let (tag_bg, tag_border, tag_fg) = antd_kind_tag_colors(item, palette);
                 egui::Frame::NONE
-                    .fill(palette.accent_soft)
-                    .corner_radius(CornerRadius::same(6))
-                    .inner_margin(egui::Margin::symmetric(7, 3))
+                    .fill(tag_bg)
+                    .stroke(Stroke::new(1.0, tag_border))
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(egui::Margin::symmetric(7, 2))
                     .show(ui, |ui| {
-                        ui.label(RichText::new(kind_label).size(11.0).color(palette.accent));
+                        ui.label(RichText::new(kind_label).size(11.0).color(tag_fg));
                     });
                 ui.label(
                     RichText::new(format!(
@@ -1167,8 +1217,15 @@ fn render_preview_pane(
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                let pin_btn = if item.pinned { "已固定" } else { "固定" };
-                if ui.small_button(pin_btn).clicked() {
+                let pin_btn = if item.pinned {
+                    egui::Button::new(RichText::new("已固定").size(11.5).color(palette.warning_text))
+                        .fill(palette.warning_bg)
+                        .stroke(Stroke::new(1.0, palette.warning_border))
+                        .corner_radius(CornerRadius::same(6))
+                } else {
+                    egui::Button::new(RichText::new("固定").size(11.5))
+                };
+                if ui.add(pin_btn).clicked() {
                     actions.push(PopupAction::TogglePin(item.id));
                 }
 
@@ -1207,7 +1264,7 @@ fn render_preview_pane(
                 if item.is_sensitive() {
                     let revealed = state.revealed_sensitive_ids.contains(&item.id);
                     let btn_lbl = if revealed { "隐藏明文" } else { "显示明文" };
-                    if ui.small_button(btn_lbl).clicked() {
+                    if compact_button(ui, btn_lbl).clicked() {
                         if revealed {
                             state.revealed_sensitive_ids.remove(&item.id);
                         } else {
@@ -1217,10 +1274,7 @@ fn render_preview_pane(
                 }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui
-                        .small_button(RichText::new("删除").color(palette.danger))
-                        .clicked()
-                    {
+                    if compact_button(ui, RichText::new("删除").color(palette.danger)).clicked() {
                         actions.push(PopupAction::DeleteItem(item.id));
                     }
                 });
@@ -1303,7 +1357,8 @@ fn render_preview_pane(
                                 let exists = f.exists();
                                 egui::Frame::NONE
                                     .fill(palette.card_bg)
-                                    .corner_radius(CornerRadius::same(7))
+                                    .stroke(Stroke::new(1.0, palette.border_subtle))
+                                    .corner_radius(CornerRadius::same(8))
                                     .inner_margin(egui::Margin::same(8))
                                     .show(ui, |ui| {
                                         ui.set_width(ui.available_width());
@@ -1332,9 +1387,9 @@ fn render_preview_pane(
                                                     RichText::new(status)
                                                         .size(10.5)
                                                         .color(if exists {
-                                                            palette.accent
+                                                            palette.success_text
                                                         } else {
-                                                            palette.danger
+                                                            palette.danger_text
                                                         }),
                                                 );
                                             });
@@ -1342,7 +1397,7 @@ fn render_preview_pane(
                                                 ui.with_layout(
                                                     Layout::right_to_left(Align::Center),
                                                     |ui| {
-                                                        if ui.small_button("定位").clicked() {
+                                                        if compact_button(ui, "定位").clicked() {
                                                             actions.push(PopupAction::RevealFile(
                                                                 PathBuf::from(&f.path),
                                                             ));
@@ -1366,11 +1421,11 @@ fn render_preview_pane(
                     let raw = item.text_content.as_deref().unwrap_or("");
                     let quick_list = available_quick_actions(raw);
                     ui.horizontal_wrapped(|ui| {
-                        if item.is_url && ui.small_button("🌐 打开链接").clicked() {
+                        if item.is_url && compact_button(ui, "🌐 打开链接").clicked() {
                             actions.push(PopupAction::OpenUrl(raw.trim().to_string()));
                         }
                         for qa in quick_list {
-                            if ui.small_button(qa.label()).clicked() {
+                            if compact_button(ui, qa.label()).clicked() {
                                 let res = apply_quick_action(qa, raw);
                                 state.active_transform = Some((item.id, qa, res));
                             }
@@ -1381,9 +1436,9 @@ fn render_preview_pane(
                         && tid == item.id {
                             ui.add_space(4.0);
                             egui::Frame::NONE
-                                .fill(palette.card_bg)
-                                .stroke(Stroke::new(1.0, palette.border_strong))
-                                .corner_radius(CornerRadius::same(7))
+                                .fill(palette.info_bg)
+                                .stroke(Stroke::new(1.0, palette.info_border))
+                                .corner_radius(CornerRadius::same(8))
                                 .inner_margin(egui::Margin::same(8))
                                 .show(ui, |ui| {
                                     ui.set_width(ui.available_width());
@@ -1392,23 +1447,37 @@ fn render_preview_pane(
                                             RichText::new(format!("⚡ {} 结果", qa.label()))
                                                 .size(11.5)
                                                 .strong()
-                                                .color(palette.accent),
+                                                .color(palette.accent_text),
                                         );
                                         ui.with_layout(
                                             Layout::right_to_left(Align::Center),
                                             |ui| {
-                                                if ui.small_button("×").clicked() {
+                                                if dismiss_button(ui).clicked() {
                                                     state.active_transform = None;
                                                 }
                                                 if let Ok(ref txt) = res {
-                                                    if ui.small_button("粘贴结果").clicked() {
+                                                    let paste_btn = egui::Button::new(
+                                                        RichText::new("粘贴结果")
+                                                            .size(11.0)
+                                                            .color(palette.on_accent),
+                                                    )
+                                                    .fill(palette.accent)
+                                                    .stroke(Stroke::NONE)
+                                                    .corner_radius(CornerRadius::same(4));
+                                                    if padded_button(
+                                                        ui,
+                                                        paste_btn,
+                                                        vec2(10.0, 4.5),
+                                                    )
+                                                    .clicked()
+                                                    {
                                                         actions.push(
                                                             PopupAction::PasteTransformedText(
                                                                 txt.clone(),
                                                             ),
                                                         );
                                                     }
-                                                    if ui.small_button("复制结果").clicked() {
+                                                    if compact_button(ui, "复制结果").clicked() {
                                                         actions.push(
                                                             PopupAction::CopyTransformedText(
                                                                 txt.clone(),
@@ -1452,14 +1521,14 @@ fn render_preview_pane(
                         } else {
                             "原始尺寸"
                         };
-                        if ui.small_button(zoom_lbl).clicked() {
+                        if compact_button(ui, zoom_lbl).clicked() {
                             state.image_actual_size = !state.image_actual_size;
                         }
                         if let Some(path) = &item.image_path
-                            && ui.small_button("另存为图片...").clicked() {
+                            && compact_button(ui, "另存为图片...").clicked() {
                                 actions.push(PopupAction::SaveImageAs(path.clone()));
                             }
-                        if ui.small_button("复制并粘贴图片").clicked() {
+                        if compact_button(ui, "复制并粘贴图片").clicked() {
                             actions.push(PopupAction::PasteItem {
                                 id: item.id,
                                 behavior: PasteBehavior::CopyAndPaste,
@@ -1469,7 +1538,7 @@ fn render_preview_pane(
                 }
                 ClipKind::Files => {
                     ui.horizontal(|ui| {
-                        if ui.small_button("复制路径文本").clicked() {
+                        if compact_button(ui, "复制路径文本").clicked() {
                             let paths = item
                                 .files
                                 .iter()
@@ -1479,7 +1548,7 @@ fn render_preview_pane(
                             actions.push(PopupAction::CopyTransformedText(paths));
                         }
                         if let Some(first) = item.files.iter().find(|f| f.exists())
-                            && ui.small_button("在文件管理器中定位").clicked() {
+                            && compact_button(ui, "在文件管理器中定位").clicked() {
                                 actions.push(PopupAction::RevealFile(PathBuf::from(&first.path)));
                             }
                     });
@@ -1504,6 +1573,7 @@ fn render_color_card(
 
     egui::Frame::NONE
         .fill(palette.card_bg)
+        .stroke(Stroke::new(1.0, palette.border_subtle))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(egui::Margin::same(8))
         .show(ui, |ui| {
@@ -1517,7 +1587,7 @@ fn render_color_card(
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&hex_norm).strong().size(13.0));
-                        if ui.small_button("复制 HEX").clicked() {
+                        if compact_button(ui, "复制 HEX").clicked() {
                             actions.push(PopupAction::CopyTransformedText(hex_norm.clone()));
                         }
                     });
@@ -1527,7 +1597,7 @@ fn render_color_card(
                                 .size(11.5)
                                 .color(palette.text_secondary),
                         );
-                        if ui.small_button("复制 RGB").clicked() {
+                        if compact_button(ui, "复制 RGB").clicked() {
                             actions.push(PopupAction::CopyTransformedText(rgb_str));
                         }
                     });
@@ -1556,15 +1626,30 @@ fn render_footer(
             .color(palette.text_muted),
         );
 
+        let footer_btn = |ui: &mut Ui, label: RichText| {
+            padded_button(
+                ui,
+                egui::Button::new(label).corner_radius(CornerRadius::same(6)),
+                vec2(8.0, 4.0),
+            )
+        };
         let ignore_lbl = if settings.ignore_next_event {
             "✓ 忽略下次"
         } else {
             "忽略下次"
         };
-        if ui
-            .small_button(RichText::new(ignore_lbl).size(11.0))
-            .on_hover_text("忽略下一次系统剪贴板复制")
-            .clicked()
+        if footer_btn(
+            ui,
+            RichText::new(ignore_lbl).size(11.0).color(
+                if settings.ignore_next_event {
+                    palette.warning_text
+                } else {
+                    palette.text_secondary
+                },
+            ),
+        )
+        .on_hover_text("忽略下一次系统剪贴板复制")
+        .clicked()
         {
             actions.push(PopupAction::ToggleIgnoreNext);
         }
@@ -1575,36 +1660,99 @@ fn render_footer(
             #[cfg(not(target_os = "macos"))]
             let (quit_s, prefs_s, clear_s) = ("Ctrl+Q", "Ctrl+,", "Ctrl+Alt+⌫");
 
-            if ui
-                .small_button(RichText::new("退出").size(11.5))
+            if footer_btn(ui, RichText::new("退出").size(11.5))
                 .on_hover_text(format!("退出 Earth ({quit_s})"))
                 .clicked()
             {
                 actions.push(PopupAction::Quit);
             }
-            if ui.small_button(RichText::new("关于").size(11.5)).clicked() {
+            if footer_btn(ui, RichText::new("关于").size(11.5)).clicked() {
                 state.show_about_modal = true;
             }
-            if ui
-                .small_button(RichText::new("设置").size(11.5))
+            if footer_btn(ui, RichText::new("设置").size(11.5))
                 .on_hover_text(format!("偏好设置 ({prefs_s})"))
                 .clicked()
             {
                 actions.push(PopupAction::OpenSettings);
             }
-            if ui
-                .small_button(
-                    RichText::new("清除")
-                        .size(11.5)
-                        .color(palette.danger),
-                )
-                .on_hover_text(format!("清除未固定记录 ({clear_s})"))
-                .clicked()
+            if footer_btn(
+                ui,
+                RichText::new("清除")
+                    .size(11.5)
+                    .color(palette.danger),
+            )
+            .on_hover_text(format!("清除未固定记录 ({clear_s})"))
+            .clicked()
             {
                 actions.push(PopupAction::ClearUnpinned);
             }
         });
     });
+}
+
+fn antd_kind_tag_colors(
+    item: &ClipItem,
+    palette: &EarthPalette,
+) -> (Color32, Color32, Color32) {
+    match item.kind {
+        ClipKind::Text => {
+            if item.detected_color.is_some() {
+                if palette.is_dark {
+                    (
+                        Color32::from_rgb(26, 19, 37),
+                        Color32::from_rgb(48, 28, 77),
+                        Color32::from_rgb(146, 84, 222),
+                    )
+                } else {
+                    (
+                        Color32::from_rgb(249, 240, 255),
+                        Color32::from_rgb(211, 173, 247),
+                        Color32::from_rgb(83, 29, 171),
+                    )
+                }
+            } else if item.is_url {
+                if palette.is_dark {
+                    (
+                        Color32::from_rgb(19, 22, 41),
+                        Color32::from_rgb(28, 39, 85),
+                        Color32::from_rgb(89, 126, 247),
+                    )
+                } else {
+                    (
+                        Color32::from_rgb(240, 245, 255),
+                        Color32::from_rgb(173, 198, 255),
+                        Color32::from_rgb(29, 57, 196),
+                    )
+                }
+            } else {
+                (palette.info_bg, palette.info_border, palette.accent_text)
+            }
+        }
+        ClipKind::Image => {
+            if palette.is_dark {
+                (
+                    Color32::from_rgb(17, 33, 35),
+                    Color32::from_rgb(20, 72, 72),
+                    Color32::from_rgb(51, 188, 183),
+                )
+            } else {
+                (
+                    Color32::from_rgb(230, 255, 251),
+                    Color32::from_rgb(135, 232, 222),
+                    Color32::from_rgb(8, 151, 156),
+                )
+            }
+        }
+        ClipKind::Files => (
+            palette.success_bg,
+            palette.success_border,
+            palette.success_text,
+        ),
+    }
+}
+
+fn tint(c: Color32, alpha: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha)
 }
 
 fn render_banner(
@@ -1616,25 +1764,28 @@ fn render_banner(
     actions: &mut Vec<PopupAction>,
 ) -> bool {
     let mut close_clicked = false;
-    let fg = if is_warn {
-        palette.pin_amber
+    let (bg, border) = if is_warn {
+        (palette.warning_bg, palette.warning_border)
     } else {
-        palette.accent
+        (palette.success_bg, palette.success_border)
     };
-    let bg = palette.card_bg;
     egui::Frame::NONE
         .fill(bg)
-        .stroke(Stroke::new(1.0, palette.border_strong))
+        .stroke(Stroke::new(1.0, border))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(egui::Margin::symmetric(8, 5))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(msg).size(11.5).color(fg));
+                ui.label(RichText::new(msg).size(11.5).color(palette.text_primary));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.small_button("×").clicked() {
+                    if dismiss_button(ui).clicked() {
                         close_clicked = true;
                     }
-                    if show_ax_btn && is_warn && cfg!(target_os = "macos") && ui.small_button("打开辅助功能设置").clicked() {
+                    if show_ax_btn
+                        && is_warn
+                        && cfg!(target_os = "macos")
+                        && compact_button(ui, "打开辅助功能设置").clicked()
+                    {
                         actions.push(PopupAction::OpenAccessibilitySettings);
                     }
                 });
@@ -1669,7 +1820,13 @@ fn render_about_overlay(ctx: &egui::Context, state: &mut PopupState, palette: &E
                     .color(palette.text_muted),
                 );
                 ui.add_space(12.0);
-                if ui.button("关闭").clicked() {
+                let close_btn = egui::Button::new(
+                    RichText::new("关闭").color(palette.on_accent),
+                )
+                .fill(palette.accent)
+                .stroke(Stroke::NONE)
+                .corner_radius(CornerRadius::same(6));
+                if ui.add(close_btn).clicked() {
                     state.show_about_modal = false;
                 }
             });

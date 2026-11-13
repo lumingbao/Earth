@@ -498,12 +498,12 @@ impl eframe::App for EarthApp {
                 let outer_rect = panel_rect.shrink(1.0);
                 ui.painter().rect_filled(
                     outer_rect,
-                    CornerRadius::same(14),
+                    CornerRadius::same(12),
                     palette.window_bg,
                 );
                 ui.painter().rect_stroke(
                     outer_rect,
-                    CornerRadius::same(14),
+                    CornerRadius::same(12),
                     Stroke::new(1.0, palette.border),
                     egui::StrokeKind::Inside,
                 );

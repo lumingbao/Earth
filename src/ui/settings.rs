@@ -3,8 +3,10 @@ use crate::model::{
     format_bytes, AppSettings, Collection, MatchHighlight, PinPosition, PopupPosition,
     SearchBoxVisibility, SearchMode, SortOrder, ThemeMode,
 };
-use crate::ui::theme::{parse_hex_color32, EarthPalette};
-use egui::{vec2, Align, Color32, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
+use crate::ui::theme::{
+    compact_button, dismiss_button, padded_button, parse_hex_color32, EarthPalette,
+};
+use egui::{vec2, Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
@@ -67,7 +69,7 @@ impl Default for SettingsState {
             new_ignore_type: String::new(),
             new_ignore_regex: String::new(),
             new_collection_name: String::new(),
-            new_collection_color: "#52525B".to_string(),
+            new_collection_color: "#1677FF".to_string(),
             editing_collection_id: None,
             editing_collection_name: String::new(),
             status_message: None,
@@ -143,8 +145,9 @@ pub fn render_settings_view(
     // Header bar (draggable)
     ui.horizontal(|ui| {
         let back_btn = egui::Button::new(RichText::new("← 返回剪贴板").size(12.5))
-            .fill(palette.card_bg)
-            .corner_radius(CornerRadius::same(7));
+            .fill(palette.surface_bg)
+            .stroke(Stroke::new(1.0, palette.border))
+            .corner_radius(CornerRadius::same(6));
         if ui.add(back_btn).clicked() {
             actions.push(SettingsAction::CloseSettings);
         }
@@ -175,7 +178,7 @@ pub fn render_settings_view(
 
     ui.add_space(6.0);
 
-    // 5-Tab Bar matching Maccy's screenshot layout
+    // Ant Design Line Tabs (no background fill, primary text + 2px bottom ink bar)
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 5.0;
         let tabs = [
@@ -188,27 +191,31 @@ pub fn render_settings_view(
         let tab_width = (ui.available_width() - 20.0) / tabs.len() as f32;
         for (tab, label) in tabs {
             let active = state.active_tab == tab;
-            let fill = if active {
-                palette.accent_soft
-            } else {
-                palette.card_bg
-            };
-            let stroke = if active {
-                Stroke::new(1.0, palette.border_strong)
-            } else {
-                Stroke::new(1.0, palette.border)
-            };
+            let (rect, resp) = ui.allocate_exact_size(vec2(tab_width, 30.0), egui::Sense::click());
             let text_color = if active {
                 palette.accent
+            } else if resp.hovered() {
+                palette.accent_hover
             } else {
                 palette.text_secondary
             };
-            let btn = egui::Button::new(RichText::new(label).size(12.0).color(text_color))
-                .min_size(vec2(tab_width, 30.0))
-                .fill(fill)
-                .stroke(stroke)
-                .corner_radius(CornerRadius::same(8));
-            if ui.add(btn).clicked() {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                label,
+                egui::FontId::proportional(12.2),
+                text_color,
+            );
+            if active {
+                ui.painter().line_segment(
+                    [
+                        egui::pos2(rect.left() + 6.0, rect.bottom() - 1.5),
+                        egui::pos2(rect.right() - 6.0, rect.bottom() - 1.5),
+                    ],
+                    Stroke::new(2.0, palette.accent),
+                );
+            }
+            if resp.clicked() {
                 state.active_tab = tab;
                 state.recording = None;
             }
@@ -221,21 +228,21 @@ pub fn render_settings_view(
 
     let mut clear_status = false;
     if let Some((msg, is_err)) = state.status_message.clone() {
-        let bg = if is_err {
-            Color32::from_rgba_unmultiplied(239, 68, 68, 30)
+        let (bg, border) = if is_err {
+            (palette.danger_bg, palette.danger_border)
         } else {
-            palette.accent_soft
+            (palette.success_bg, palette.success_border)
         };
-        let fg = if is_err { palette.danger } else { palette.accent };
         egui::Frame::NONE
             .fill(bg)
-            .corner_radius(CornerRadius::same(7))
+            .stroke(Stroke::new(1.0, border))
+            .corner_radius(CornerRadius::same(8))
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(msg).size(12.0).color(fg));
+                    ui.label(RichText::new(msg).size(12.0).color(palette.text_primary));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.small_button("×").clicked() {
+                        if dismiss_button(ui).clicked() {
                             clear_status = true;
                         }
                     });
@@ -300,15 +307,21 @@ fn render_general_tab(
                     ui.label(
                         RichText::new("✓ macOS 辅助功能权限已就绪（支持自动粘贴）")
                             .size(12.0)
-                            .color(palette.accent),
+                            .color(palette.success_text),
                     );
                 } else {
                     ui.label(
                         RichText::new("⚠ 未授予辅助功能权限，自动粘贴需要授权")
                             .size(12.0)
-                            .color(palette.pin_amber),
+                            .color(palette.warning_text),
                     );
-                    if ui.button("前往系统设置授权").clicked() {
+                    let auth_btn = egui::Button::new(
+                        RichText::new("前往系统设置授权").color(palette.on_accent),
+                    )
+                    .fill(palette.accent)
+                    .stroke(Stroke::NONE)
+                    .corner_radius(CornerRadius::same(6));
+                    if ui.add(auth_btn).clicked() {
                         actions.push(SettingsAction::OpenAccessibilitySettings);
                     }
                 }
@@ -456,21 +469,28 @@ fn shortcut_row(
             palette.surface_bg
         };
         let stroke = if is_recording {
-            Stroke::new(1.0, palette.border_strong)
+            Stroke::new(1.0, palette.accent)
         } else {
             Stroke::new(1.0, palette.border)
         };
-        let btn = egui::Button::new(RichText::new(text).size(12.0))
-            .min_size(vec2(170.0, 26.0))
-            .fill(fill)
-            .stroke(stroke)
-            .corner_radius(CornerRadius::same(13));
+        let btn = egui::Button::new(
+            RichText::new(text)
+                .size(12.0)
+                .color(if is_recording {
+                    palette.accent_text
+                } else {
+                    palette.text_primary
+                }),
+        )
+        .min_size(vec2(170.0, 26.0))
+        .fill(fill)
+        .stroke(stroke)
+        .corner_radius(CornerRadius::same(6));
         if ui.add(btn).clicked() {
             state.recording = Some(target);
         }
 
-        if ui
-            .small_button("重置")
+        if compact_button(ui, "重置")
             .on_hover_text("恢复默认快捷键")
             .clicked()
         {
@@ -563,7 +583,9 @@ fn render_storage_tab(
             if ui
                 .add(
                     egui::Button::new(RichText::new("清空全部（含固定）").color(palette.danger))
-                        .fill(palette.card_bg),
+                        .fill(palette.surface_bg)
+                        .stroke(Stroke::new(1.0, palette.danger_border))
+                        .corner_radius(CornerRadius::same(6)),
                 )
                 .clicked()
             {
@@ -826,7 +848,11 @@ fn render_editable_string_list(
             .hint_text(placeholder)
             .desired_width(ui.available_width() - 68.0);
         let resp = ui.add(edit);
-        let add_clicked = ui.button("添加").clicked()
+        let add_btn = egui::Button::new(RichText::new("添加").color(palette.on_accent))
+            .fill(palette.accent)
+            .stroke(Stroke::NONE)
+            .corner_radius(CornerRadius::same(6));
+        let add_clicked = ui.add(add_btn).clicked()
             || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
         if add_clicked {
             let trimmed = draft.trim().to_string();
@@ -841,8 +867,8 @@ fn render_editable_string_list(
     ui.add_space(4.0);
     let mut remove_idx: Option<usize> = None;
     egui::Frame::NONE
-        .fill(palette.surface_bg)
-        .stroke(Stroke::new(1.0, palette.border))
+        .fill(palette.card_bg)
+        .stroke(Stroke::new(1.0, palette.border_subtle))
         .corner_radius(CornerRadius::same(8))
         .inner_margin(egui::Margin::same(6))
         .show(ui, |ui| {
@@ -857,7 +883,7 @@ fn render_editable_string_list(
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(entry).size(12.0));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if ui.small_button("移除").clicked() {
+                            if compact_button(ui, "移除").clicked() {
                                 remove_idx = Some(idx);
                             }
                         });
@@ -927,7 +953,7 @@ fn render_advanced_tab(
                     .hint_text("新分组名称（如：SQL 模板）")
                     .desired_width(132.0),
             );
-            for hex in ["#27272A", "#52525B", "#71717A", "#A1A1AA", "#78716C"] {
+            for hex in ["#1677FF", "#13C2C2", "#52C41A", "#722ED1", "#FA8C16"] {
                 let c = parse_hex_color32(hex).unwrap_or(palette.accent);
                 let selected = state.new_collection_color == hex;
                 let (rect, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::click());
@@ -940,7 +966,13 @@ fn render_advanced_tab(
                     state.new_collection_color = hex.to_string();
                 }
             }
-            if ui.button("创建分组").clicked() && !state.new_collection_name.trim().is_empty() {
+            let create_btn = egui::Button::new(
+                RichText::new("创建分组").color(palette.on_accent),
+            )
+            .fill(palette.accent)
+            .stroke(Stroke::NONE)
+            .corner_radius(CornerRadius::same(6));
+            if ui.add(create_btn).clicked() && !state.new_collection_name.trim().is_empty() {
                 actions.push(SettingsAction::CreateCollection {
                     name: state.new_collection_name.trim().to_string(),
                     color_hex: state.new_collection_color.clone(),
@@ -963,11 +995,17 @@ fn render_advanced_tab(
                     let submitted =
                         edit_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.small_button("取消").clicked() {
+                        if compact_button(ui, "取消").clicked() {
                             state.editing_collection_id = None;
                             state.editing_collection_name.clear();
                         }
-                        if ui.small_button("保存").clicked() || submitted {
+                        let save_btn = egui::Button::new(
+                            RichText::new("保存").size(12.0).color(palette.on_accent),
+                        )
+                        .fill(palette.accent)
+                        .stroke(Stroke::NONE)
+                        .corner_radius(CornerRadius::same(4));
+                        if padded_button(ui, save_btn, vec2(10.0, 4.5)).clicked() || submitted {
                             let trimmed = state.editing_collection_name.trim().to_string();
                             if !trimmed.is_empty() {
                                 actions.push(SettingsAction::RenameCollection {
@@ -982,14 +1020,13 @@ fn render_advanced_tab(
                 } else {
                     ui.label(RichText::new(&col.name).size(13.0));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui
-                            .small_button("删除")
+                        if compact_button(ui, RichText::new("删除").color(palette.danger))
                             .on_hover_text("删除分组（不会删除组内记录本身）")
                             .clicked()
                         {
                             actions.push(SettingsAction::DeleteCollection(col.id));
                         }
-                        if ui.small_button("重命名").clicked() {
+                        if compact_button(ui, "重命名").clicked() {
                             state.editing_collection_id = Some(col.id);
                             state.editing_collection_name = col.name.clone();
                         }
@@ -1004,8 +1041,8 @@ fn section_card(ui: &mut Ui, palette: &EarthPalette, add_contents: impl FnOnce(&
     let card_w = (ui.available_width() - 24.0).max(160.0);
     egui::Frame::NONE
         .fill(palette.surface_bg)
-        .stroke(Stroke::new(1.0, palette.border))
-        .corner_radius(CornerRadius::same(10))
+        .stroke(Stroke::new(1.0, palette.border_subtle))
+        .corner_radius(CornerRadius::same(8))
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_min_width(card_w);

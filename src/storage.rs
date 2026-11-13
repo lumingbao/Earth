@@ -113,11 +113,21 @@ impl Storage {
             let now = Utc::now().timestamp_millis();
             let _ = self.conn.execute(
                 "INSERT OR IGNORE INTO collections (name, color_hex, created_at) VALUES (?1, ?2, ?3)",
-                params!["常用指令", "#52525B", now],
+                params!["常用指令", "#1677FF", now],
             );
             let _ = self.conn.execute(
                 "INSERT OR IGNORE INTO collections (name, color_hex, created_at) VALUES (?1, ?2, ?3)",
-                params!["代码片段", "#71717A", now],
+                params!["代码片段", "#13C2C2", now],
+            );
+        } else {
+            // Upgrade untouched legacy monochrome starter colors to Ant Design tokens
+            let _ = self.conn.execute(
+                "UPDATE collections SET color_hex = '#1677FF' WHERE name = '常用指令' AND color_hex = '#52525B'",
+                [],
+            );
+            let _ = self.conn.execute(
+                "UPDATE collections SET color_hex = '#13C2C2' WHERE name = '代码片段' AND color_hex = '#71717A'",
+                [],
             );
         }
         Ok(())

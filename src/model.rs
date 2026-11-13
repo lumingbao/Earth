@@ -274,9 +274,9 @@ pub enum ThemeMode {
 impl ThemeMode {
     pub fn label(&self) -> &'static str {
         match self {
-            ThemeMode::System => "跟随系统（灰白）",
-            ThemeMode::Dark => "Earth 石墨深灰",
-            ThemeMode::Light => "Earth 灰白",
+            ThemeMode::System => "跟随系统（浅色）",
+            ThemeMode::Dark => "Earth 深色",
+            ThemeMode::Light => "Earth 浅色",
         }
     }
 }

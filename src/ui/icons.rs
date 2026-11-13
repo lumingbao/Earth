@@ -7,29 +7,43 @@ pub fn draw_earth_emblem(ui: &mut Ui, size: f32, palette: &EarthPalette, paused:
         let p = ui.painter();
         let center = rect.center();
         let r = size * 0.36;
-        let fill = if paused {
-            palette.text_muted
+
+        // Ant Design Daybreak Blue -> Cyan radial globe
+        let (c_outer, c_inner) = if paused {
+            (palette.text_muted, palette.text_secondary)
         } else {
-            palette.accent
+            (palette.accent, palette.accent_secondary)
         };
-        p.circle_filled(center, r, fill);
-        p.circle_stroke(center, r, Stroke::new(1.0, palette.accent_secondary));
+        let steps = 10;
+        let highlight = pos2(center.x - r * 0.28, center.y - r * 0.28);
+        for i in 0..steps {
+            let t = i as f32 / (steps - 1) as f32;
+            let rr = r * (1.0 - t * 0.78);
+            let c = lerp_color(c_outer, c_inner, t);
+            let cc = pos2(
+                center.x + (highlight.x - center.x) * t,
+                center.y + (highlight.y - center.y) * t,
+            );
+            p.circle_filled(cc, rr, c);
+        }
 
         // Meridian arc inside globe
         p.line_segment(
             [pos2(center.x, center.y - r * 0.85), pos2(center.x, center.y + r * 0.85)],
-            Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 160)),
+            Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 175)),
         );
         p.line_segment(
             [pos2(center.x - r * 0.85, center.y), pos2(center.x + r * 0.85, center.y)],
-            Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 140)),
+            Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 155)),
         );
 
         // Tilted orbital ring
         let ring_color = if paused {
             palette.text_secondary
+        } else if palette.is_dark {
+            palette.accent_hover
         } else {
-            Color32::from_rgb(228, 228, 231)
+            palette.accent_active
         };
         let pts: Vec<egui::Pos2> = (0..=20)
             .map(|i| {
@@ -42,9 +56,14 @@ pub fn draw_earth_emblem(ui: &mut Ui, size: f32, palette: &EarthPalette, paused:
                 pos2(x, y)
             })
             .collect();
-        p.add(egui::Shape::line(pts, Stroke::new(1.5, ring_color)));
+        p.add(egui::Shape::line(pts, Stroke::new(1.6, ring_color)));
     }
     response
+}
+
+fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgb(l(a.r(), b.r()), l(a.g(), b.g()), l(a.b(), b.b()))
 }
 
 pub fn icon_button(
@@ -59,20 +78,20 @@ pub fn icon_button(
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
         if active {
-            p.rect_filled(rect, CornerRadius::same(7), palette.accent_soft);
+            p.rect_filled(rect, CornerRadius::same(6), palette.accent_soft);
             p.rect_stroke(
                 rect,
-                CornerRadius::same(7),
+                CornerRadius::same(6),
                 Stroke::new(1.0, palette.border_strong),
                 egui::StrokeKind::Inside,
             );
         } else if response.hovered() {
-            p.rect_filled(rect, CornerRadius::same(7), palette.row_hover_bg);
+            p.rect_filled(rect, CornerRadius::same(6), palette.row_hover_bg);
         }
         let color = if active {
             palette.accent
         } else if response.hovered() {
-            palette.text_primary
+            palette.accent_hover
         } else {
             palette.text_secondary
         };
