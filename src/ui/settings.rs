@@ -353,7 +353,7 @@ fn render_general_tab(
         }
         if shortcut_row(
             ui,
-            "置顶记录：",
+            "固定记录：",
             &mut settings.hotkey_pin,
             &default_pin,
             RecordingTarget::Pin,
@@ -502,7 +502,7 @@ fn render_storage_tab(
             actions.push(SettingsAction::SettingsChanged);
         }
         ui.label(
-            RichText::new("仅记录勾选类型的复制内容（已置顶和已加入收藏分组的记录不会被自动淘汰）。")
+            RichText::new("仅记录勾选类型的复制内容（已固定和已加入收藏分组的记录不会被自动淘汰）。")
                 .size(11.5)
                 .color(palette.text_muted),
         );
@@ -556,12 +556,12 @@ fn render_storage_tab(
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("清除未置顶历史").clicked() {
+            if ui.button("清除未固定历史").clicked() {
                 actions.push(SettingsAction::ClearHistory(false));
             }
             if ui
                 .add(
-                    egui::Button::new(RichText::new("清空全部（含置顶）").color(palette.danger))
+                    egui::Button::new(RichText::new("清空全部（含固定）").color(palette.danger))
                         .fill(palette.card_bg),
                 )
                 .clicked()
@@ -620,7 +620,7 @@ fn render_appearance_tab(
         });
 
         ui.horizontal(|ui| {
-            ui.label("置顶到：");
+            ui.label("固定位置：");
             egui::ComboBox::from_id_salt("pin_pos_combo")
                 .selected_text(settings.pin_position.label())
                 .show_ui(ui, |ui| {
@@ -894,7 +894,7 @@ fn render_advanced_tab(
         }
         ui.separator();
         if ui
-            .checkbox(&mut settings.clear_on_exit, "退出 Earth 时清除未置顶历史记录")
+            .checkbox(&mut settings.clear_on_exit, "退出 Earth 时清除未固定历史记录")
             .changed()
         {
             actions.push(SettingsAction::SettingsChanged);

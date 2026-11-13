@@ -160,8 +160,6 @@ pub enum CategoryFilter {
     Text,
     Image,
     Files,
-    Color,
-    Link,
     Pinned,
     Collection(i64),
 }

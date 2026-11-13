@@ -612,9 +612,7 @@ fn render_filter_strip(
                     (CategoryFilter::Text, "文本"),
                     (CategoryFilter::Image, "图片"),
                     (CategoryFilter::Files, "文件"),
-                    (CategoryFilter::Color, "颜色"),
-                    (CategoryFilter::Link, "链接"),
-                    (CategoryFilter::Pinned, "置顶"),
+                    (CategoryFilter::Pinned, "固定"),
                 ];
 
                 for (filter, label) in pills {
@@ -1020,7 +1018,7 @@ fn render_item_row(
             ui.close();
         }
         ui.separator();
-        let pin_label = if item.pinned { "取消置顶" } else { "置顶记录" };
+        let pin_label = if item.pinned { "取消固定" } else { "固定记录" };
         if ui.button(pin_label).clicked() {
             actions.push(PopupAction::TogglePin(item.id));
             ui.close();
@@ -1137,7 +1135,7 @@ fn render_preview_pane(
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                let pin_btn = if item.pinned { "已置顶" } else { "置顶" };
+                let pin_btn = if item.pinned { "已固定" } else { "固定" };
                 if ui.small_button(pin_btn).clicked() {
                     actions.push(PopupAction::TogglePin(item.id));
                 }

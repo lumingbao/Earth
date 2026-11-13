@@ -18,8 +18,6 @@ pub fn matches_filter(item: &ClipItem, filter: CategoryFilter) -> bool {
         CategoryFilter::Text => item.kind == ClipKind::Text,
         CategoryFilter::Image => item.kind == ClipKind::Image,
         CategoryFilter::Files => item.kind == ClipKind::Files,
-        CategoryFilter::Color => item.detected_color.is_some(),
-        CategoryFilter::Link => item.is_url,
         CategoryFilter::Pinned => item.pinned,
         CategoryFilter::Collection(id) => item.collection_id == Some(id),
     }

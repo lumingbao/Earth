@@ -42,7 +42,7 @@ impl EarthTray {
         let pause_item = CheckMenuItem::new("暂停记录新复制", true, paused, None);
         let ignore_next_item = CheckMenuItem::new("仅忽略下一次复制", true, ignore_next, None);
         let settings_item = MenuItem::new("偏好设置...", true, None);
-        let clear_item = MenuItem::new("清除未置顶记录", true, None);
+        let clear_item = MenuItem::new("清除未固定记录", true, None);
         let quit_item = MenuItem::new("退出 Earth", true, None);
 
         let id_show = show_item.id().clone();

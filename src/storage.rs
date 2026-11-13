@@ -412,7 +412,7 @@ impl Storage {
                 "UPDATE items SET pinned = ?1 WHERE id = ?2",
                 params![pinned as i64, id],
             )
-            .map_err(|e| format!("更新置顶状态失败: {e}"))?;
+            .map_err(|e| format!("更新固定状态失败: {e}"))?;
         Ok(())
     }
 
