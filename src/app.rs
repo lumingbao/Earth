@@ -212,6 +212,7 @@ impl EarthApp {
         self.view_mode = mode;
         if mode == ViewMode::Launcher {
             self.popup_state.request_search_focus = true;
+            self.popup_state.ime_composing = false;
             self.popup_state.selection_changed_at = Instant::now();
             self.popup_state.preview_manually_toggled = false;
             self.popup_state.preview_open = false;

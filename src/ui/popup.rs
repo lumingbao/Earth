@@ -57,6 +57,7 @@ pub struct PopupState {
     pub show_about_modal: bool,
     pub status_banner: Option<(String, bool)>,
     pub dismissed_accessibility_banner: bool,
+    pub ime_composing: bool,
     pub scroll_to_selection: bool,
 }
 
@@ -76,6 +77,7 @@ impl Default for PopupState {
             show_about_modal: false,
             status_banner: None,
             dismissed_accessibility_banner: false,
+            ime_composing: false,
             scroll_to_selection: false,
         }
     }
@@ -122,28 +124,26 @@ pub fn render_popup_view(
         state.selected_id = None;
     }
 
-    // Handle keyboard shortcuts BEFORE TextEdit steals Up/Down/Enter/Esc
-    handle_popup_keyboard(ctx, settings, results, state, &mut actions);
-
-    // Capture typed characters when search box is set to WhileTyping
-    if settings.search_box_visibility == SearchBoxVisibility::WhileTyping
-        && state.search_query.is_empty()
-    {
-        let typed: String = ctx.input(|i| {
-            i.events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Text(t) if !i.modifiers.command && !i.modifiers.ctrl && !i.modifiers.alt => {
-                        Some(t.clone())
+    // Track macOS / Windows IME composition state so Chinese Pinyin works from the 1st keystroke
+    ctx.input(|i| {
+        for ev in &i.events {
+            if let egui::Event::Ime(ime) = ev {
+                match ime {
+                    egui::ImeEvent::Preedit { text, .. } => {
+                        state.ime_composing = !text.is_empty();
                     }
-                    _ => None,
-                })
-                .collect()
-        });
-        if !typed.is_empty() {
-            state.search_query.push_str(&typed);
-            state.request_search_focus = true;
+                    egui::ImeEvent::Commit(_) => {
+                        state.ime_composing = false;
+                    }
+                    _ => {}
+                }
+            }
         }
+    });
+
+    // Handle keyboard shortcuts BEFORE TextEdit steals Up/Down/Enter/Esc (unless IME is composing)
+    if !state.ime_composing {
+        handle_popup_keyboard(ctx, settings, results, state, &mut actions);
     }
 
     // Top Header Bar
@@ -456,37 +456,64 @@ fn render_header(
         }
 
         let show_search = settings.search_box_visibility == SearchBoxVisibility::Always
-            || !state.search_query.is_empty();
+            || !state.search_query.is_empty()
+            || state.ime_composing;
 
         let right_controls_width = 136.0;
         let search_outer_w = (ui.available_width() - right_controls_width).max(90.0);
         let search_inner_w = (search_outer_w - 16.0).max(74.0);
 
-        if show_search {
-            egui::Frame::NONE
-                .fill(palette.surface_bg)
-                .stroke(Stroke::new(1.0, palette.border))
-                .corner_radius(CornerRadius::same(9))
-                .inner_margin(egui::Margin::symmetric(8, 5))
-                .show(ui, |ui| {
-                    ui.set_min_width(search_inner_w);
-                    ui.set_max_width(search_inner_w);
-                    ui.horizontal(|ui| {
-                        let (icon_rect, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
+        let frame_fill = if show_search {
+            palette.surface_bg
+        } else {
+            Color32::TRANSPARENT
+        };
+        let frame_stroke = if show_search {
+            Stroke::new(1.0, palette.border)
+        } else {
+            Stroke::NONE
+        };
+        let hint = if show_search {
+            "搜索记录..."
+        } else {
+            "直接打字即可搜索..."
+        };
+
+        egui::Frame::NONE
+            .fill(frame_fill)
+            .stroke(frame_stroke)
+            .corner_radius(CornerRadius::same(9))
+            .inner_margin(egui::Margin::symmetric(8, 5))
+            .show(ui, |ui| {
+                ui.set_min_width(search_inner_w);
+                ui.set_max_width(search_inner_w);
+                ui.horizontal(|ui| {
+                    if show_search {
+                        let (icon_rect, _) =
+                            ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
                         draw_search_glyph(ui.painter(), icon_rect, palette.text_muted);
+                    }
 
-                        let edit_w = (ui.available_width() - 62.0).max(40.0);
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(&mut state.search_query)
-                                .hint_text("搜索记录...")
-                                .frame(egui::Frame::NONE)
-                                .desired_width(edit_w),
-                        );
-                        if state.request_search_focus {
-                            resp.request_focus();
-                            state.request_search_focus = false;
-                        }
+                    let reserve_right = if show_search { 62.0 } else { 4.0 };
+                    let edit_w = (ui.available_width() - reserve_right).max(40.0);
+                    let mut output = egui::TextEdit::singleline(&mut state.search_query)
+                        .id_salt("earth_search_input")
+                        .hint_text(hint)
+                        .frame(egui::Frame::NONE)
+                        .desired_width(edit_w)
+                        .show(ui);
+                    if state.request_search_focus {
+                        output.response.request_focus();
+                        let end = egui::text::CCursor::new(state.search_query.chars().count());
+                        output
+                            .state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::one(end)));
+                        output.state.store(ui.ctx(), output.response.id);
+                        state.request_search_focus = false;
+                    }
 
+                    if show_search {
                         if !state.search_query.is_empty() && ui.small_button("×").clicked() {
                             state.search_query.clear();
                             state.request_search_focus = true;
@@ -513,21 +540,9 @@ fn render_header(
                             };
                             actions.push(PopupAction::SettingsChanged);
                         }
-                    });
+                    }
                 });
-        } else {
-            let drag = ui.allocate_response(vec2(search_outer_w, 28.0), Sense::drag());
-            if drag.drag_started() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-            }
-            ui.painter().text(
-                pos2(drag.rect.left() + 6.0, drag.rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                "直接打字即可搜索...",
-                FontId::proportional(12.0),
-                palette.text_muted,
-            );
-        }
+            });
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if icon_button(ui, 28.0, false, "偏好设置 (⌘,)", palette, draw_gear_glyph).clicked() {
