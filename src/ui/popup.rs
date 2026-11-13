@@ -205,7 +205,7 @@ pub fn render_popup_view(
     }
 
     // Main Split Area: Left History List + Optional Right Quick-Peek Workbench
-    let footer_reserved = if settings.show_footer_menu { 34.0 } else { 4.0 };
+    let footer_reserved = if settings.show_footer_menu { 44.0 } else { 0.0 };
     let body_height = (ui.available_height() - footer_reserved).max(160.0);
     let total_width = ui.available_width();
     let split_gap = 8.0;
@@ -264,7 +264,6 @@ pub fn render_popup_view(
     }
 
     if settings.show_footer_menu {
-        ui.add_space(4.0);
         render_footer(ui, settings, state, palette, storage_bytes, total_items, &mut actions);
     }
 

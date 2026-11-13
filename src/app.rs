@@ -484,7 +484,7 @@ impl eframe::App for EarthApp {
                         .max_rect(content_rect)
                         .layout(egui::Layout::top_down(egui::Align::Min)),
                     |ui| {
-                        ui.set_clip_rect(content_rect);
+                        ui.set_clip_rect(outer_rect.shrink(2.0));
                         ui.set_min_size(content_rect.size());
                         ui.set_max_size(content_rect.size());
 
