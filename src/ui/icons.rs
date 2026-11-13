@@ -89,15 +89,30 @@ pub fn draw_split_pane_glyph(p: &egui::Painter, r: Rect, color: Color32) {
 
 pub fn draw_gear_glyph(p: &egui::Painter, r: Rect, color: Color32) {
     let c = r.center();
-    let rad = r.width().min(r.height()) * 0.36;
-    p.circle_stroke(c, rad, Stroke::new(1.5, color));
-    p.circle_filled(c, rad * 0.34, color);
-    for i in 0..6 {
-        let a = i as f32 * std::f32::consts::FRAC_PI_3;
-        let p1 = pos2(c.x + a.cos() * rad * 0.9, c.y + a.sin() * rad * 0.9);
-        let p2 = pos2(c.x + a.cos() * rad * 1.45, c.y + a.sin() * rad * 1.45);
-        p.line_segment([p1, p2], Stroke::new(1.6, color));
+    let half = r.width().min(r.height()) * 0.52;
+    let r_outer = half * 0.98;
+    let r_valley = half * 0.72;
+    let teeth = 8usize;
+    let step = std::f32::consts::TAU / teeth as f32;
+
+    let mut pts = Vec::with_capacity(teeth * 5);
+    for i in 0..teeth {
+        let base = i as f32 * step;
+        let offsets = [
+            (-0.24, r_valley),
+            (-0.14, r_outer),
+            (0.14, r_outer),
+            (0.24, r_valley),
+            (0.50, r_valley),
+        ];
+        for (frac, rad) in offsets {
+            let a = base + frac * step;
+            pts.push(pos2(c.x + a.cos() * rad, c.y + a.sin() * rad));
+        }
     }
+
+    p.add(egui::Shape::closed_line(pts, Stroke::new(1.3, color)));
+    p.circle_stroke(c, half * 0.34, Stroke::new(1.35, color));
 }
 
 pub fn draw_pause_glyph(p: &egui::Painter, r: Rect, color: Color32) {
