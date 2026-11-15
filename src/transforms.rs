@@ -282,17 +282,23 @@ pub fn convert_timestamp_smart(input: &str) -> Result<String, String> {
 
 pub fn available_quick_actions(input: &str) -> Vec<QuickActionKind> {
     let trimmed = input.trim();
-    let mut actions = Vec::new();
-    if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+    let mut actions = Vec::with_capacity(6);
+    if trimmed.len() <= 131_072
+        && ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+            || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+        && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
+    {
         actions.push(QuickActionKind::JsonPretty);
         actions.push(QuickActionKind::JsonMinify);
     }
-    if convert_timestamp_smart(trimmed).is_ok() {
+    if trimmed.len() <= 64 && convert_timestamp_smart(trimmed).is_ok() {
         actions.push(QuickActionKind::TimestampConvert);
     }
     actions.push(QuickActionKind::Base64Encode);
     if trimmed.len() >= 4
+        && trimmed.len() <= 65_536
         && trimmed.len().is_multiple_of(4)
+        && !trimmed.bytes().any(|b| b.is_ascii_whitespace())
         && general_purpose::STANDARD.decode(trimmed.as_bytes()).is_ok()
     {
         actions.push(QuickActionKind::Base64Decode);

@@ -46,6 +46,15 @@ pub enum PopupAction {
     Quit,
 }
 
+pub struct CachedPreviewItem {
+    pub item_id: i64,
+    pub last_copied_at: i64,
+    pub formatted_ts: String,
+    pub display_text: String,
+    pub quick_actions: Vec<QuickActionKind>,
+    pub file_exists: Vec<bool>,
+}
+
 pub struct PopupState {
     pub search_query: String,
     pub filter: CategoryFilter,
@@ -57,6 +66,7 @@ pub struct PopupState {
     pub revealed_sensitive_ids: HashSet<i64>,
     pub image_actual_size: bool,
     pub active_transform: Option<(i64, QuickActionKind, Result<String, String>)>,
+    pub preview_cache: Option<CachedPreviewItem>,
     pub show_about_modal: bool,
     pub status_banner: Option<(String, bool)>,
     pub dismissed_accessibility_banner: bool,
@@ -77,12 +87,55 @@ impl Default for PopupState {
             revealed_sensitive_ids: HashSet::new(),
             image_actual_size: false,
             active_transform: None,
+            preview_cache: None,
             show_about_modal: false,
             status_banner: None,
             dismissed_accessibility_banner: false,
             ime_composing: false,
             scroll_to_selection: false,
         }
+    }
+}
+
+impl PopupState {
+    pub fn ensure_preview_cache(&mut self, item: &ClipItem) -> &CachedPreviewItem {
+        const MAX_PREVIEW_TEXT_CHARS: usize = 4000;
+        let needs_rebuild = self
+            .preview_cache
+            .as_ref()
+            .map(|c| c.item_id != item.id || c.last_copied_at != item.last_copied_at)
+            .unwrap_or(true);
+        if needs_rebuild {
+            let formatted_ts = format_epoch_millis(item.last_copied_at);
+            let (display_text, quick_actions) = if item.kind == ClipKind::Text {
+                let raw = item.text_content.as_deref().unwrap_or("");
+                let display = match raw.char_indices().nth(MAX_PREVIEW_TEXT_CHARS) {
+                    Some((byte_idx, _)) => format!(
+                        "{}\n\n…（内容较长，速览仅展示前 {} 个字符；复制与粘贴仍保留完整内容）",
+                        &raw[..byte_idx],
+                        MAX_PREVIEW_TEXT_CHARS
+                    ),
+                    None => raw.to_string(),
+                };
+                (display, available_quick_actions(raw))
+            } else {
+                (String::new(), Vec::new())
+            };
+            let file_exists = if item.kind == ClipKind::Files {
+                item.files.iter().map(|f| f.exists()).collect()
+            } else {
+                Vec::new()
+            };
+            self.preview_cache = Some(CachedPreviewItem {
+                item_id: item.id,
+                last_copied_at: item.last_copied_at,
+                formatted_ts,
+                display_text,
+                quick_actions,
+                file_exists,
+            });
+        }
+        self.preview_cache.as_ref().unwrap()
     }
 }
 
@@ -215,7 +268,13 @@ pub fn render_popup_view(
     let split_gap = 8.0;
 
     let (body_rect, _) = ui.allocate_exact_size(vec2(total_width, body_height), Sense::hover());
-    let (left_rect, right_rect) = if state.preview_open {
+    // Wait until the OS viewport has expanded before splitting into two columns so we never
+    // layout/wrap both panes at cramped intermediate widths (240px + 150px) inside the 424px frame.
+    let split_ready = state.preview_open && body_rect.width() >= 560.0;
+    if state.preview_open && !split_ready {
+        ctx.request_repaint();
+    }
+    let (left_rect, right_rect) = if split_ready {
         let lw = (body_rect.width() * 0.45).clamp(240.0, 320.0);
         let l = egui::Rect::from_min_max(
             body_rect.min,
@@ -241,6 +300,13 @@ pub fn render_popup_view(
             render_items_list(ui, settings, results, collections, state, palette, &mut actions);
         },
     );
+
+    if state.preview_open
+        && let Some(sid) = state.selected_id
+        && let Some(sel) = results.iter().find(|r| r.item.id == sid)
+    {
+        state.ensure_preview_cache(&sel.item);
+    }
 
     if let Some(r_rect) = right_rect {
         ui.scope_builder(
@@ -1067,7 +1133,11 @@ fn render_item_row(
         egui::StrokeKind::Inside,
     );
 
-    if resp.clicked() {
+    let primary_pressed =
+        resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed());
+
+    if resp.double_clicked() {
+        // Double click: copy / paste using the default behavior (modifiers still respected)
         state.selected_id = Some(item.id);
         state.selection_changed_at = Instant::now();
         let mods = ui.ctx().input(|i| i.modifiers);
@@ -1076,6 +1146,18 @@ fn render_item_row(
             id: item.id,
             behavior,
         });
+    } else if primary_pressed || resp.clicked() {
+        // Single click: select the record and expand the quick-peek workbench immediately on press
+        if state.selected_id != Some(item.id) {
+            state.selected_id = Some(item.id);
+            state.selection_changed_at = Instant::now();
+            state.image_actual_size = false;
+        }
+        if !state.preview_open {
+            state.preview_open = true;
+            state.preview_manually_toggled = true;
+            ui.ctx().request_repaint();
+        }
     }
 
     resp.context_menu(|ui| {
@@ -1188,7 +1270,12 @@ fn render_preview_pane(
                 ClipKind::Image => "图像",
                 ClipKind::Files => "文件",
             };
-            let ts_str = format_epoch_millis(item.last_copied_at);
+            state.ensure_preview_cache(item);
+            let ts_str = state
+                .preview_cache
+                .as_ref()
+                .map(|c| c.formatted_ts.as_str())
+                .unwrap_or("");
 
             ui.horizontal(|ui| {
                 let (tag_bg, tag_border, tag_fg) = antd_kind_tag_colors(item, palette);
@@ -1309,7 +1396,7 @@ fn render_preview_pane(
             };
             let body_h = (ui.available_height() - actions_area_h).max(110.0);
 
-            ScrollArea::both()
+            ScrollArea::vertical()
                 .id_salt(("preview_body", item.id))
                 .max_height(body_h)
                 .auto_shrink([false, false])
@@ -1334,18 +1421,28 @@ fn render_preview_pane(
                                     .color(palette.text_secondary),
                                 );
                             } else {
-                                let mut display = raw.to_string();
+                                let display = state
+                                    .preview_cache
+                                    .as_ref()
+                                    .map(|c| c.display_text.as_str())
+                                    .unwrap_or(raw);
                                 ui.add(
-                                    egui::TextEdit::multiline(&mut display)
-                                        .font(FontId::monospace(12.2))
-                                        .desired_width(f32::INFINITY)
-                                        .frame(egui::Frame::NONE)
-                                        .interactive(false),
+                                    egui::Label::new(
+                                        RichText::new(display)
+                                            .font(FontId::monospace(12.2))
+                                            .color(palette.text_primary),
+                                    )
+                                    .wrap(),
                                 );
                             }
                         }
                         ClipKind::Image => {
-                            if let Some(path) = item.image_path.as_deref() {
+                            let preview_path = if state.image_actual_size {
+                                item.image_path.as_deref().or(item.thumb_path.as_deref())
+                            } else {
+                                item.thumb_path.as_deref().or(item.image_path.as_deref())
+                            };
+                            if let Some(path) = preview_path {
                                 let uri = path_to_file_uri(path);
                                 let max_w = ui.available_width().max(120.0);
                                 let max_h = (body_h - 32.0).max(100.0);
@@ -1362,8 +1459,12 @@ fn render_preview_pane(
                             }
                         }
                         ClipKind::Files => {
-                            for f in &item.files {
-                                let exists = f.exists();
+                            for (idx, f) in item.files.iter().enumerate() {
+                                let exists = state
+                                    .preview_cache
+                                    .as_ref()
+                                    .and_then(|c| c.file_exists.get(idx).copied())
+                                    .unwrap_or_else(|| f.exists());
                                 egui::Frame::NONE
                                     .fill(palette.card_bg)
                                     .stroke(Stroke::new(1.0, palette.border_subtle))
@@ -1428,7 +1529,11 @@ fn render_preview_pane(
             match item.kind {
                 ClipKind::Text => {
                     let raw = item.text_content.as_deref().unwrap_or("");
-                    let quick_list = available_quick_actions(raw);
+                    let quick_list = state
+                        .preview_cache
+                        .as_ref()
+                        .map(|c| c.quick_actions.clone())
+                        .unwrap_or_default();
                     ui.horizontal_wrapped(|ui| {
                         if item.is_url && compact_button(ui, "🌐 打开链接").clicked() {
                             actions.push(PopupAction::OpenUrl(raw.trim().to_string()));
@@ -1441,7 +1546,8 @@ fn render_preview_pane(
                         }
                     });
 
-                    if let Some((tid, qa, res)) = state.active_transform.clone()
+                    let mut clear_transform = false;
+                    if let Some((tid, qa, ref res)) = state.active_transform
                         && tid == item.id {
                             ui.add_space(4.0);
                             egui::Frame::NONE
@@ -1462,9 +1568,9 @@ fn render_preview_pane(
                                             Layout::right_to_left(Align::Center),
                                             |ui| {
                                                 if dismiss_button(ui).clicked() {
-                                                    state.active_transform = None;
+                                                    clear_transform = true;
                                                 }
-                                                if let Ok(ref txt) = res {
+                                                if let Ok(txt) = res {
                                                     let paste_btn = egui::Button::new(
                                                         RichText::new("粘贴结果")
                                                             .size(11.0)
@@ -1498,17 +1604,18 @@ fn render_preview_pane(
                                         );
                                     });
                                     match res {
-                                        Ok(mut out) => {
+                                        Ok(out) => {
                                             ScrollArea::vertical()
                                                 .id_salt("qa_result_scroll")
                                                 .max_height(56.0)
                                                 .show(ui, |ui| {
                                                     ui.add(
-                                                        egui::TextEdit::multiline(&mut out)
-                                                            .font(FontId::monospace(11.5))
-                                                            .desired_width(f32::INFINITY)
-                                                            .frame(egui::Frame::NONE)
-                                                            .interactive(false),
+                                                        egui::Label::new(
+                                                            RichText::new(out)
+                                                                .font(FontId::monospace(11.5))
+                                                                .color(palette.text_primary),
+                                                        )
+                                                        .wrap(),
                                                     );
                                                 });
                                         }
@@ -1522,6 +1629,9 @@ fn render_preview_pane(
                                     }
                                 });
                         }
+                    if clear_transform {
+                        state.active_transform = None;
+                    }
                 }
                 ClipKind::Image => {
                     ui.horizontal(|ui| {
@@ -1556,7 +1666,11 @@ fn render_preview_pane(
                                 .join("\n");
                             actions.push(PopupAction::CopyTransformedText(paths));
                         }
-                        if let Some(first) = item.files.iter().find(|f| f.exists())
+                        let first_valid_idx = state
+                            .preview_cache
+                            .as_ref()
+                            .and_then(|c| c.file_exists.iter().position(|&ok| ok));
+                        if let Some(first) = first_valid_idx.and_then(|i| item.files.get(i))
                             && compact_button(ui, "在文件管理器中定位").clicked() {
                                 actions.push(PopupAction::RevealFile(PathBuf::from(&first.path)));
                             }
@@ -1979,5 +2093,95 @@ mod tests {
             min_r.right() <= 411.5 && max_shape_right <= 411.5,
             "popup content exceeded right edge: min_r={min_r:?} max_shape_right={max_shape_right}"
         );
+    }
+
+    #[test]
+    fn workbench_preview_caches_and_renders_large_item_without_lag() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        let mut settings = AppSettings::default();
+        let collections = Vec::new();
+        let large_text = "{\"key\":\"value\",\"list\":[1,2,3]}\n".repeat(4000);
+        let results = vec![SearchResultItem {
+            item: ClipItem {
+                id: 1,
+                content_hash: "h1".into(),
+                kind: ClipKind::Text,
+                text_content: Some(large_text),
+                html_content: None,
+                rtf_content: None,
+                image_path: None,
+                thumb_path: None,
+                image_width: None,
+                image_height: None,
+                files: Vec::new(),
+                byte_size: 120_000,
+                source_app: Some("Safari".into()),
+                source_bundle_id: None,
+                pinned: false,
+                collection_id: None,
+                first_copied_at: 1_700_000_000_000,
+                last_copied_at: 1_700_000_000_000,
+                copy_count: 1,
+                sensitive_label: None,
+                detected_color: None,
+                is_url: false,
+            },
+            score: 100,
+            matched_indices: HashSet::new(),
+        }];
+
+        let mut state = PopupState {
+            selected_id: Some(1),
+            preview_open: true,
+            ..Default::default()
+        };
+
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(760.0, 520.0))),
+            ..Default::default()
+        };
+
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(raw.clone(), |ui| {
+                let ctx = ui.ctx().clone();
+                #[allow(deprecated)]
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show_inside(ui, |ui| {
+                        let content_rect = ui.max_rect().shrink(13.0);
+                        ui.scope_builder(
+                            egui::UiBuilder::new()
+                                .max_rect(content_rect)
+                                .layout(Layout::top_down(Align::Min)),
+                            |ui| {
+                                ui.set_min_size(content_rect.size());
+                                ui.set_max_size(content_rect.size());
+                                let _ = render_popup_view(
+                                    ui,
+                                    &ctx,
+                                    PopupViewData {
+                                        settings: &mut settings,
+                                        results: &results,
+                                        collections: &collections,
+                                        palette: &palette,
+                                        storage_bytes: 120_000,
+                                        total_items: 1,
+                                        has_accessibility: true,
+                                    },
+                                    &mut state,
+                                );
+                            },
+                        );
+                    });
+            });
+            out.textures_delta.clear();
+        }
+
+        let cache = state.preview_cache.as_ref().expect("preview cache populated");
+        assert_eq!(cache.item_id, 1);
+        assert!(cache.display_text.chars().count() < 4200);
     }
 }
