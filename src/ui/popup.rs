@@ -941,6 +941,7 @@ fn render_item_row(
 
     let row_outer_w = ui.available_width();
     let row_inner_w = (row_outer_w - 16.0).max(80.0);
+    let row_inner_h = (row_height - 8.0).max(20.0);
 
     let frame = egui::Frame::NONE
         .fill(row_fill)
@@ -949,14 +950,18 @@ fn render_item_row(
         .inner_margin(egui::Margin::symmetric(8, 4));
 
     let inner = frame.show(ui, |ui| {
-        ui.set_min_width(row_inner_w);
-        ui.set_max_width(row_inner_w);
-        ui.set_min_height(row_height - 8.0);
-        ui.horizontal(|ui| {
+        // Disable text-selection cursor/sensing on row labels so the whole row acts as a clickable item
+        ui.style_mut().interaction.selectable_labels = false;
+        ui.set_min_size(vec2(row_inner_w, row_inner_h));
+        ui.set_max_size(vec2(row_inner_w, row_inner_h));
+        ui.spacing_mut().interact_size.y = row_inner_h;
+        ui.horizontal_centered(|ui| {
             ui.set_max_width(row_inner_w);
-            // Left selection bar
+            // Left selection bar (strictly centered on the row's vertical midline)
             if selected {
-                let (bar, _) = ui.allocate_exact_size(vec2(3.0, row_height - 14.0), Sense::hover());
+                let (slot, _) = ui.allocate_exact_size(vec2(3.5, row_inner_h), Sense::hover());
+                let bar_h = (row_height - 16.0).max(16.0);
+                let bar = egui::Rect::from_center_size(slot.center(), vec2(3.5, bar_h));
                 ui.painter().rect_filled(bar, CornerRadius::same(2), palette.accent);
             }
 
@@ -1019,9 +1024,9 @@ fn render_item_row(
             }
 
             let text_w = (ui.available_width() - right_reserved).max(40.0);
-            ui.allocate_ui(vec2(text_w, row_height - 10.0), |ui| {
-                ui.set_min_width(text_w);
-                ui.set_max_width(text_w);
+            ui.allocate_ui(vec2(text_w, row_inner_h), |ui| {
+                ui.set_min_size(vec2(text_w, row_inner_h));
+                ui.set_max_size(vec2(text_w, row_inner_h));
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.set_max_width(text_w);
                     match item.kind {
@@ -1138,10 +1143,17 @@ fn render_item_row(
         });
     });
 
-    let resp = inner.response.interact(Sense::click());
+    let resp = inner
+        .response
+        .interact(Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    let pointer_in_row = resp.hovered() || ui.rect_contains_pointer(resp.rect);
+    if pointer_in_row {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
     let border_stroke = if selected {
         Stroke::new(1.2, palette.accent)
-    } else if resp.hovered() && state.selected_id != Some(item.id) {
+    } else if pointer_in_row && state.selected_id != Some(item.id) {
         Stroke::new(1.0, palette.border_strong)
     } else {
         Stroke::new(1.0, palette.border_subtle)
@@ -1154,7 +1166,8 @@ fn render_item_row(
     );
 
     let primary_pressed =
-        resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed());
+        (resp.is_pointer_button_down_on() || pointer_in_row)
+            && ui.input(|i| i.pointer.primary_pressed());
 
     if resp.double_clicked() {
         // Double click: copy / paste using the default behavior (modifiers still respected)
@@ -2313,6 +2326,112 @@ mod tests {
             "mode pill not right aligned: sb.right()={} mp.right()={}",
             sb.right(),
             mp.right()
+        );
+    }
+
+    #[test]
+    fn selected_row_bar_vertically_centered_and_hover_uses_pointing_hand() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        let settings = AppSettings::default();
+        let collections = Vec::new();
+        let res = SearchResultItem {
+            item: ClipItem {
+                id: 1,
+                content_hash: "h1".into(),
+                kind: ClipKind::Text,
+                text_content: Some("物化生缺，语文，数学，政治不缺".into()),
+                html_content: None,
+                rtf_content: None,
+                image_path: None,
+                thumb_path: None,
+                image_width: None,
+                image_height: None,
+                files: Vec::new(),
+                byte_size: 48,
+                source_app: Some("微信".into()),
+                source_bundle_id: None,
+                pinned: false,
+                collection_id: None,
+                first_copied_at: 0,
+                last_copied_at: 0,
+                copy_count: 1,
+                sensitive_label: None,
+                detected_color: None,
+                is_url: false,
+            },
+            score: 100,
+            matched_indices: HashSet::new(),
+        };
+        let mut state = PopupState {
+            selected_id: Some(1),
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+
+        // Hover directly over the text label area of the row
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(424.0, 520.0))),
+            events: vec![egui::Event::PointerMoved(egui::pos2(120.0, 26.0))],
+            ..Default::default()
+        };
+
+        let mut row_rect = egui::Rect::NOTHING;
+        let mut out = ctx.run_ui(raw, |ui| {
+            #[allow(deprecated)]
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show_inside(ui, |ui| {
+                    let content_rect = egui::Rect::from_min_size(egui::pos2(13.0, 10.0), vec2(398.0, 40.0));
+                    ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(content_rect)
+                            .layout(Layout::top_down(Align::Min)),
+                        |ui| {
+                            ui.set_min_size(content_rect.size());
+                            ui.set_max_size(content_rect.size());
+                            let resp = render_item_row(
+                                ui,
+                                &res,
+                                Some(1),
+                                true,
+                                &settings,
+                                &collections,
+                                &mut state,
+                                &palette,
+                                &mut actions,
+                            );
+                            row_rect = resp.rect;
+                        },
+                    );
+                });
+        });
+        out.textures_delta.clear();
+
+        let mut bar_rect = None;
+        for cs in &out.shapes {
+            if let egui::epaint::Shape::Rect(r) = &cs.shape
+                && (r.rect.width() - 3.5).abs() < 0.2
+                && r.rect.height() >= 15.0
+            {
+                bar_rect = Some(r.rect);
+            }
+        }
+
+        let br = bar_rect.expect("selection bar found");
+        assert!(
+            (row_rect.center().y - br.center().y).abs() < 0.5,
+            "selection bar not vertically centered: row_cy={} bar_cy={}",
+            row_rect.center().y,
+            br.center().y
+        );
+        assert_eq!(
+            out.platform_output.cursor_icon,
+            egui::CursorIcon::PointingHand,
+            "expected PointingHand cursor on row hover, got {:?}",
+            out.platform_output.cursor_icon
         );
     }
 }
