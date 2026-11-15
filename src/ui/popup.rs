@@ -1,7 +1,7 @@
 use crate::hotkey::{format_shortcut_display, matches_egui_shortcut};
 use crate::model::{
     format_bytes, truncate_chars, AppSettings, CategoryFilter, ClipItem, ClipKind, Collection,
-    PasteBehavior, SearchBoxVisibility, SearchMode,
+    CopyTriggerMode, PasteBehavior, SearchBoxVisibility, SearchMode,
 };
 use crate::search::SearchResultItem;
 use crate::transforms::{
@@ -957,9 +957,9 @@ fn render_item_row(
         ui.spacing_mut().interact_size.y = row_inner_h;
         ui.horizontal_centered(|ui| {
             ui.set_max_width(row_inner_w);
-            // Left selection bar (strictly centered on the row's vertical midline)
+            // Left selection bar slot (always allocated so text X-alignment and widget IDs stay stable)
+            let (slot, _) = ui.allocate_exact_size(vec2(3.5, row_inner_h), Sense::hover());
             if selected {
-                let (slot, _) = ui.allocate_exact_size(vec2(3.5, row_inner_h), Sense::hover());
                 let bar_h = (row_height - 16.0).max(16.0);
                 let bar = egui::Rect::from_center_size(slot.center(), vec2(3.5, bar_h));
                 ui.painter().rect_filled(bar, CornerRadius::same(2), palette.accent);
@@ -1169,27 +1169,71 @@ fn render_item_row(
         (resp.is_pointer_button_down_on() || pointer_in_row)
             && ui.input(|i| i.pointer.primary_pressed());
 
-    if resp.double_clicked() {
-        // Double click: copy / paste using the default behavior (modifiers still respected)
-        state.selected_id = Some(item.id);
-        state.selection_changed_at = Instant::now();
-        let mods = ui.ctx().input(|i| i.modifiers);
-        let behavior = behavior_from_modifiers(mods);
-        actions.push(PopupAction::PasteItem {
-            id: item.id,
-            behavior,
-        });
-    } else if primary_pressed || resp.clicked() {
-        // Single click: select the record and expand the quick-peek workbench immediately on press
-        if state.selected_id != Some(item.id) {
-            state.selected_id = Some(item.id);
-            state.selection_changed_at = Instant::now();
-            state.image_actual_size = false;
+    match settings.copy_trigger_mode {
+        CopyTriggerMode::DoubleClick => {
+            if resp.double_clicked() {
+                // Double click: copy / paste using the default behavior (modifiers still respected)
+                state.selected_id = Some(item.id);
+                state.selection_changed_at = Instant::now();
+                let mods = ui.ctx().input(|i| i.modifiers);
+                let behavior = behavior_from_modifiers(mods);
+                actions.push(PopupAction::PasteItem {
+                    id: item.id,
+                    behavior,
+                });
+            } else if primary_pressed || resp.clicked() {
+                // Single click: select the record and expand the quick-peek workbench immediately on press
+                if state.selected_id != Some(item.id) {
+                    state.selected_id = Some(item.id);
+                    state.selection_changed_at = Instant::now();
+                    state.image_actual_size = false;
+                }
+                if !state.preview_open {
+                    state.preview_open = true;
+                    state.preview_manually_toggled = true;
+                    ui.ctx().request_repaint();
+                }
+            }
         }
-        if !state.preview_open {
-            state.preview_open = true;
-            state.preview_manually_toggled = true;
-            ui.ctx().request_repaint();
+        CopyTriggerMode::SingleClick => {
+            if !state.preview_open {
+                // Workbench is closed: single click directly copies/pastes without opening workbench
+                if resp.clicked() {
+                    state.selected_id = Some(item.id);
+                    state.selection_changed_at = Instant::now();
+                    let mods = ui.ctx().input(|i| i.modifiers);
+                    let behavior = behavior_from_modifiers(mods);
+                    actions.push(PopupAction::PasteItem {
+                        id: item.id,
+                        behavior,
+                    });
+                }
+            } else if resp.double_clicked() {
+                // Workbench is open: double click always copies/pastes
+                state.selected_id = Some(item.id);
+                state.selection_changed_at = Instant::now();
+                let mods = ui.ctx().input(|i| i.modifiers);
+                let behavior = behavior_from_modifiers(mods);
+                actions.push(PopupAction::PasteItem {
+                    id: item.id,
+                    behavior,
+                });
+            } else if resp.clicked() {
+                // Workbench is open: clicking another item switches the workbench preview;
+                // clicking the already-selected item copies/pastes it.
+                if state.selected_id != Some(item.id) {
+                    state.selected_id = Some(item.id);
+                    state.selection_changed_at = Instant::now();
+                    state.image_actual_size = false;
+                } else {
+                    let mods = ui.ctx().input(|i| i.modifiers);
+                    let behavior = behavior_from_modifiers(mods);
+                    actions.push(PopupAction::PasteItem {
+                        id: item.id,
+                        behavior,
+                    });
+                }
+            }
         }
     }
 
@@ -2433,5 +2477,164 @@ mod tests {
             "expected PointingHand cursor on row hover, got {:?}",
             out.platform_output.cursor_icon
         );
+    }
+
+    #[test]
+    fn single_click_vs_double_click_copy_mode_avoids_workbench_conflict() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        let mut settings = AppSettings {
+            copy_trigger_mode: CopyTriggerMode::SingleClick,
+            ..Default::default()
+        };
+        let collections = Vec::new();
+        let res = SearchResultItem {
+            item: ClipItem {
+                id: 2,
+                content_hash: "h2".into(),
+                kind: ClipKind::Text,
+                text_content: Some("single click test".into()),
+                html_content: None,
+                rtf_content: None,
+                image_path: None,
+                thumb_path: None,
+                image_width: None,
+                image_height: None,
+                files: Vec::new(),
+                byte_size: 17,
+                source_app: None,
+                source_bundle_id: None,
+                pinned: false,
+                collection_id: None,
+                first_copied_at: 0,
+                last_copied_at: 0,
+                copy_count: 1,
+                sensitive_label: None,
+                detected_color: None,
+                is_url: false,
+            },
+            score: 100,
+            matched_indices: HashSet::new(),
+        };
+
+        let mut sim_time = 10.0f64;
+        let mut run_click = |ctx: &egui::Context,
+                             settings: &AppSettings,
+                             state: &mut PopupState,
+                             actions: &mut Vec<PopupAction>| {
+            sim_time += 1.0;
+            let pos = egui::pos2(100.0, 24.0);
+            for (dt, events) in [
+                (0.0, vec![egui::Event::PointerMoved(pos)]),
+                (
+                    0.02,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Modifiers::NONE,
+                    }],
+                ),
+                (
+                    0.04,
+                    vec![egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Modifiers::NONE,
+                    }],
+                ),
+            ] {
+                let raw = egui::RawInput {
+                    time: Some(sim_time + dt),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(424.0, 520.0))),
+                    events,
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(raw, |ui| {
+                    #[allow(deprecated)]
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show_inside(ui, |ui| {
+                            let content_rect =
+                                egui::Rect::from_min_size(egui::pos2(13.0, 10.0), vec2(398.0, 40.0));
+                            ui.scope_builder(
+                                egui::UiBuilder::new()
+                                    .max_rect(content_rect)
+                                    .layout(Layout::top_down(Align::Min)),
+                                |ui| {
+                                    ui.set_min_size(content_rect.size());
+                                    ui.set_max_size(content_rect.size());
+                                    let selected = state.selected_id == Some(res.item.id);
+                                    let _ = render_item_row(
+                                        ui,
+                                        &res,
+                                        Some(1),
+                                        selected,
+                                        settings,
+                                        &collections,
+                                        state,
+                                        &palette,
+                                        actions,
+                                    );
+                                },
+                            );
+                        });
+                });
+                out.textures_delta.clear();
+            }
+        };
+
+        // 1. SingleClick mode with workbench closed: click copies immediately without opening workbench
+        let mut state = PopupState {
+            selected_id: Some(1),
+            preview_open: false,
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+        run_click(&ctx, &settings, &mut state, &mut actions);
+        assert!(!state.preview_open, "SingleClick must not auto-open workbench");
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, PopupAction::PasteItem { id: 2, .. })),
+            "SingleClick with closed workbench should emit PasteItem"
+        );
+
+        // 2. SingleClick mode with workbench already open:
+        //    First click on unselected item switches preview; second click copies.
+        let mut state = PopupState {
+            selected_id: Some(1),
+            preview_open: true,
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+        run_click(&ctx, &settings, &mut state, &mut actions);
+        assert_eq!(state.selected_id, Some(2));
+        assert!(
+            actions.is_empty(),
+            "clicking unselected row while workbench open should switch preview first"
+        );
+        run_click(&ctx, &settings, &mut state, &mut actions);
+        assert!(
+            actions
+                .iter()
+                .any(|a| matches!(a, PopupAction::PasteItem { id: 2, .. })),
+            "clicking already-selected row while workbench open should emit PasteItem"
+        );
+
+        // 3. DoubleClick mode: single click opens workbench without copying
+        settings.copy_trigger_mode = CopyTriggerMode::DoubleClick;
+        let mut state = PopupState {
+            selected_id: Some(1),
+            preview_open: false,
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+        run_click(&ctx, &settings, &mut state, &mut actions);
+        assert!(state.preview_open, "DoubleClick mode single click should open workbench");
+        assert!(actions.is_empty(), "DoubleClick mode single click should not copy");
     }
 }

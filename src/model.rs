@@ -181,6 +181,22 @@ impl SearchMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum CopyTriggerMode {
+    #[default]
+    DoubleClick,
+    SingleClick,
+}
+
+impl CopyTriggerMode {
+    pub fn label(&self) -> &'static str {
+        match self {
+            CopyTriggerMode::DoubleClick => "双击复制（单击展开工作台）",
+            CopyTriggerMode::SingleClick => "单击直接复制",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SortOrder {
     LastCopiedAt,
@@ -304,6 +320,7 @@ pub struct AppSettings {
     pub hotkey_delete: String,
     pub hotkey_preview: String,
     pub search_mode: SearchMode,
+    pub copy_trigger_mode: CopyTriggerMode,
     pub auto_paste: bool,
     pub plain_text_paste: bool,
 
@@ -360,6 +377,7 @@ impl Default for AppSettings {
             hotkey_delete,
             hotkey_preview: "Ctrl+Space".to_string(),
             search_mode: SearchMode::Fuzzy,
+            copy_trigger_mode: CopyTriggerMode::DoubleClick,
             auto_paste: true,
             plain_text_paste: false,
 

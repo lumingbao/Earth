@@ -1,7 +1,7 @@
 use crate::hotkey::{capture_egui_shortcut, format_shortcut_display};
 use crate::model::{
-    format_bytes, AppSettings, Collection, MatchHighlight, PinPosition, PopupPosition,
-    SearchBoxVisibility, SearchMode, SortOrder, ThemeMode,
+    format_bytes, AppSettings, Collection, CopyTriggerMode, MatchHighlight, PinPosition,
+    PopupPosition, SearchBoxVisibility, SearchMode, SortOrder, ThemeMode,
 };
 use crate::ui::theme::{
     card_shadow, compact_button, dismiss_button, padded_button, parse_hex_color32, EarthPalette,
@@ -414,6 +414,33 @@ fn render_general_tab(
 
     ui.add_space(8.0);
     section_card(ui, palette, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("鼠标点击记录：");
+            egui::ComboBox::from_id_salt("copy_trigger_mode_combo")
+                .selected_text(settings.copy_trigger_mode.label())
+                .show_ui(ui, |ui| {
+                    for mode in [CopyTriggerMode::DoubleClick, CopyTriggerMode::SingleClick] {
+                        if ui
+                            .selectable_value(&mut settings.copy_trigger_mode, mode, mode.label())
+                            .changed()
+                        {
+                            actions.push(SettingsAction::SettingsChanged);
+                        }
+                    }
+                });
+        });
+
+        let click_hint = match settings.copy_trigger_mode {
+            CopyTriggerMode::DoubleClick => {
+                "单击记录展开右侧工作台预览，双击记录执行复制/粘贴。"
+            }
+            CopyTriggerMode::SingleClick => {
+                "工作台收起时单击记录直接复制/粘贴（不自动展开工作台）；可通过顶部栏分栏按钮、快捷键或右键菜单打开工作台，工作台展开时单击其他记录可切换预览，再次点击当前选中记录即可复制。"
+            }
+        };
+        ui.label(RichText::new(click_hint).size(11.0).color(palette.text_muted));
+
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label("搜索匹配模式：");
             egui::ComboBox::from_id_salt("search_mode_combo")
