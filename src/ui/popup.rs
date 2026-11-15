@@ -531,7 +531,6 @@ fn render_header(
 
         let right_controls_width = 136.0;
         let search_outer_w = (ui.available_width() - right_controls_width).max(90.0);
-        let search_inner_w = (search_outer_w - 24.0).max(74.0);
 
         let frame_fill = if show_search {
             palette.card_bg
@@ -544,29 +543,48 @@ fn render_header(
             "直接打字即可搜索..."
         };
 
+        let search_row_h = 22.0;
+        let search_margin = egui::Margin {
+            left: 10,
+            right: 4,
+            top: 4,
+            bottom: 4,
+        };
+        let search_inner_w = (search_outer_w - search_margin.sum().x).max(74.0);
+
         let mut search_focused = false;
         let mut search_hovered = false;
         let search_frame = egui::Frame::NONE
             .fill(frame_fill)
             .stroke(Stroke::NONE)
             .corner_radius(CornerRadius::same(255))
-            .inner_margin(egui::Margin::symmetric(12, 5))
+            .inner_margin(search_margin)
             .show(ui, |ui| {
-                ui.set_min_width(search_inner_w);
-                ui.set_max_width(search_inner_w);
-                ui.horizontal(|ui| {
+                ui.set_min_size(vec2(search_inner_w, search_row_h));
+                ui.set_max_size(vec2(search_inner_w, search_row_h));
+                ui.spacing_mut().interact_size.y = search_row_h;
+                ui.horizontal_centered(|ui| {
                     if show_search {
                         let (icon_rect, _) =
                             ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
                         draw_search_glyph(ui.painter(), icon_rect, palette.text_secondary);
                     }
 
-                    let reserve_right = if show_search { 76.0 } else { 4.0 };
+                    let reserve_right = if !show_search {
+                        4.0
+                    } else if state.search_query.is_empty() {
+                        46.0
+                    } else {
+                        74.0
+                    };
                     let edit_w = (ui.available_width() - reserve_right).max(40.0);
                     let mut output = egui::TextEdit::singleline(&mut state.search_query)
                         .id_salt("earth_search_input")
                         .hint_text(hint)
                         .frame(egui::Frame::NONE)
+                        .margin(egui::Margin::symmetric(2, 0))
+                        .align(egui::Align2::LEFT_CENTER)
+                        .min_size(vec2(edit_w, search_row_h))
                         .desired_width(edit_w)
                         .show(ui);
                     search_focused = output.response.has_focus();
@@ -584,31 +602,33 @@ fn render_header(
                     }
 
                     if show_search {
-                        if !state.search_query.is_empty() && dismiss_button(ui).clicked() {
-                            state.search_query.clear();
-                            state.request_search_focus = true;
-                        }
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            // GOSTOCK pill badge for search mode indicator (right-aligned)
+                            let mode_btn = egui::Button::new(
+                                RichText::new(settings.search_mode.label())
+                                    .size(10.5)
+                                    .color(palette.accent_text),
+                            )
+                            .fill(palette.surface_bg)
+                            .stroke(Stroke::new(1.0, palette.border_strong))
+                            .corner_radius(CornerRadius::same(255));
+                            if padded_button(ui, mode_btn, vec2(8.0, 2.0))
+                                .on_hover_text("点击切换搜索模式：精确 / 模糊 / 正则")
+                                .clicked()
+                            {
+                                settings.search_mode = match settings.search_mode {
+                                    SearchMode::Exact => SearchMode::Fuzzy,
+                                    SearchMode::Fuzzy => SearchMode::Regex,
+                                    SearchMode::Regex => SearchMode::Exact,
+                                };
+                                actions.push(PopupAction::SettingsChanged);
+                            }
 
-                        // GOSTOCK pill badge for search mode indicator
-                        let mode_btn = egui::Button::new(
-                            RichText::new(settings.search_mode.label())
-                                .size(10.5)
-                                .color(palette.accent_text),
-                        )
-                        .fill(palette.surface_bg)
-                        .stroke(Stroke::new(1.0, palette.border_strong))
-                        .corner_radius(CornerRadius::same(255));
-                        if padded_button(ui, mode_btn, vec2(8.0, 2.5))
-                            .on_hover_text("点击切换搜索模式：精确 / 模糊 / 正则")
-                            .clicked()
-                        {
-                            settings.search_mode = match settings.search_mode {
-                                SearchMode::Exact => SearchMode::Fuzzy,
-                                SearchMode::Fuzzy => SearchMode::Regex,
-                                SearchMode::Regex => SearchMode::Exact,
-                            };
-                            actions.push(PopupAction::SettingsChanged);
-                        }
+                            if !state.search_query.is_empty() && dismiss_button(ui).clicked() {
+                                state.search_query.clear();
+                                state.request_search_focus = true;
+                            }
+                        });
                     }
                 });
             });
@@ -2183,5 +2203,116 @@ mod tests {
         let cache = state.preview_cache.as_ref().expect("preview cache populated");
         assert_eq!(cache.item_id, 1);
         assert!(cache.display_text.chars().count() < 4200);
+    }
+
+    #[test]
+    fn search_bar_hint_vertically_centered_and_mode_right_aligned() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        if std::path::Path::new("/Library/Fonts/Arial Unicode.ttf").exists()
+            && let Ok(bytes) = std::fs::read("/Library/Fonts/Arial Unicode.ttf")
+        {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "arial_unicode".into(),
+                egui::FontData::from_owned(bytes).into(),
+            );
+            if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                vec.insert(0, "arial_unicode".into());
+            }
+            ctx.set_fonts(fonts);
+        }
+
+        let mut settings = AppSettings::default();
+        let mut state = PopupState::default();
+        let mut actions = Vec::new();
+
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(424.0, 520.0))),
+            ..Default::default()
+        };
+
+        let mut out = ctx.run_ui(raw.clone(), |ui| {
+            let ctx = ui.ctx().clone();
+            #[allow(deprecated)]
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show_inside(ui, |ui| {
+                    let content_rect = ui.max_rect().shrink(13.0);
+                    ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(content_rect)
+                            .layout(Layout::top_down(Align::Min)),
+                        |ui| {
+                            ui.set_min_size(content_rect.size());
+                            ui.set_max_size(content_rect.size());
+                            render_header(ui, &ctx, &mut settings, &mut state, &palette, &mut actions);
+                        },
+                    );
+                });
+        });
+        out.textures_delta.clear();
+
+        let mut search_box_rect = None;
+        let mut hint_text_rect = None;
+        let mut mode_text_rect = None;
+        let mut mode_pill_rect = None;
+
+        for cs in &out.shapes {
+            match &cs.shape {
+                egui::epaint::Shape::Rect(r) => {
+                    if r.rect.width() > 180.0 && r.rect.height() >= 20.0 && r.rect.height() <= 40.0 {
+                        search_box_rect = Some(r.rect);
+                    } else if r.rect.width() >= 28.0
+                        && r.rect.width() <= 60.0
+                        && r.rect.height() >= 14.0
+                        && r.rect.height() <= 26.0
+                        && r.rect.left() > 150.0
+                        && r.rect.left() < 280.0
+                    {
+                        mode_pill_rect = Some(r.rect);
+                    }
+                }
+                egui::epaint::Shape::Text(t) => {
+                    let txt = t.galley.text();
+                    let rect = egui::Rect::from_min_size(t.pos, t.galley.size());
+                    if txt.contains("搜索记录") {
+                        hint_text_rect = Some(rect);
+                    } else if txt.contains("模糊") {
+                        mode_text_rect = Some(rect);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let sb = search_box_rect.expect("search_box_rect found");
+        let ht = hint_text_rect.expect("hint_text_rect found");
+        let mt = mode_text_rect.expect("mode_text_rect found");
+        let mp = mode_pill_rect.expect("mode_pill_rect found");
+
+        println!(
+            "search_box={sb:?} center_y={:.2} | hint={ht:?} center_y={:.2} | mode_pill={mp:?} center_y={:.2} right_gap={:.2} | mode_text={mt:?} center_y={:.2}",
+            sb.center().y,
+            ht.center().y,
+            mp.center().y,
+            sb.right() - mp.right(),
+            mt.center().y
+        );
+
+        assert!(
+            (sb.center().y - ht.center().y).abs() <= 1.5,
+            "hint text not vertically centered: box_cy={} hint_cy={}",
+            sb.center().y,
+            ht.center().y
+        );
+        assert!(
+            sb.right() - mp.right() <= 14.0,
+            "mode pill not right aligned: sb.right()={} mp.right()={}",
+            sb.right(),
+            mp.right()
+        );
     }
 }
