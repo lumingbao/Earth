@@ -6,8 +6,9 @@ use crate::model::{
 use crate::ui::theme::{
     card_shadow, compact_button, dismiss_button, padded_button, parse_hex_color32, EarthPalette,
 };
-use crate::updater::ReleaseInfo;
+use crate::updater::{ReleaseInfo, UpdateDownloadState};
 use egui::{vec2, Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsTab {
@@ -39,6 +40,8 @@ pub enum SettingsAction {
     OpenHotkeyChanged(String),
     ToggleAutostart(bool),
     CheckUpdatesNow,
+    StartUpdateDownload(ReleaseInfo),
+    ApplyUpdateAndRestart(PathBuf),
     OpenUrl(String),
     ClearHistory(bool),
     ExportJson,
@@ -62,6 +65,7 @@ pub struct SettingsState {
     pub status_message: Option<(String, bool)>,
     pub checking_updates: bool,
     pub available_update: Option<ReleaseInfo>,
+    pub update_download: UpdateDownloadState,
 }
 
 impl Default for SettingsState {
@@ -80,6 +84,7 @@ impl Default for SettingsState {
             status_message: None,
             checking_updates: false,
             available_update: None,
+            update_download: UpdateDownloadState::Idle,
         }
     }
 }
@@ -330,17 +335,57 @@ fn render_general_tab(
                         state.checking_updates = true;
                         actions.push(SettingsAction::CheckUpdatesNow);
                     }
-                    if let Some(rel) = &state.available_update {
-                        let dl_btn = egui::Button::new(
-                            RichText::new(format!("前往下载 v{}", rel.version))
-                                .size(11.0)
-                                .color(palette.on_accent),
-                        )
-                        .fill(palette.accent)
-                        .stroke(Stroke::NONE)
-                        .corner_radius(CornerRadius::same(255));
-                        if padded_button(ui, dl_btn, vec2(10.0, 3.5)).clicked() {
+                    if let Some(rel) = state.available_update.clone() {
+                        if compact_button(ui, "前往下载").clicked() {
                             actions.push(SettingsAction::OpenUrl(rel.html_url.clone()));
+                        }
+                        match state.update_download.clone() {
+                            UpdateDownloadState::ReadyToInstall {
+                                version,
+                                staged_path,
+                            } if version == rel.version => {
+                                let restart_btn = egui::Button::new(
+                                    RichText::new(format!("重启完成更新 (v{})", rel.version))
+                                        .size(11.0)
+                                        .color(palette.on_accent),
+                                )
+                                .fill(palette.accent)
+                                .stroke(Stroke::NONE)
+                                .corner_radius(CornerRadius::same(255));
+                                if padded_button(ui, restart_btn, vec2(10.0, 3.5)).clicked() {
+                                    actions.push(SettingsAction::ApplyUpdateAndRestart(staged_path));
+                                }
+                            }
+                            UpdateDownloadState::Downloading { version }
+                                if version == rel.version =>
+                            {
+                                ui.label(
+                                    RichText::new(format!("正在下载 v{}…", rel.version))
+                                        .size(11.5)
+                                        .color(palette.accent_text),
+                                );
+                            }
+                            UpdateDownloadState::Failed { version, .. }
+                                if version == rel.version && rel.download_url.is_some() =>
+                            {
+                                if compact_button(ui, "重试自动更新").clicked() {
+                                    actions.push(SettingsAction::StartUpdateDownload(rel));
+                                }
+                            }
+                            _ if rel.download_url.is_some() => {
+                                let auto_btn = egui::Button::new(
+                                    RichText::new(format!("自动更新 v{}", rel.version))
+                                        .size(11.0)
+                                        .color(palette.on_accent),
+                                )
+                                .fill(palette.accent)
+                                .stroke(Stroke::NONE)
+                                .corner_radius(CornerRadius::same(255));
+                                if padded_button(ui, auto_btn, vec2(10.0, 3.5)).clicked() {
+                                    actions.push(SettingsAction::StartUpdateDownload(rel));
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }

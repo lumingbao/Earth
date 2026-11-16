@@ -13,7 +13,10 @@ use crate::tray::{EarthTray, TrayAction};
 use crate::ui::popup::{render_popup_view, PopupAction, PopupState, PopupViewData};
 use crate::ui::settings::{render_settings_view, SettingsAction, SettingsState, SettingsViewData};
 use crate::ui::theme::EarthPalette;
-use crate::updater::{spawn_update_check, UpdateCheckEvent, UpdateCheckOutcome};
+use crate::updater::{
+    apply_staged_update_and_restart, spawn_update_check, spawn_update_download, UpdateCheckOutcome,
+    UpdateDownloadState, UpdaterEvent,
+};
 use egui::{pos2, vec2, CornerRadius, Stroke, ViewportCommand};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
@@ -33,8 +36,8 @@ pub struct EarthApp {
     suppression: Arc<Mutex<ClipboardSuppression>>,
     clipboard_rx: Receiver<ClipboardEvent>,
     _clipboard_handle: Option<ClipboardHandle>,
-    update_tx: Sender<UpdateCheckEvent>,
-    update_rx: Receiver<UpdateCheckEvent>,
+    update_tx: Sender<UpdaterEvent>,
+    update_rx: Receiver<UpdaterEvent>,
     hotkey_ctrl: Option<GlobalHotkeyController>,
     tray: Option<EarthTray>,
 
@@ -397,31 +400,90 @@ impl EarthApp {
         }
 
         while let Ok(ev) = self.update_rx.try_recv() {
-            self.settings_state.checking_updates = false;
-            match ev.outcome {
-                UpdateCheckOutcome::UpdateAvailable(info) => {
-                    if ev.manual {
+            match ev {
+                UpdaterEvent::CheckFinished { manual, outcome } => {
+                    self.settings_state.checking_updates = false;
+                    match outcome {
+                        UpdateCheckOutcome::UpdateAvailable(info) => {
+                            let already_staged_or_downloading = matches!(
+                                &self.popup_state.update_download,
+                                UpdateDownloadState::Downloading { version }
+                                | UpdateDownloadState::ReadyToInstall { version, .. }
+                                if version == &info.version
+                            );
+
+                            if info.download_url.is_some() && !already_staged_or_downloading {
+                                let dl_state = UpdateDownloadState::Downloading {
+                                    version: info.version.clone(),
+                                };
+                                self.popup_state.update_download = dl_state.clone();
+                                self.settings_state.update_download = dl_state;
+                                spawn_update_download(
+                                    info.clone(),
+                                    self.update_tx.clone(),
+                                    ctx.clone(),
+                                );
+                                if manual {
+                                    self.settings_state.status_message = Some((
+                                        format!(
+                                            "🎉 发现新版本 v{}，正在后台自动下载更新…",
+                                            info.version
+                                        ),
+                                        false,
+                                    ));
+                                }
+                            } else if manual {
+                                self.settings_state.status_message = Some((
+                                    format!(
+                                        "🎉 发现新版本 v{}，可点击「重启完成更新」或「前往下载」",
+                                        info.version
+                                    ),
+                                    false,
+                                ));
+                            }
+                            self.popup_state.available_update = Some(info.clone());
+                            self.settings_state.available_update = Some(info);
+                        }
+                        UpdateCheckOutcome::UpToDate(ver) => {
+                            self.popup_state.available_update = None;
+                            self.settings_state.available_update = None;
+                            self.popup_state.update_download = UpdateDownloadState::Idle;
+                            self.settings_state.update_download = UpdateDownloadState::Idle;
+                            if manual {
+                                self.settings_state.status_message =
+                                    Some((format!("✓ 当前已是最新版本 (v{ver})"), false));
+                            }
+                        }
+                        UpdateCheckOutcome::Error(err) => {
+                            if manual {
+                                self.settings_state.status_message = Some((err, true));
+                            }
+                        }
+                    }
+                }
+                UpdaterEvent::DownloadFinished { version, result } => match result {
+                    Ok(staged_path) => {
+                        let ready = UpdateDownloadState::ReadyToInstall {
+                            version: version.clone(),
+                            staged_path,
+                        };
+                        self.popup_state.update_download = ready.clone();
+                        self.settings_state.update_download = ready;
                         self.settings_state.status_message = Some((
-                            format!("🎉 发现新版本 v{}，可点击「前往下载」获取更新", info.version),
+                            format!("✓ 新版本 v{version} 已下载就绪，点击「重启完成更新」即可生效"),
                             false,
                         ));
                     }
-                    self.popup_state.available_update = Some(info.clone());
-                    self.settings_state.available_update = Some(info);
-                }
-                UpdateCheckOutcome::UpToDate(ver) => {
-                    self.popup_state.available_update = None;
-                    self.settings_state.available_update = None;
-                    if ev.manual {
-                        self.settings_state.status_message =
-                            Some((format!("✓ 当前已是最新版本 (v{ver})"), false));
-                    }
-                }
-                UpdateCheckOutcome::Error(err) => {
-                    if ev.manual {
+                    Err(err) => {
+                        let failed = UpdateDownloadState::Failed {
+                            version: version.clone(),
+                            error: err.clone(),
+                        };
+                        self.popup_state.update_download = failed.clone();
+                        self.settings_state.update_download = failed;
                         self.settings_state.status_message = Some((err, true));
                     }
-                }
+                },
             }
         }
 
@@ -668,6 +730,29 @@ impl eframe::App for EarthApp {
                                         PopupAction::OpenUrl(url) => {
                                             platform::open_url(&url);
                                         }
+                                        PopupAction::StartUpdateDownload(info) => {
+                                            let dl = UpdateDownloadState::Downloading {
+                                                version: info.version.clone(),
+                                            };
+                                            self.popup_state.update_download = dl.clone();
+                                            self.settings_state.update_download = dl;
+                                            spawn_update_download(
+                                                info,
+                                                self.update_tx.clone(),
+                                                ctx.clone(),
+                                            );
+                                        }
+                                        PopupAction::ApplyUpdateAndRestart(staged_path) => {
+                                            match apply_staged_update_and_restart(&staged_path) {
+                                                Ok(()) => {
+                                                    self.request_quit(&ctx);
+                                                }
+                                                Err(err) => {
+                                                    self.popup_state.status_banner =
+                                                        Some((err, true));
+                                                }
+                                            }
+                                        }
                                         PopupAction::OpenAccessibilitySettings => {
                                             platform::open_accessibility_settings();
                                         }
@@ -833,6 +918,29 @@ impl eframe::App for EarthApp {
                                                 self.update_tx.clone(),
                                                 ctx.clone(),
                                             );
+                                        }
+                                        SettingsAction::StartUpdateDownload(info) => {
+                                            let dl = UpdateDownloadState::Downloading {
+                                                version: info.version.clone(),
+                                            };
+                                            self.popup_state.update_download = dl.clone();
+                                            self.settings_state.update_download = dl;
+                                            spawn_update_download(
+                                                info,
+                                                self.update_tx.clone(),
+                                                ctx.clone(),
+                                            );
+                                        }
+                                        SettingsAction::ApplyUpdateAndRestart(staged_path) => {
+                                            match apply_staged_update_and_restart(&staged_path) {
+                                                Ok(()) => {
+                                                    self.request_quit(&ctx);
+                                                }
+                                                Err(err) => {
+                                                    self.settings_state.status_message =
+                                                        Some((err, true));
+                                                }
+                                            }
                                         }
                                         SettingsAction::OpenUrl(url) => {
                                             platform::open_url(&url);

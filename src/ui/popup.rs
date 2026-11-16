@@ -17,7 +17,7 @@ use crate::ui::theme::{
     build_highlighted_layout_job, card_shadow, compact_button, dismiss_button, padded_button,
     parse_hex_color32, EarthPalette,
 };
-use crate::updater::{ReleaseInfo, CURRENT_VERSION};
+use crate::updater::{ReleaseInfo, UpdateDownloadState, CURRENT_VERSION};
 use chrono::{DateTime, Local};
 use egui::{
     pos2, vec2, Align, Color32, CornerRadius, FontId, Key, Layout, Modifiers, RichText, ScrollArea,
@@ -43,6 +43,8 @@ pub enum PopupAction {
     SaveImageAs(String),
     RevealFile(PathBuf),
     OpenUrl(String),
+    StartUpdateDownload(ReleaseInfo),
+    ApplyUpdateAndRestart(PathBuf),
     OpenAccessibilitySettings,
     Quit,
 }
@@ -71,6 +73,7 @@ pub struct PopupState {
     pub show_about_modal: bool,
     pub status_banner: Option<(String, bool)>,
     pub available_update: Option<ReleaseInfo>,
+    pub update_download: UpdateDownloadState,
     pub dismissed_update_version: Option<String>,
     pub dismissed_accessibility_banner: bool,
     pub ime_composing: bool,
@@ -94,6 +97,7 @@ impl Default for PopupState {
             show_about_modal: false,
             status_banner: None,
             available_update: None,
+            update_download: UpdateDownloadState::Idle,
             dismissed_update_version: None,
             dismissed_accessibility_banner: false,
             ime_composing: false,
@@ -268,6 +272,20 @@ pub fn render_popup_view(
         && let Some(rel) = state.available_update.clone()
         && state.dismissed_update_version.as_deref() != Some(rel.version.as_str())
     {
+        let dl_state = state.update_download.clone();
+        let banner_text = match &dl_state {
+            UpdateDownloadState::Downloading { version } if version == &rel.version => {
+                format!("⬇ 正在自动下载新版本 v{}…", rel.version)
+            }
+            UpdateDownloadState::ReadyToInstall { version, .. } if version == &rel.version => {
+                format!("🎉 新版本 v{} 已下载就绪", rel.version)
+            }
+            UpdateDownloadState::Failed { version, .. } if version == &rel.version => {
+                format!("⚠ v{} 自动下载失败，可重试或前往下载", rel.version)
+            }
+            _ => format!("🎉 发现新版本 v{}（当前 v{CURRENT_VERSION}）", rel.version),
+        };
+
         egui::Frame::NONE
             .fill(palette.info_bg)
             .stroke(Stroke::new(1.0, palette.info_border))
@@ -277,17 +295,14 @@ pub fn render_popup_view(
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    let msg_w = (ui.available_width() - 108.0).max(120.0);
+                    let msg_w = (ui.available_width() - 188.0).max(96.0);
                     ui.allocate_ui(vec2(msg_w, 18.0), |ui| {
                         ui.set_max_width(msg_w);
                         ui.add(
                             egui::Label::new(
-                                RichText::new(format!(
-                                    "🎉 发现新版本 v{}（当前 v{CURRENT_VERSION}）",
-                                    rel.version
-                                ))
-                                .size(11.5)
-                                .color(palette.accent_text),
+                                RichText::new(banner_text)
+                                    .size(11.5)
+                                    .color(palette.accent_text),
                             )
                             .truncate(),
                         );
@@ -298,6 +313,47 @@ pub fn render_popup_view(
                         }
                         if compact_button(ui, "前往下载").clicked() {
                             actions.push(PopupAction::OpenUrl(rel.html_url.clone()));
+                        }
+                        match dl_state {
+                            UpdateDownloadState::ReadyToInstall {
+                                version,
+                                staged_path,
+                            } if version == rel.version => {
+                                let restart_btn = egui::Button::new(
+                                    RichText::new("重启完成更新")
+                                        .size(11.0)
+                                        .color(palette.on_accent),
+                                )
+                                .fill(palette.accent)
+                                .stroke(Stroke::NONE)
+                                .corner_radius(CornerRadius::same(255));
+                                if padded_button(ui, restart_btn, vec2(10.0, 3.5)).clicked() {
+                                    actions.push(PopupAction::ApplyUpdateAndRestart(staged_path));
+                                }
+                            }
+                            UpdateDownloadState::Downloading { version }
+                                if version == rel.version => {}
+                            UpdateDownloadState::Failed { version, .. }
+                                if version == rel.version && rel.download_url.is_some() =>
+                            {
+                                if compact_button(ui, "重试下载").clicked() {
+                                    actions.push(PopupAction::StartUpdateDownload(rel.clone()));
+                                }
+                            }
+                            _ if rel.download_url.is_some() => {
+                                let auto_btn = egui::Button::new(
+                                    RichText::new("自动更新")
+                                        .size(11.0)
+                                        .color(palette.on_accent),
+                                )
+                                .fill(palette.accent)
+                                .stroke(Stroke::NONE)
+                                .corner_radius(CornerRadius::same(255));
+                                if padded_button(ui, auto_btn, vec2(10.0, 3.5)).clicked() {
+                                    actions.push(PopupAction::StartUpdateDownload(rel.clone()));
+                                }
+                            }
+                            _ => {}
                         }
                     });
                 });
