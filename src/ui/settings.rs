@@ -6,6 +6,7 @@ use crate::model::{
 use crate::ui::theme::{
     card_shadow, compact_button, dismiss_button, padded_button, parse_hex_color32, EarthPalette,
 };
+use crate::updater::ReleaseInfo;
 use egui::{vec2, Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +38,8 @@ pub enum SettingsAction {
     SettingsChanged,
     OpenHotkeyChanged(String),
     ToggleAutostart(bool),
+    CheckUpdatesNow,
+    OpenUrl(String),
     ClearHistory(bool),
     ExportJson,
     CreateCollection { name: String, color_hex: String },
@@ -57,6 +60,8 @@ pub struct SettingsState {
     pub editing_collection_id: Option<i64>,
     pub editing_collection_name: String,
     pub status_message: Option<(String, bool)>,
+    pub checking_updates: bool,
+    pub available_update: Option<ReleaseInfo>,
 }
 
 impl Default for SettingsState {
@@ -73,6 +78,8 @@ impl Default for SettingsState {
             editing_collection_id: None,
             editing_collection_name: String::new(),
             status_message: None,
+            checking_updates: false,
+            available_update: None,
         }
     }
 }
@@ -304,12 +311,41 @@ fn render_general_tab(
         {
             actions.push(SettingsAction::ToggleAutostart(settings.launch_at_login));
         }
-        if ui
-            .checkbox(&mut settings.check_updates, "启用更新提示检查")
-            .changed()
-        {
-            actions.push(SettingsAction::SettingsChanged);
-        }
+        ui.horizontal(|ui| {
+            if ui
+                .checkbox(&mut settings.check_updates, "启用更新提示检查")
+                .changed()
+            {
+                actions.push(SettingsAction::SettingsChanged);
+            }
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if state.checking_updates {
+                    ui.label(
+                        RichText::new("正在检查 GitHub 最新版本...")
+                            .size(11.5)
+                            .color(palette.text_muted),
+                    );
+                } else {
+                    if compact_button(ui, "检查更新").clicked() {
+                        state.checking_updates = true;
+                        actions.push(SettingsAction::CheckUpdatesNow);
+                    }
+                    if let Some(rel) = &state.available_update {
+                        let dl_btn = egui::Button::new(
+                            RichText::new(format!("前往下载 v{}", rel.version))
+                                .size(11.0)
+                                .color(palette.on_accent),
+                        )
+                        .fill(palette.accent)
+                        .stroke(Stroke::NONE)
+                        .corner_radius(CornerRadius::same(255));
+                        if padded_button(ui, dl_btn, vec2(10.0, 3.5)).clicked() {
+                            actions.push(SettingsAction::OpenUrl(rel.html_url.clone()));
+                        }
+                    }
+                }
+            });
+        });
 
         #[cfg(target_os = "macos")]
         {

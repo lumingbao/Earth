@@ -17,6 +17,7 @@ use crate::ui::theme::{
     build_highlighted_layout_job, card_shadow, compact_button, dismiss_button, padded_button,
     parse_hex_color32, EarthPalette,
 };
+use crate::updater::{ReleaseInfo, CURRENT_VERSION};
 use chrono::{DateTime, Local};
 use egui::{
     pos2, vec2, Align, Color32, CornerRadius, FontId, Key, Layout, Modifiers, RichText, ScrollArea,
@@ -69,6 +70,8 @@ pub struct PopupState {
     pub preview_cache: Option<CachedPreviewItem>,
     pub show_about_modal: bool,
     pub status_banner: Option<(String, bool)>,
+    pub available_update: Option<ReleaseInfo>,
+    pub dismissed_update_version: Option<String>,
     pub dismissed_accessibility_banner: bool,
     pub ime_composing: bool,
     pub scroll_to_selection: bool,
@@ -90,6 +93,8 @@ impl Default for PopupState {
             preview_cache: None,
             show_about_modal: false,
             status_banner: None,
+            available_update: None,
+            dismissed_update_version: None,
             dismissed_accessibility_banner: false,
             ime_composing: false,
             scroll_to_selection: false,
@@ -254,6 +259,45 @@ pub fn render_popup_view(
                         }
                         if compact_button(ui, "去授权").clicked() {
                             actions.push(PopupAction::OpenAccessibilitySettings);
+                        }
+                    });
+                });
+            });
+        ui.add_space(4.0);
+    } else if settings.check_updates
+        && let Some(rel) = state.available_update.clone()
+        && state.dismissed_update_version.as_deref() != Some(rel.version.as_str())
+    {
+        egui::Frame::NONE
+            .fill(palette.info_bg)
+            .stroke(Stroke::new(1.0, palette.info_border))
+            .corner_radius(CornerRadius::same(14))
+            .shadow(card_shadow(palette))
+            .inner_margin(egui::Margin::symmetric(10, 6))
+            .show(ui, |ui| {
+                ui.set_max_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    let msg_w = (ui.available_width() - 108.0).max(120.0);
+                    ui.allocate_ui(vec2(msg_w, 18.0), |ui| {
+                        ui.set_max_width(msg_w);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(format!(
+                                    "🎉 发现新版本 v{}（当前 v{CURRENT_VERSION}）",
+                                    rel.version
+                                ))
+                                .size(11.5)
+                                .color(palette.accent_text),
+                            )
+                            .truncate(),
+                        );
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if dismiss_button(ui).clicked() {
+                            state.dismissed_update_version = Some(rel.version.clone());
+                        }
+                        if compact_button(ui, "前往下载").clicked() {
+                            actions.push(PopupAction::OpenUrl(rel.html_url.clone()));
                         }
                     });
                 });

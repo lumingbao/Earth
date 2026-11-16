@@ -13,9 +13,10 @@ use crate::tray::{EarthTray, TrayAction};
 use crate::ui::popup::{render_popup_view, PopupAction, PopupState, PopupViewData};
 use crate::ui::settings::{render_settings_view, SettingsAction, SettingsState, SettingsViewData};
 use crate::ui::theme::EarthPalette;
+use crate::updater::{spawn_update_check, UpdateCheckEvent, UpdateCheckOutcome};
 use egui::{pos2, vec2, CornerRadius, Stroke, ViewportCommand};
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -32,6 +33,8 @@ pub struct EarthApp {
     suppression: Arc<Mutex<ClipboardSuppression>>,
     clipboard_rx: Receiver<ClipboardEvent>,
     _clipboard_handle: Option<ClipboardHandle>,
+    update_tx: Sender<UpdateCheckEvent>,
+    update_rx: Receiver<UpdateCheckEvent>,
     hotkey_ctrl: Option<GlobalHotkeyController>,
     tray: Option<EarthTray>,
 
@@ -84,6 +87,11 @@ impl EarthApp {
         )
         .ok();
 
+        let (update_tx, update_rx) = std::sync::mpsc::channel();
+        if settings.check_updates {
+            spawn_update_check(false, update_tx.clone(), cc.egui_ctx.clone());
+        }
+
         let (hotkey_ctrl, hotkey_warn) =
             match GlobalHotkeyController::new(&settings.hotkey_open, cc.egui_ctx.clone()) {
                 Ok((ctrl, warn)) => (Some(ctrl), warn),
@@ -128,6 +136,8 @@ impl EarthApp {
             suppression,
             clipboard_rx,
             _clipboard_handle: clipboard_handle,
+            update_tx,
+            update_rx,
             hotkey_ctrl,
             tray,
             items,
@@ -384,6 +394,35 @@ impl EarthApp {
         }
         if captured_any {
             self.reload_items();
+        }
+
+        while let Ok(ev) = self.update_rx.try_recv() {
+            self.settings_state.checking_updates = false;
+            match ev.outcome {
+                UpdateCheckOutcome::UpdateAvailable(info) => {
+                    if ev.manual {
+                        self.settings_state.status_message = Some((
+                            format!("🎉 发现新版本 v{}，可点击「前往下载」获取更新", info.version),
+                            false,
+                        ));
+                    }
+                    self.popup_state.available_update = Some(info.clone());
+                    self.settings_state.available_update = Some(info);
+                }
+                UpdateCheckOutcome::UpToDate(ver) => {
+                    self.popup_state.available_update = None;
+                    self.settings_state.available_update = None;
+                    if ev.manual {
+                        self.settings_state.status_message =
+                            Some((format!("✓ 当前已是最新版本 (v{ver})"), false));
+                    }
+                }
+                UpdateCheckOutcome::Error(err) => {
+                    if ev.manual {
+                        self.settings_state.status_message = Some((err, true));
+                    }
+                }
+            }
         }
 
         if let Some(ctrl) = &self.hotkey_ctrl
@@ -787,6 +826,16 @@ impl eframe::App for EarthApp {
                                         }
                                         SettingsAction::OpenAccessibilitySettings => {
                                             platform::open_accessibility_settings();
+                                        }
+                                        SettingsAction::CheckUpdatesNow => {
+                                            spawn_update_check(
+                                                true,
+                                                self.update_tx.clone(),
+                                                ctx.clone(),
+                                            );
+                                        }
+                                        SettingsAction::OpenUrl(url) => {
+                                            platform::open_url(&url);
                                         }
                                     }
                                 }

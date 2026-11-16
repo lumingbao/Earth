@@ -10,6 +10,7 @@ mod storage;
 mod transforms;
 mod tray;
 mod ui;
+mod updater;
 
 use app::EarthApp;
 use std::sync::Arc;
