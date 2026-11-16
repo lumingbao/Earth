@@ -169,7 +169,7 @@ pub fn render_settings_view(
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.label(
-                RichText::new("v0.1.0")
+                RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
                     .size(11.5)
                     .color(palette.text_muted),
             );

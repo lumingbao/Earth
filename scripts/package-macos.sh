@@ -11,7 +11,7 @@ VERSION="$(python3 -c '
 import re, pathlib
 text = pathlib.Path("Cargo.toml").read_text()
 m = re.search(r"^version\s*=\s*\"([^\"]+)\"", text, re.MULTILINE)
-print(m.group(1) if m else "0.1.0")
+print(m.group(1) if m else "0.2.0")
 ')"
 
 MODE="${1:-auto}" # auto | universal | native

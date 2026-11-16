@@ -2011,9 +2011,13 @@ fn render_about_overlay(ctx: &egui::Context, state: &mut PopupState, palette: &E
                 ui.add_space(6.0);
                 ui.label(RichText::new("Earth 剪贴板").size(16.0).strong());
                 ui.label(
-                    RichText::new("v0.1.0 · Pure Rust (macOS & Windows)")
-                        .size(11.5)
-                        .color(palette.text_secondary),
+                    RichText::new(concat!(
+                        "v",
+                        env!("CARGO_PKG_VERSION"),
+                        " · Pure Rust (macOS & Windows)"
+                    ))
+                    .size(11.5)
+                    .color(palette.text_secondary),
                 );
                 ui.add_space(8.0);
                 ui.label(

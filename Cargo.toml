@@ -1,8 +1,8 @@
 [package]
 name = "earth"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "Earth — Cross-platform clipboard manager for macOS and Windows inspired by Maccy"
+description = "Earth — Smart cross-platform clipboard manager and workbench for macOS and Windows"
 license = "MIT"
 
 [dependencies]
