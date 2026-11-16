@@ -120,7 +120,7 @@ fn fetch_latest_github_release() -> UpdateCheckOutcome {
         if stderr.contains("404") {
             return UpdateCheckOutcome::UpToDate(CURRENT_VERSION.to_string());
         }
-        return UpdateCheckOutcome::Error("连接 GitHub Releases 接口失败，请检查网络".to_string());
+        return UpdateCheckOutcome::Error("连接更新服务失败，请检查网络".to_string());
     }
 
     let body = String::from_utf8_lossy(&output.stdout);

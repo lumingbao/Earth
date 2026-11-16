@@ -326,7 +326,7 @@ fn render_general_tab(
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if state.checking_updates {
                     ui.label(
-                        RichText::new("正在检查 GitHub 最新版本...")
+                        RichText::new("正在检查更新...")
                             .size(11.5)
                             .color(palette.text_muted),
                     );
