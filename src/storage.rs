@@ -1,4 +1,5 @@
 use crate::model::{AppSettings, ClipItem, ClipKind, Collection, FileEntry};
+use crate::transforms::{detect_hex_color, detect_sensitive_label, detect_url};
 use chrono::Utc;
 use directories::ProjectDirs;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -97,12 +98,18 @@ impl Storage {
                     copy_count INTEGER NOT NULL DEFAULT 1,
                     sensitive_label TEXT,
                     detected_color TEXT,
-                    is_url INTEGER NOT NULL DEFAULT 0
+                    is_url INTEGER NOT NULL DEFAULT 0,
+                    note TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_items_last_copied ON items(last_copied_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_items_pinned ON items(pinned);",
             )
             .map_err(|e| format!("初始化数据库结构失败: {e}"))?;
+
+        // Idempotent migration for existing databases created before v0.2.0 note column
+        let _ = self
+            .conn
+            .execute("ALTER TABLE items ADD COLUMN note TEXT", []);
 
         // Seed starter collections only once on empty table
         let existing_count: i64 = self
@@ -307,7 +314,7 @@ impl Storage {
                         image_path, thumb_path, image_width, image_height,
                         files_json, byte_size, source_app, source_bundle_id,
                         pinned, collection_id, first_copied_at, last_copied_at,
-                        copy_count, sensitive_label, detected_color, is_url
+                        copy_count, sensitive_label, detected_color, is_url, note
                  FROM items
                  ORDER BY last_copied_at DESC",
             )
@@ -345,6 +352,7 @@ impl Storage {
                     sensitive_label: row.get(19)?,
                     detected_color,
                     is_url: row.get::<_, i64>(21)? != 0,
+                    note: row.get(22)?,
                 })
             })
             .map_err(|e| format!("读取记录失败: {e}"))?;
@@ -434,6 +442,128 @@ impl Storage {
             )
             .map_err(|e| format!("更新收藏分组失败: {e}"))?;
         Ok(())
+    }
+
+    pub fn set_item_note(&self, id: i64, note: Option<&str>) -> Result<(), String> {
+        let cleaned = note.map(str::trim).filter(|s| !s.is_empty());
+        self.conn
+            .execute(
+                "UPDATE items SET note = ?1 WHERE id = ?2",
+                params![cleaned, id],
+            )
+            .map_err(|e| format!("更新记录备注失败: {e}"))?;
+        Ok(())
+    }
+
+    pub fn update_item_text(&self, id: i64, new_text: &str) -> Result<(), String> {
+        if new_text.trim().is_empty() {
+            return Err("文本内容不能为空".to_string());
+        }
+        let new_hash = sha256_hex(new_text.as_bytes());
+        let byte_size = new_text.len() as i64;
+        let sensitive_label = detect_sensitive_label(new_text);
+        let detected_color = detect_hex_color(new_text);
+        let color_str = detected_color.map(|c| format!("{},{},{},{}", c[0], c[1], c[2], c[3]));
+        let is_url = detect_url(new_text) as i64;
+
+        // Avoid UNIQUE(content_hash) collision if another item already had the exact same text
+        let _ = self.conn.execute(
+            "DELETE FROM items WHERE content_hash = ?1 AND id != ?2",
+            params![&new_hash, id],
+        );
+
+        self.conn
+            .execute(
+                "UPDATE items
+                 SET content_hash = ?1,
+                     text_content = ?2,
+                     html_content = NULL,
+                     rtf_content = NULL,
+                     byte_size = ?3,
+                     sensitive_label = ?4,
+                     detected_color = ?5,
+                     is_url = ?6
+                 WHERE id = ?7",
+                params![
+                    new_hash,
+                    new_text,
+                    byte_size,
+                    sensitive_label,
+                    color_str,
+                    is_url,
+                    id
+                ],
+            )
+            .map_err(|e| format!("保存修改后的文本失败: {e}"))?;
+        Ok(())
+    }
+
+    pub fn import_items(&self, items: &[ClipItem], max_history: usize) -> Result<usize, String> {
+        let mut imported = 0usize;
+        for item in items {
+            let hash = if item.content_hash.trim().is_empty() {
+                if let Some(txt) = &item.text_content {
+                    sha256_hex(txt.as_bytes())
+                } else {
+                    continue;
+                }
+            } else {
+                item.content_hash.clone()
+            };
+
+            let files_json =
+                serde_json::to_string(&item.files).unwrap_or_else(|_| "[]".to_string());
+            let color_str = item
+                .detected_color
+                .map(|c| format!("{},{},{},{}", c[0], c[1], c[2], c[3]));
+
+            let changed = self
+                .conn
+                .execute(
+                    "INSERT OR IGNORE INTO items (
+                        content_hash, kind, text_content, html_content, rtf_content,
+                        image_path, thumb_path, image_width, image_height,
+                        files_json, byte_size, source_app, source_bundle_id,
+                        pinned, collection_id, first_copied_at, last_copied_at,
+                        copy_count, sensitive_label, detected_color, is_url, note
+                    ) VALUES (
+                        ?1, ?2, ?3, ?4, ?5,
+                        ?6, ?7, ?8, ?9,
+                        ?10, ?11, ?12, ?13,
+                        ?14, NULL, ?15, ?16,
+                        ?17, ?18, ?19, ?20, ?21
+                    )",
+                    params![
+                        hash,
+                        item.kind.as_str(),
+                        item.text_content,
+                        item.html_content,
+                        item.rtf_content,
+                        item.image_path,
+                        item.thumb_path,
+                        item.image_width.map(|v| v as i64),
+                        item.image_height.map(|v| v as i64),
+                        files_json,
+                        item.byte_size as i64,
+                        item.source_app,
+                        item.source_bundle_id,
+                        item.pinned as i64,
+                        item.first_copied_at,
+                        item.last_copied_at,
+                        item.copy_count.max(1) as i64,
+                        item.sensitive_label,
+                        color_str,
+                        item.is_url as i64,
+                        item.note,
+                    ],
+                )
+                .map_err(|e| format!("导入记录失败: {e}"))?;
+            if changed > 0 {
+                imported += 1;
+            }
+        }
+        self.enforce_history_limit(max_history)?;
+        Ok(imported)
     }
 
     pub fn mark_copied(&self, id: i64) -> Result<(), String> {
@@ -667,5 +797,58 @@ mod tests {
         assert_eq!(item3.copy_count, 2);
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn note_edit_text_and_json_import_roundtrip() {
+        let dir = temp_dir("features");
+        let storage = Storage::open_in_dir(&dir).unwrap();
+
+        let id = storage
+            .upsert_item(
+                NewClipPayload {
+                    content_hash: sha256_hex(b"ssh root@10.0.0.1"),
+                    kind: ClipKind::Text,
+                    text_content: Some("ssh root@10.0.0.1".into()),
+                    html_content: None,
+                    rtf_content: None,
+                    image_png: None,
+                    thumb_png: None,
+                    image_width: None,
+                    image_height: None,
+                    files: vec![],
+                    byte_size: 17,
+                    source_app: Some("Terminal".into()),
+                    source_bundle_id: None,
+                    sensitive_label: None,
+                    detected_color: None,
+                    is_url: false,
+                },
+                50,
+            )
+            .unwrap();
+
+        storage.set_item_note(id, Some("生产数据库跳板机")).unwrap();
+        storage
+            .update_item_text(id, "ssh root@10.0.0.2")
+            .unwrap();
+
+        let items = storage.list_items().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].text_content.as_deref(), Some("ssh root@10.0.0.2"));
+        assert_eq!(items[0].note.as_deref(), Some("生产数据库跳板机"));
+        assert!(items[0].searchable_text().contains("生产数据库跳板机"));
+
+        // Export & import into a fresh storage instance
+        let dir2 = temp_dir("import");
+        let storage2 = Storage::open_in_dir(&dir2).unwrap();
+        let count = storage2.import_items(&items, 50).unwrap();
+        assert_eq!(count, 1);
+        // Second import deduplicates by content_hash
+        let count_dup = storage2.import_items(&items, 50).unwrap();
+        assert_eq!(count_dup, 0);
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&dir2);
     }
 }

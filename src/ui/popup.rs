@@ -6,7 +6,7 @@ use crate::model::{
 use crate::search::SearchResultItem;
 use crate::transforms::{
     apply_quick_action, available_quick_actions, format_display_line, mask_sensitive_preview,
-    QuickActionKind,
+    text_stats, QuickActionKind,
 };
 use crate::ui::icons::{
     draw_earth_emblem, draw_file_badge, draw_gear_glyph, draw_link_badge, draw_pause_glyph,
@@ -34,6 +34,12 @@ pub enum PopupAction {
     PasteTransformedText(String),
     TogglePin(i64),
     SetCollection { item_id: i64, collection_id: Option<i64> },
+    SetItemNote { item_id: i64, note: Option<String> },
+    UpdateItemText {
+        item_id: i64,
+        new_text: String,
+        paste_after: bool,
+    },
     DeleteItem(i64),
     ClearUnpinned,
     OpenSettings,
@@ -52,10 +58,13 @@ pub enum PopupAction {
 pub struct CachedPreviewItem {
     pub item_id: i64,
     pub last_copied_at: i64,
+    pub byte_size: u64,
     pub formatted_ts: String,
     pub display_text: String,
+    pub text_stats: Option<(usize, usize, usize)>,
     pub quick_actions: Vec<QuickActionKind>,
     pub file_exists: Vec<bool>,
+    pub qr_matrix: Option<Result<(usize, Vec<bool>), String>>,
 }
 
 pub struct PopupState {
@@ -69,6 +78,9 @@ pub struct PopupState {
     pub revealed_sensitive_ids: HashSet<i64>,
     pub image_actual_size: bool,
     pub active_transform: Option<(i64, QuickActionKind, Result<String, String>)>,
+    pub inline_edit_text: Option<(i64, String)>,
+    pub inline_edit_note: Option<(i64, String)>,
+    pub qr_preview_id: Option<i64>,
     pub preview_cache: Option<CachedPreviewItem>,
     pub show_about_modal: bool,
     pub status_banner: Option<(String, bool)>,
@@ -93,6 +105,9 @@ impl Default for PopupState {
             revealed_sensitive_ids: HashSet::new(),
             image_actual_size: false,
             active_transform: None,
+            inline_edit_text: None,
+            inline_edit_note: None,
+            qr_preview_id: None,
             preview_cache: None,
             show_about_modal: false,
             status_banner: None,
@@ -112,11 +127,15 @@ impl PopupState {
         let needs_rebuild = self
             .preview_cache
             .as_ref()
-            .map(|c| c.item_id != item.id || c.last_copied_at != item.last_copied_at)
+            .map(|c| {
+                c.item_id != item.id
+                    || c.last_copied_at != item.last_copied_at
+                    || c.byte_size != item.byte_size
+            })
             .unwrap_or(true);
         if needs_rebuild {
             let formatted_ts = format_epoch_millis(item.last_copied_at);
-            let (display_text, quick_actions) = if item.kind == ClipKind::Text {
+            let (display_text, stats, quick_actions) = if item.kind == ClipKind::Text {
                 let raw = item.text_content.as_deref().unwrap_or("");
                 let display = match raw.char_indices().nth(MAX_PREVIEW_TEXT_CHARS) {
                     Some((byte_idx, _)) => format!(
@@ -126,9 +145,13 @@ impl PopupState {
                     ),
                     None => raw.to_string(),
                 };
-                (display, available_quick_actions(raw))
+                (
+                    display,
+                    Some(text_stats(raw)),
+                    available_quick_actions(raw),
+                )
             } else {
-                (String::new(), Vec::new())
+                (String::new(), None, Vec::new())
             };
             let file_exists = if item.kind == ClipKind::Files {
                 item.files.iter().map(|f| f.exists()).collect()
@@ -138,14 +161,42 @@ impl PopupState {
             self.preview_cache = Some(CachedPreviewItem {
                 item_id: item.id,
                 last_copied_at: item.last_copied_at,
+                byte_size: item.byte_size,
                 formatted_ts,
                 display_text,
+                text_stats: stats,
                 quick_actions,
                 file_exists,
+                qr_matrix: None,
             });
+        }
+        if self.qr_preview_id == Some(item.id)
+            && let Some(cache) = self.preview_cache.as_mut()
+            && cache.qr_matrix.is_none()
+        {
+            let raw = item.text_content.as_deref().unwrap_or("").trim();
+            cache.qr_matrix = Some(build_qr_matrix(raw));
         }
         self.preview_cache.as_ref().unwrap()
     }
+}
+
+fn build_qr_matrix(text: &str) -> Result<(usize, Vec<bool>), String> {
+    if text.is_empty() {
+        return Err("空文本无法生成二维码".to_string());
+    }
+    if text.len() > 2048 {
+        return Err("文本长度超过二维码容量上限（2048 字节）".to_string());
+    }
+    let code = qrcode::QrCode::new(text.as_bytes())
+        .map_err(|e| format!("生成二维码失败: {e}"))?;
+    let width = code.width();
+    let colors = code
+        .into_colors()
+        .into_iter()
+        .map(|c| c == qrcode::Color::Dark)
+        .collect();
+    Ok((width, colors))
 }
 
 pub struct PopupViewData<'a> {
@@ -208,7 +259,7 @@ pub fn render_popup_view(
 
     // Handle keyboard shortcuts BEFORE TextEdit steals Up/Down/Enter/Esc (unless IME is composing)
     if !state.ime_composing {
-        handle_popup_keyboard(ctx, settings, results, state, &mut actions);
+        handle_popup_keyboard(ctx, settings, results, collections, state, &mut actions);
     }
 
     // Top Header Bar
@@ -448,6 +499,7 @@ fn handle_popup_keyboard(
     ctx: &egui::Context,
     settings: &mut AppSettings,
     results: &[SearchResultItem],
+    collections: &[Collection],
     state: &mut PopupState,
     actions: &mut Vec<PopupAction>,
 ) {
@@ -458,14 +510,64 @@ fn handle_popup_keyboard(
         return;
     }
 
-    // Esc clears search first, or closes preview/popup
+    let editing_workbench = state
+        .inline_edit_text
+        .as_ref()
+        .map(|(id, _)| Some(*id) == state.selected_id)
+        .unwrap_or(false)
+        || state
+            .inline_edit_note
+            .as_ref()
+            .map(|(id, _)| Some(*id) == state.selected_id)
+            .unwrap_or(false);
+
+    // Esc cancels workbench inline editing first, then clears search, or closes popup
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-        if !state.search_query.is_empty() {
+        if editing_workbench {
+            state.inline_edit_text = None;
+            state.inline_edit_note = None;
+        } else if !state.search_query.is_empty() {
             state.search_query.clear();
             state.request_search_focus = true;
         } else {
             actions.push(PopupAction::HidePopup);
         }
+        return;
+    }
+
+    // While editing text/note inside the workbench, let the editor handle arrows/Enter/Tab
+    if editing_workbench {
+        return;
+    }
+
+    // Tab / Shift+Tab cycles through category & collection filter capsules
+    let shift_tab = ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab));
+    let plain_tab = !shift_tab && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab));
+    if shift_tab || plain_tab {
+        let mut filters = vec![
+            CategoryFilter::All,
+            CategoryFilter::Text,
+            CategoryFilter::Image,
+            CategoryFilter::Files,
+            CategoryFilter::Pinned,
+        ];
+        for col in collections {
+            filters.push(CategoryFilter::Collection(col.id));
+        }
+        let cur = filters
+            .iter()
+            .position(|&f| f == state.filter)
+            .unwrap_or(0);
+        let next = if shift_tab {
+            if cur == 0 {
+                filters.len() - 1
+            } else {
+                cur - 1
+            }
+        } else {
+            (cur + 1) % filters.len()
+        };
+        state.filter = filters[next];
         return;
     }
 
@@ -1129,6 +1231,23 @@ fn render_item_row(
                 ui.set_max_size(vec2(text_w, row_inner_h));
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     ui.set_max_width(text_w);
+                    if let Some(note) = item.note.as_deref().map(str::trim).filter(|n| !n.is_empty())
+                    {
+                        let short_note = truncate_chars(note, 12);
+                        egui::Frame::NONE
+                            .fill(palette.accent_soft)
+                            .stroke(Stroke::new(1.0, palette.border_strong))
+                            .corner_radius(CornerRadius::same(255))
+                            .inner_margin(egui::Margin::symmetric(6, 1))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    RichText::new(format!("🏷 {short_note}"))
+                                        .size(10.5)
+                                        .color(palette.accent_text),
+                                );
+                            });
+                    }
+                    let rem_text_w = ui.available_width().max(24.0);
                     match item.kind {
                         ClipKind::Text => {
                             let raw = item.text_content.as_deref().unwrap_or("");
@@ -1153,7 +1272,7 @@ fn render_item_row(
                                     settings.match_highlight,
                                     palette,
                                     13.0,
-                                    text_w,
+                                    rem_text_w,
                                     selected,
                                 );
                                 ui.add(egui::Label::new(job).truncate());
@@ -1178,7 +1297,7 @@ fn render_item_row(
                                 settings.match_highlight,
                                 palette,
                                 13.0,
-                                text_w,
+                                rem_text_w,
                                 selected,
                             );
                             ui.add(egui::Label::new(job).truncate());
@@ -1453,6 +1572,12 @@ fn render_preview_pane(
                 .as_ref()
                 .map(|c| c.formatted_ts.as_str())
                 .unwrap_or("");
+            let stats_suffix = state
+                .preview_cache
+                .as_ref()
+                .and_then(|c| c.text_stats)
+                .map(|(lines, chars, words)| format!(" · {lines} 行 · {chars} 字符 · {words} 词"))
+                .unwrap_or_default();
 
             ui.horizontal(|ui| {
                 let (tag_bg, tag_border, tag_fg) = antd_kind_tag_colors(item, palette);
@@ -1464,14 +1589,17 @@ fn render_preview_pane(
                     .show(ui, |ui| {
                         ui.label(RichText::new(kind_label).size(11.0).color(tag_fg));
                     });
-                ui.label(
-                    RichText::new(format!(
-                        "{ts_str} · 复制 {} 次 · {}",
-                        item.copy_count,
-                        format_bytes(item.byte_size)
-                    ))
-                    .size(11.5)
-                    .color(palette.text_secondary),
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!(
+                            "{ts_str} · 复制 {} 次 · {}{stats_suffix}",
+                            item.copy_count,
+                            format_bytes(item.byte_size)
+                        ))
+                        .size(11.2)
+                        .color(palette.text_secondary),
+                    )
+                    .truncate(),
                 );
             });
 
@@ -1482,6 +1610,17 @@ fn render_preview_pane(
                         .color(palette.text_muted),
                 );
             }
+
+            let is_editing_text = state
+                .inline_edit_text
+                .as_ref()
+                .map(|(id, _)| *id == item.id)
+                .unwrap_or(false);
+            let is_editing_note = state
+                .inline_edit_note
+                .as_ref()
+                .map(|(id, _)| *id == item.id)
+                .unwrap_or(false);
 
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -1506,7 +1645,7 @@ fn render_preview_pane(
                     .unwrap_or("加入收藏分组");
                 egui::ComboBox::from_id_salt(("preview_col", item.id))
                     .selected_text(cur_col)
-                    .width(120.0)
+                    .width(110.0)
                     .show_ui(ui, |ui| {
                         if ui
                             .selectable_label(item.collection_id.is_none(), "未分组")
@@ -1529,6 +1668,34 @@ fn render_preview_pane(
                             }
                         }
                     });
+
+                let note_lbl = if item.note.as_deref().map(str::trim).is_some_and(|n| !n.is_empty())
+                {
+                    "备注"
+                } else {
+                    "+ 备注"
+                };
+                if compact_button(ui, note_lbl).clicked() {
+                    if is_editing_note {
+                        state.inline_edit_note = None;
+                    } else {
+                        state.inline_edit_note =
+                            Some((item.id, item.note.clone().unwrap_or_default()));
+                    }
+                }
+
+                if item.kind == ClipKind::Text {
+                    let edit_lbl = if is_editing_text { "退出编辑" } else { "编辑" };
+                    if compact_button(ui, edit_lbl).clicked() {
+                        if is_editing_text {
+                            state.inline_edit_text = None;
+                        } else {
+                            let raw = item.text_content.as_deref().unwrap_or("");
+                            state.inline_edit_text = Some((item.id, raw.to_string()));
+                            state.qr_preview_id = None;
+                        }
+                    }
+                }
 
                 if item.is_sensitive() {
                     let revealed = state.revealed_sensitive_ids.contains(&item.id);
@@ -1553,6 +1720,72 @@ fn render_preview_pane(
                 });
             });
 
+            // Optional Note Editor / Note Display Bar
+            if is_editing_note {
+                ui.add_space(3.0);
+                let mut save_note = None;
+                let mut cancel_note = false;
+                if let Some((_, ref mut note_buf)) = state.inline_edit_note {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new("🏷")
+                                .size(12.0)
+                                .color(palette.accent_text),
+                        );
+                        let edit_w = (ui.available_width() - 116.0).max(80.0);
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(note_buf)
+                                .hint_text("输入备注别名（支持搜索匹配）…")
+                                .desired_width(edit_w),
+                        );
+                        let enter_hit = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                        let save_btn = egui::Button::new(
+                            RichText::new("保存").size(11.0).color(palette.on_accent),
+                        )
+                        .fill(palette.accent)
+                        .stroke(Stroke::NONE)
+                        .corner_radius(CornerRadius::same(255));
+                        if padded_button(ui, save_btn, vec2(9.0, 3.0)).clicked() || enter_hit {
+                            save_note = Some(note_buf.trim().to_string());
+                        }
+                        if compact_button(ui, "清除").clicked() {
+                            save_note = Some(String::new());
+                        }
+                        if dismiss_button(ui).clicked() {
+                            cancel_note = true;
+                        }
+                    });
+                }
+                if let Some(txt) = save_note {
+                    actions.push(PopupAction::SetItemNote {
+                        item_id: item.id,
+                        note: (!txt.is_empty()).then_some(txt),
+                    });
+                    state.inline_edit_note = None;
+                } else if cancel_note {
+                    state.inline_edit_note = None;
+                }
+            } else if let Some(note) = item.note.as_deref().map(str::trim).filter(|n| !n.is_empty())
+            {
+                ui.add_space(2.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("🏷 备注：{note}"))
+                            .size(11.5)
+                            .color(palette.accent_text),
+                    );
+                    if compact_button(ui, "修改").clicked() {
+                        state.inline_edit_note = Some((item.id, note.to_string()));
+                    }
+                    if dismiss_button(ui).on_hover_text("清除备注").clicked() {
+                        actions.push(PopupAction::SetItemNote {
+                            item_id: item.id,
+                            note: None,
+                        });
+                    }
+                });
+            }
+
             ui.separator();
 
             // Main Rich Body (leave space for Quick Actions bar at bottom)
@@ -1571,7 +1804,7 @@ fn render_preview_pane(
                 }
                 _ => 42.0,
             };
-            let body_h = (ui.available_height() - actions_area_h).max(110.0);
+            let body_h = (ui.available_height() - actions_area_h).max(100.0);
 
             ScrollArea::vertical()
                 .id_salt(("preview_body", item.id))
@@ -1588,7 +1821,58 @@ fn render_preview_pane(
                                 render_color_card(ui, raw.trim(), rgba, palette, actions);
                                 ui.add_space(6.0);
                             }
-                            if hidden {
+                            if state.qr_preview_id == Some(item.id) {
+                                let qr_res = state
+                                    .preview_cache
+                                    .as_ref()
+                                    .and_then(|c| c.qr_matrix.clone());
+                                if let Some(res) = qr_res {
+                                    render_qr_card(ui, &res, palette);
+                                    ui.add_space(6.0);
+                                }
+                            }
+                            if is_editing_text {
+                                let mut commit_edit: Option<(String, bool)> = None;
+                                let mut cancel_edit = false;
+                                if let Some((_, ref mut edit_buf)) = state.inline_edit_text {
+                                    ui.horizontal(|ui| {
+                                        let save_btn = egui::Button::new(
+                                            RichText::new("保存修改")
+                                                .size(11.0)
+                                                .color(palette.on_accent),
+                                        )
+                                        .fill(palette.accent)
+                                        .stroke(Stroke::NONE)
+                                        .corner_radius(CornerRadius::same(255));
+                                        if padded_button(ui, save_btn, vec2(10.0, 3.5)).clicked() {
+                                            commit_edit = Some((edit_buf.clone(), false));
+                                        }
+                                        if compact_button(ui, "保存并粘贴").clicked() {
+                                            commit_edit = Some((edit_buf.clone(), true));
+                                        }
+                                        if compact_button(ui, "取消").clicked() {
+                                            cancel_edit = true;
+                                        }
+                                    });
+                                    ui.add_space(4.0);
+                                    ui.add(
+                                        egui::TextEdit::multiline(edit_buf)
+                                            .font(FontId::monospace(12.2))
+                                            .desired_width(f32::INFINITY)
+                                            .desired_rows(8),
+                                    );
+                                }
+                                if let Some((new_text, paste_after)) = commit_edit {
+                                    actions.push(PopupAction::UpdateItemText {
+                                        item_id: item.id,
+                                        new_text,
+                                        paste_after,
+                                    });
+                                    state.inline_edit_text = None;
+                                } else if cancel_edit {
+                                    state.inline_edit_text = None;
+                                }
+                            } else if hidden {
                                 ui.label(
                                     RichText::new(format!(
                                         "🔒 检测到敏感内容（{}），已默认脱敏保护。\n点击上方「显示明文」按钮可临时查看完整内容。",
@@ -1714,6 +1998,13 @@ fn render_preview_pane(
                     ui.horizontal_wrapped(|ui| {
                         if item.is_url && compact_button(ui, "🌐 打开链接").clicked() {
                             actions.push(PopupAction::OpenUrl(raw.trim().to_string()));
+                        }
+                        if raw.len() <= 2048 {
+                            let qr_active = state.qr_preview_id == Some(item.id);
+                            let qr_lbl = if qr_active { "收起二维码" } else { "📱 二维码" };
+                            if compact_button(ui, qr_lbl).clicked() {
+                                state.qr_preview_id = if qr_active { None } else { Some(item.id) };
+                            }
                         }
                         for qa in quick_list {
                             if compact_button(ui, qa.label()).clicked() {
@@ -1854,6 +2145,82 @@ fn render_preview_pane(
                     });
                 }
             }
+        });
+}
+
+fn render_qr_card(
+    ui: &mut Ui,
+    qr_res: &Result<(usize, Vec<bool>), String>,
+    palette: &EarthPalette,
+) {
+    egui::Frame::NONE
+        .fill(palette.card_bg)
+        .stroke(Stroke::new(1.0, palette.border_subtle))
+        .corner_radius(CornerRadius::same(14))
+        .inner_margin(egui::Margin::same(10))
+        .show(ui, |ui| match qr_res {
+            Ok((width, modules)) if *width > 0 => {
+                let quiet_zone = 2usize;
+                let total_modules = (*width + quiet_zone * 2) as f32;
+                let canvas_px = 148.0f32;
+                let cell_px = (canvas_px / total_modules).max(2.0);
+                let actual_px = cell_px * total_modules;
+
+                ui.horizontal(|ui| {
+                    let (qr_rect, _) =
+                        ui.allocate_exact_size(vec2(actual_px, actual_px), Sense::hover());
+                    ui.painter().rect_filled(
+                        qr_rect,
+                        CornerRadius::same(8),
+                        Color32::WHITE,
+                    );
+                    ui.painter().rect_stroke(
+                        qr_rect,
+                        CornerRadius::same(8),
+                        Stroke::new(1.0, palette.border),
+                        egui::StrokeKind::Inside,
+                    );
+
+                    let origin_x = qr_rect.min.x + quiet_zone as f32 * cell_px;
+                    let origin_y = qr_rect.min.y + quiet_zone as f32 * cell_px;
+                    let dark_color = Color32::from_rgb(5, 9, 20);
+                    for y in 0..*width {
+                        for x in 0..*width {
+                            if modules[y * *width + x] {
+                                let min = pos2(
+                                    origin_x + x as f32 * cell_px,
+                                    origin_y + y as f32 * cell_px,
+                                );
+                                let max = pos2(min.x + cell_px + 0.35, min.y + cell_px + 0.35);
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_max(min, max),
+                                    CornerRadius::ZERO,
+                                    dark_color,
+                                );
+                            }
+                        }
+                    }
+
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new("📱 扫码获取当前内容")
+                                .size(12.5)
+                                .strong()
+                                .color(palette.text_primary),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            RichText::new("使用手机相机或微信扫一扫，即可直接在手机端打开链接或复制文本（本地离线生成）。")
+                                .size(11.0)
+                                .color(palette.text_muted),
+                        );
+                    });
+                });
+            }
+            Err(err) => {
+                ui.label(RichText::new(err).size(11.5).color(palette.danger));
+            }
+            _ => {}
         });
 }
 
@@ -2198,6 +2565,7 @@ mod tests {
                     sensitive_label: None,
                     detected_color: None,
                     is_url: true,
+                    note: None,
                 },
                 score: 100,
                 matched_indices: HashSet::new(),
@@ -2309,6 +2677,7 @@ mod tests {
                 sensitive_label: None,
                 detected_color: None,
                 is_url: false,
+                note: None,
             },
             score: 100,
             matched_indices: HashSet::new(),
@@ -2509,6 +2878,7 @@ mod tests {
                 sensitive_label: None,
                 detected_color: None,
                 is_url: false,
+                note: None,
             },
             score: 100,
             matched_indices: HashSet::new(),
@@ -2618,6 +2988,7 @@ mod tests {
                 sensitive_label: None,
                 detected_color: None,
                 is_url: false,
+                note: None,
             },
             score: 100,
             matched_indices: HashSet::new(),

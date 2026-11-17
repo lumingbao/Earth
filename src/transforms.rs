@@ -1,6 +1,8 @@
+use crate::storage::sha256_hex;
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 use regex::Regex;
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 /// Parses hex color strings like `#055745`, `#fff`, `#11223344`, or bare 6-hex tokens `055745`.
@@ -161,6 +163,14 @@ pub fn format_display_line(input: &str, show_special_symbols: bool) -> String {
     out
 }
 
+/// Computes `(line_count, char_count, word_count)` for the workbench metadata bar.
+pub fn text_stats(input: &str) -> (usize, usize, usize) {
+    let lines = input.lines().count().max(usize::from(!input.is_empty()));
+    let chars = input.chars().count();
+    let words = input.split_whitespace().count();
+    (lines, chars, words)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickActionKind {
     JsonPretty,
@@ -171,6 +181,13 @@ pub enum QuickActionKind {
     UrlDecode,
     TimestampConvert,
     TrimNormalize,
+    LinesDedupe,
+    LinesSort,
+    CaseSnake,
+    CaseCamel,
+    CaseUpperSnake,
+    UnescapeString,
+    Sha256Hash,
 }
 
 impl QuickActionKind {
@@ -184,6 +201,13 @@ impl QuickActionKind {
             QuickActionKind::UrlDecode => "URL 解码",
             QuickActionKind::TimestampConvert => "时间戳转换",
             QuickActionKind::TrimNormalize => "去除空白",
+            QuickActionKind::LinesDedupe => "多行去重",
+            QuickActionKind::LinesSort => "多行排序",
+            QuickActionKind::CaseSnake => "snake_case",
+            QuickActionKind::CaseCamel => "camelCase",
+            QuickActionKind::CaseUpperSnake => "UPPER_CASE",
+            QuickActionKind::UnescapeString => "反转义",
+            QuickActionKind::Sha256Hash => "SHA-256",
         }
     }
 }
@@ -222,7 +246,103 @@ pub fn apply_quick_action(action: QuickActionKind, input: &str) -> Result<String
                 .join("\n");
             Ok(cleaned)
         }
+        QuickActionKind::LinesDedupe => {
+            let mut seen = HashSet::new();
+            let mut out = Vec::new();
+            for line in input.lines() {
+                if seen.insert(line) {
+                    out.push(line);
+                }
+            }
+            Ok(out.join("\n"))
+        }
+        QuickActionKind::LinesSort => {
+            let mut lines: Vec<&str> = input.lines().collect();
+            lines.sort_unstable();
+            Ok(lines.join("\n"))
+        }
+        QuickActionKind::CaseSnake => Ok(split_identifier_words(input).join("_")),
+        QuickActionKind::CaseCamel => {
+            let words = split_identifier_words(input);
+            let mut out = String::new();
+            for (idx, w) in words.iter().enumerate() {
+                if idx == 0 {
+                    out.push_str(w);
+                } else {
+                    let mut chars = w.chars();
+                    if let Some(first) = chars.next() {
+                        out.extend(first.to_uppercase());
+                        out.push_str(chars.as_str());
+                    }
+                }
+            }
+            Ok(out)
+        }
+        QuickActionKind::CaseUpperSnake => Ok(split_identifier_words(input)
+            .into_iter()
+            .map(|w| w.to_uppercase())
+            .collect::<Vec<_>>()
+            .join("_")),
+        QuickActionKind::UnescapeString => Ok(unescape_text(input)),
+        QuickActionKind::Sha256Hash => Ok(sha256_hex(input.as_bytes())),
     }
+}
+
+fn split_identifier_words(input: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut prev_is_lower = false;
+
+    for ch in input.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            if ch.is_ascii_uppercase() && prev_is_lower && !cur.is_empty() {
+                words.push(cur.to_ascii_lowercase());
+                cur.clear();
+            }
+            cur.push(ch);
+            prev_is_lower = ch.is_ascii_lowercase();
+        } else {
+            if !cur.is_empty() {
+                words.push(cur.to_ascii_lowercase());
+                cur.clear();
+            }
+            prev_is_lower = false;
+        }
+    }
+    if !cur.is_empty() {
+        words.push(cur.to_ascii_lowercase());
+    }
+    words
+}
+
+fn unescape_text(input: &str) -> String {
+    let trimmed = input.trim();
+    let inner = trimmed
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(trimmed);
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('r') => out.push('\r'),
+                Some('t') => out.push('\t'),
+                Some('"') => out.push('"'),
+                Some('\'') => out.push('\''),
+                Some('\\') => out.push('\\'),
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 pub fn convert_timestamp_smart(input: &str) -> Result<String, String> {
@@ -307,7 +427,27 @@ pub fn available_quick_actions(input: &str) -> Vec<QuickActionKind> {
     if trimmed.contains('%') {
         actions.push(QuickActionKind::UrlDecode);
     }
+    if trimmed.contains("\\n") || trimmed.contains("\\\"") || trimmed.contains("\\\\") {
+        actions.push(QuickActionKind::UnescapeString);
+    }
+    if !trimmed.contains('\n')
+        && trimmed.len() >= 2
+        && trimmed.len() <= 96
+        && trimmed.chars().any(|c| c.is_ascii_alphabetic())
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ' '))
+    {
+        actions.push(QuickActionKind::CaseSnake);
+        actions.push(QuickActionKind::CaseCamel);
+        actions.push(QuickActionKind::CaseUpperSnake);
+    }
+    if trimmed.lines().count() >= 2 {
+        actions.push(QuickActionKind::LinesDedupe);
+        actions.push(QuickActionKind::LinesSort);
+    }
     actions.push(QuickActionKind::TrimNormalize);
+    actions.push(QuickActionKind::Sha256Hash);
     actions
 }
 
@@ -353,5 +493,37 @@ mod tests {
 
         let ts = apply_quick_action(QuickActionKind::TimestampConvert, "1700000000").unwrap();
         assert!(ts.contains("2023-11-14"));
+
+        assert_eq!(
+            apply_quick_action(QuickActionKind::CaseSnake, "copyTriggerMode").unwrap(),
+            "copy_trigger_mode"
+        );
+        assert_eq!(
+            apply_quick_action(QuickActionKind::CaseCamel, "copy_trigger_mode").unwrap(),
+            "copyTriggerMode"
+        );
+        assert_eq!(
+            apply_quick_action(QuickActionKind::CaseUpperSnake, "copyTriggerMode").unwrap(),
+            "COPY_TRIGGER_MODE"
+        );
+        assert_eq!(
+            apply_quick_action(QuickActionKind::LinesDedupe, "b\na\nb\na").unwrap(),
+            "b\na"
+        );
+        assert_eq!(
+            apply_quick_action(QuickActionKind::LinesSort, "c\na\nb").unwrap(),
+            "a\nb\nc"
+        );
+        assert_eq!(
+            apply_quick_action(QuickActionKind::UnescapeString, r#""hello\nworld""#).unwrap(),
+            "hello\nworld"
+        );
+        assert_eq!(
+            apply_quick_action(QuickActionKind::Sha256Hash, "Earth")
+                .unwrap()
+                .len(),
+            64
+        );
+        assert_eq!(text_stats("hello world\nsecond line"), (2, 23, 4));
     }
 }

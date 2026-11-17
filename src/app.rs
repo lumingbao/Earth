@@ -172,6 +172,7 @@ impl EarthApp {
         self.items = self.storage.list_items().unwrap_or_default();
         self.collections = self.storage.list_collections().unwrap_or_default();
         self.storage_bytes = self.storage.total_storage_bytes();
+        self.popup_state.preview_cache = None;
         self.search_dirty = true;
         self.sync_tray();
     }
@@ -250,6 +251,9 @@ impl EarthApp {
             self.popup_state.preview_manually_toggled = false;
             self.popup_state.preview_open = false;
             self.popup_state.active_transform = None;
+            self.popup_state.inline_edit_text = None;
+            self.popup_state.inline_edit_note = None;
+            self.popup_state.qr_preview_id = None;
         }
 
         let target_size = self.desired_window_size();
@@ -678,6 +682,40 @@ impl eframe::App for EarthApp {
                                                 .set_collection(item_id, collection_id);
                                             self.reload_items();
                                         }
+                                        PopupAction::SetItemNote { item_id, note } => {
+                                            let _ = self
+                                                .storage
+                                                .set_item_note(item_id, note.as_deref());
+                                            self.reload_items();
+                                        }
+                                        PopupAction::UpdateItemText {
+                                            item_id,
+                                            new_text,
+                                            paste_after,
+                                        } => {
+                                            match self.storage.update_item_text(item_id, &new_text)
+                                            {
+                                                Ok(()) => {
+                                                    self.reload_items();
+                                                    if paste_after {
+                                                        self.handle_paste_item(
+                                                            &ctx,
+                                                            item_id,
+                                                            PasteBehavior::Default,
+                                                        );
+                                                    } else {
+                                                        self.popup_state.status_banner = Some((
+                                                            "✓ 已保存对记录内容的修改".to_string(),
+                                                            false,
+                                                        ));
+                                                    }
+                                                }
+                                                Err(err) => {
+                                                    self.popup_state.status_banner =
+                                                        Some((err, true));
+                                                }
+                                            }
+                                        }
                                         PopupAction::DeleteItem(id) => {
                                             let _ = self.storage.delete_item(id);
                                             self.reload_items();
@@ -863,6 +901,44 @@ impl eframe::App for EarthApp {
                                                     Err(e) => {
                                                         self.settings_state.status_message =
                                                             Some((format!("导出失败: {e}"), true));
+                                                    }
+                                                }
+                                            }
+                                            self.dialog_open = false;
+                                        }
+                                        SettingsAction::ImportJson => {
+                                            self.dialog_open = true;
+                                            if let Some(src) = rfd::FileDialog::new()
+                                                .add_filter("JSON", &["json"])
+                                                .pick_file()
+                                            {
+                                                let res = std::fs::read_to_string(&src)
+                                                    .map_err(|e| format!("读取文件失败: {e}"))
+                                                    .and_then(|raw| {
+                                                        serde_json::from_str::<Vec<ClipItem>>(&raw)
+                                                            .map_err(|e| {
+                                                                format!("解析 JSON 失败: {e}")
+                                                            })
+                                                    })
+                                                    .and_then(|parsed| {
+                                                        self.storage.import_items(
+                                                            &parsed,
+                                                            self.settings.max_history,
+                                                        )
+                                                    });
+                                                match res {
+                                                    Ok(count) => {
+                                                        self.reload_items();
+                                                        self.settings_state.status_message = Some((
+                                                            format!(
+                                                                "✓ 导入完成，新增 {count} 条记录（重复记录已自动跳过）"
+                                                            ),
+                                                            false,
+                                                        ));
+                                                    }
+                                                    Err(e) => {
+                                                        self.settings_state.status_message =
+                                                            Some((e, true));
                                                     }
                                                 }
                                             }

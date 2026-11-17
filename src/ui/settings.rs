@@ -45,6 +45,7 @@ pub enum SettingsAction {
     OpenUrl(String),
     ClearHistory(bool),
     ExportJson,
+    ImportJson,
     CreateCollection { name: String, color_hex: String },
     RenameCollection { id: i64, name: String },
     DeleteCollection(i64),
@@ -696,7 +697,7 @@ fn render_storage_tab(
         });
 
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.button("清除未固定").clicked() {
                 actions.push(SettingsAction::ClearHistory(false));
             }
@@ -713,6 +714,9 @@ fn render_storage_tab(
             }
             if ui.button("导出 JSON...").clicked() {
                 actions.push(SettingsAction::ExportJson);
+            }
+            if ui.button("导入 JSON...").clicked() {
+                actions.push(SettingsAction::ImportJson);
             }
         });
     });

@@ -228,6 +228,7 @@ mod tests {
             sensitive_label: None,
             detected_color: None,
             is_url: false,
+            note: None,
         }
     }
 

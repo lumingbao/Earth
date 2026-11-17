@@ -86,11 +86,13 @@ pub struct ClipItem {
     pub sensitive_label: Option<String>,
     pub detected_color: Option<[u8; 4]>,
     pub is_url: bool,
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 impl ClipItem {
     pub fn searchable_text(&self) -> String {
-        match self.kind {
+        let base = match self.kind {
             ClipKind::Text => self.text_content.clone().unwrap_or_default(),
             ClipKind::Files => self
                 .files
@@ -109,6 +111,11 @@ impl ClipItem {
                     self.source_app.as_deref().unwrap_or("")
                 )
             }
+        };
+        if let Some(note) = self.note.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            format!("{base}\n{note}")
+        } else {
+            base
         }
     }
 
