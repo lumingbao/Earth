@@ -1,6 +1,10 @@
 use crate::model::{MatchHighlight, ThemeMode};
+use egui::epaint::text::{FontData, FontFamily, FontInsert, FontPriority, InsertFontFamily};
+use egui::epaint::FontColorTransferFunction;
 use egui::{Color32, CornerRadius, FontId, Stroke, Style, TextFormat, Ui, Visuals};
 use std::collections::HashSet;
+use std::path::Path;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy)]
 pub struct EarthPalette {
@@ -176,6 +180,18 @@ impl EarthPalette {
         visuals.widgets.open.bg_stroke = Stroke::new(1.0, self.accent);
         visuals.widgets.open.corner_radius = CornerRadius::same(16);
 
+        // Crisp glyph rendering: snap Latin/digit stems without subpixel horizontal blurring,
+        // keep hinting on, and gently boost light-mode coverage on 1x (non-Retina) displays.
+        visuals.text_options.font_hinting = true;
+        visuals.text_options.subpixel_binning = false;
+        visuals.text_options.color_transfer_function = if self.is_dark {
+            FontColorTransferFunction::DARK_MODE_DEFAULT
+        } else if ctx.pixels_per_point() < 1.5 {
+            FontColorTransferFunction::Gamma(0.75)
+        } else {
+            FontColorTransferFunction::Gamma(0.88)
+        };
+
         style.visuals = visuals;
         style.spacing.item_spacing = egui::vec2(6.0, 5.0);
         style.spacing.button_padding = egui::vec2(14.0, 6.0);
@@ -335,4 +351,242 @@ fn append_run(
 pub fn parse_hex_color32(hex: &str) -> Option<Color32> {
     let rgba = crate::transforms::detect_hex_color(hex)?;
     Some(Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]))
+}
+
+/// Installs crisp native system UI & CJK fonts (`PingFang SC` + `Menlo` on macOS,
+/// `Segoe UI` + `Microsoft YaHei` + `Consolas` on Windows) ahead of egui's thin defaults
+/// while preserving symbol and emoji fallbacks (`SystemFontProvider`, `NotoEmoji`).
+pub fn install_crisp_fonts(ctx: &egui::Context) {
+    let preferred = crate::platform::preferred_system_fonts();
+
+    // Insert UI/CJK fonts in reverse priority order with `FontPriority::Highest` so index 0
+    // becomes the first candidate in Proportional and sits cleanly as CJK fallback in Monospace.
+    for (idx, candidate) in preferred.ui.iter().enumerate().rev() {
+        let Some(font_data) = load_mmap_font_data(&candidate.path, candidate.postscript_name)
+        else {
+            continue;
+        };
+        let families = if idx == 0 {
+            vec![
+                InsertFontFamily {
+                    family: FontFamily::Proportional,
+                    priority: FontPriority::Highest,
+                },
+                InsertFontFamily {
+                    family: FontFamily::Monospace,
+                    priority: FontPriority::Highest,
+                },
+            ]
+        } else {
+            vec![InsertFontFamily {
+                family: FontFamily::Proportional,
+                priority: FontPriority::Highest,
+            }]
+        };
+        ctx.add_font(FontInsert::new(
+            &format!("earth_ui_{}", candidate.postscript_name),
+            font_data,
+            families,
+        ));
+    }
+
+    // Insert dedicated Monospace faces after UI fallback so code ASCII uses Menlo/Consolas first
+    // and embedded CJK still falls back to PingFang/YaHei.
+    for candidate in preferred.monospace.iter().rev() {
+        let Some(font_data) = load_mmap_font_data(&candidate.path, candidate.postscript_name)
+        else {
+            continue;
+        };
+        ctx.add_font(FontInsert::new(
+            &format!("earth_mono_{}", candidate.postscript_name),
+            font_data,
+            vec![InsertFontFamily {
+                family: FontFamily::Monospace,
+                priority: FontPriority::Highest,
+            }],
+        ));
+    }
+}
+
+fn load_mmap_font_data(path: &Path, target_ps_name: &str) -> Option<FontData> {
+    let file = std::fs::File::open(path).ok()?;
+    // SAFETY: OS system font collections are read-only immutable assets mapped for the app lifetime.
+    let mapped = unsafe { memmap2::Mmap::map(&file).ok()? };
+    let index = find_ttc_face_index(&mapped, target_ps_name);
+    Some(FontData::from_blob(Arc::new(mapped), index))
+}
+
+fn read_u16_be(bytes: &[u8], off: usize) -> Option<u16> {
+    let slice = bytes.get(off..off.checked_add(2)?)?;
+    Some(u16::from_be_bytes([slice[0], slice[1]]))
+}
+
+fn read_u32_be(bytes: &[u8], off: usize) -> Option<u32> {
+    let slice = bytes.get(off..off.checked_add(4)?)?;
+    Some(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+/// Finds the sub-font face index inside a `.ttc` TrueType Collection whose PostScript name
+/// (`nameID == 6`) matches `target_ps_name`, returning `0` if single-face or not found.
+pub(crate) fn find_ttc_face_index(bytes: &[u8], target_ps_name: &str) -> u32 {
+    if bytes.get(0..4) != Some(b"ttcf") {
+        return 0;
+    }
+    let Some(num_fonts) = read_u32_be(bytes, 8) else {
+        return 0;
+    };
+    let count = num_fonts.min(128);
+    for face_idx in 0..count {
+        let Some(face_off_u32) = read_u32_be(bytes, 12 + face_idx as usize * 4) else {
+            break;
+        };
+        if face_postscript_matches(bytes, face_off_u32 as usize, target_ps_name) {
+            return face_idx;
+        }
+    }
+    0
+}
+
+fn face_postscript_matches(bytes: &[u8], face_off: usize, target_ps_name: &str) -> bool {
+    let Some(num_tables) = read_u16_be(bytes, face_off.saturating_add(4)) else {
+        return false;
+    };
+    let records_start = face_off.saturating_add(12);
+    let mut name_table_off = None;
+    for i in 0..num_tables.min(128) as usize {
+        let rec_off = records_start + i * 16;
+        if bytes.get(rec_off..rec_off + 4) == Some(b"name") {
+            name_table_off = read_u32_be(bytes, rec_off + 8).map(|v| v as usize);
+            break;
+        }
+    }
+    let Some(name_off) = name_table_off else {
+        return false;
+    };
+    let Some(name_count) = read_u16_be(bytes, name_off + 2) else {
+        return false;
+    };
+    let Some(str_storage_rel) = read_u16_be(bytes, name_off + 4) else {
+        return false;
+    };
+    let str_storage = name_off.saturating_add(str_storage_rel as usize);
+    let recs_off = name_off.saturating_add(6);
+
+    for i in 0..name_count.min(512) as usize {
+        let r = recs_off + i * 12;
+        let Some(platform_id) = read_u16_be(bytes, r) else {
+            break;
+        };
+        let Some(name_id) = read_u16_be(bytes, r + 6) else {
+            break;
+        };
+        if name_id != 6 {
+            continue;
+        }
+        let (Some(len), Some(rel)) = (read_u16_be(bytes, r + 8), read_u16_be(bytes, r + 10)) else {
+            continue;
+        };
+        let start = str_storage.saturating_add(rel as usize);
+        let Some(raw) = bytes.get(start..start.saturating_add(len as usize)) else {
+            continue;
+        };
+        let matches = if platform_id == 1 {
+            raw == target_ps_name.as_bytes()
+        } else if platform_id == 3 || platform_id == 0 {
+            if raw.len() == target_ps_name.len() * 2 {
+                raw.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .zip(target_ps_name.bytes())
+                    .all(|(pair, b)| pair[0] == 0 && pair[1] == b)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if matches {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crisp_text_options_disable_subpixel_blur_and_tune_gamma_by_dpi() {
+        let light = EarthPalette::resolve(ThemeMode::Light, false);
+        let ctx_1x = egui::Context::default();
+        light.apply_to_ctx(&ctx_1x);
+        let opts_1x = ctx_1x.global_style().visuals.text_options;
+        assert!(opts_1x.font_hinting);
+        assert!(!opts_1x.subpixel_binning);
+        assert_eq!(opts_1x.color_transfer_function, FontColorTransferFunction::Gamma(0.75));
+
+        let ctx_2x = egui::Context::default();
+        let mut raw_2x = egui::RawInput::default();
+        raw_2x
+            .viewports
+            .entry(egui::ViewportId::ROOT)
+            .or_default()
+            .native_pixels_per_point = Some(2.0);
+        let mut out_2x = ctx_2x.run_ui(raw_2x, |ui| {
+            light.apply_to_ctx(ui.ctx());
+        });
+        out_2x.textures_delta.clear();
+        assert_eq!(
+            ctx_2x.global_style().visuals.text_options.color_transfer_function,
+            FontColorTransferFunction::Gamma(0.88)
+        );
+
+        let dark = EarthPalette::resolve(ThemeMode::Dark, true);
+        dark.apply_to_ctx(&ctx_1x);
+        assert_eq!(
+            ctx_1x.global_style().visuals.text_options.color_transfer_function,
+            FontColorTransferFunction::DARK_MODE_DEFAULT
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn install_crisp_fonts_loads_pingfang_and_menlo_with_correct_ttc_indices() {
+        let preferred = crate::platform::preferred_system_fonts();
+        let pf = preferred.ui.first().expect("macOS should resolve primary CJK UI font");
+        let bytes = std::fs::read(&pf.path).unwrap();
+        let idx = find_ttc_face_index(&bytes, pf.postscript_name);
+        if pf.postscript_name == "PingFangSC-Regular" {
+            assert_ne!(idx, 0, "PingFangSC-Regular is not index 0 in PingFang.ttc (got {idx})");
+        }
+
+        let ctx = egui::Context::default();
+        install_crisp_fonts(&ctx);
+        let raw = egui::RawInput::default();
+        let mut out = ctx.run_ui(raw, |ui| {
+            ui.label("测试 Crisp PingFang 字体");
+        });
+        out.textures_delta.clear();
+
+        ctx.fonts(|f| {
+            let prop_primary = f
+                .definitions()
+                .families
+                .get(&FontFamily::Proportional)
+                .and_then(|v| v.first())
+                .cloned();
+            assert_eq!(
+                prop_primary.as_deref(),
+                Some(format!("earth_ui_{}", pf.postscript_name).as_str())
+            );
+            let mono_primary = f
+                .definitions()
+                .families
+                .get(&FontFamily::Monospace)
+                .and_then(|v| v.first())
+                .cloned();
+            assert_eq!(mono_primary.as_deref(), Some("earth_mono_Menlo-Regular"));
+        });
+    }
 }

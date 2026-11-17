@@ -1,5 +1,17 @@
 use crate::model::{ActiveAppInfo, PopupPosition};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Clone)]
+pub struct SystemFontCandidate {
+    pub path: PathBuf,
+    pub postscript_name: &'static str,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PreferredSystemFonts {
+    pub ui: Vec<SystemFontCandidate>,
+    pub monospace: Vec<SystemFontCandidate>,
+}
 
 #[cfg(target_os = "macos")]
 mod macos;
@@ -65,6 +77,10 @@ pub fn reveal_in_file_manager(path: &Path) {
 
 pub fn open_url(url: &str) {
     imp::open_url(url);
+}
+
+pub fn preferred_system_fonts() -> PreferredSystemFonts {
+    imp::preferred_system_fonts()
 }
 
 pub fn sync_autostart(enabled: bool) -> Result<(), String> {

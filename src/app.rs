@@ -13,7 +13,7 @@ use crate::storage::Storage;
 use crate::tray::{EarthTray, TrayAction};
 use crate::ui::popup::{render_popup_view, PopupAction, PopupState, PopupViewData};
 use crate::ui::settings::{render_settings_view, SettingsAction, SettingsState, SettingsViewData};
-use crate::ui::theme::EarthPalette;
+use crate::ui::theme::{install_crisp_fonts, EarthPalette};
 use crate::updater::{
     apply_staged_update_and_restart, spawn_update_check, spawn_update_download, UpdateCheckOutcome,
     UpdateDownloadState, UpdaterEvent,
@@ -59,7 +59,7 @@ pub struct EarthApp {
     prev_app: Option<ActiveAppInfo>,
     quitting: bool,
     dialog_open: bool,
-    last_applied_theme: Option<(ThemeMode, bool)>,
+    last_applied_theme: Option<(ThemeMode, bool, u32)>,
     cached_palette: EarthPalette,
     cached_accessibility: bool,
     last_accessibility_check: Instant,
@@ -68,6 +68,7 @@ pub struct EarthApp {
 impl EarthApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         egui_extras::install_image_loaders(&cc.egui_ctx);
+        install_crisp_fonts(&cc.egui_ctx);
         platform::configure_macos_accessory_mode();
 
         let storage = Storage::open_default().expect("无法初始化 Earth 本地数据库");
@@ -583,7 +584,8 @@ impl eframe::App for EarthApp {
             .system_theme()
             .map(|t| t == egui::Theme::Dark)
             .unwrap_or_else(|| ctx.theme() == egui::Theme::Dark);
-        let theme_key = (self.settings.theme_mode, system_dark);
+        let ppp_key = (ctx.pixels_per_point() * 100.0).round() as u32;
+        let theme_key = (self.settings.theme_mode, system_dark, ppp_key);
         if self.last_applied_theme != Some(theme_key) {
             self.cached_palette = EarthPalette::resolve(self.settings.theme_mode, system_dark);
             self.cached_palette.apply_to_ctx(&ctx);

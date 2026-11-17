@@ -1,12 +1,12 @@
 use crate::model::ActiveAppInfo;
-use crate::platform::ScreenRect;
+use crate::platform::{PreferredSystemFonts, ScreenRect, SystemFontCandidate};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationOptions, NSApplicationActivationPolicy, NSEvent,
     NSRunningApplication, NSScreen, NSWorkspace,
 };
 use std::ffi::c_void;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 type CGEventSourceRef = *mut c_void;
@@ -51,10 +51,39 @@ unsafe extern "C" {
         key_callbacks: *const c_void,
         value_callbacks: *const c_void,
     ) -> *const c_void;
+    fn CFStringCreateWithBytes(
+        alloc: *const c_void,
+        bytes: *const u8,
+        num_bytes: isize,
+        encoding: u32,
+        is_external_representation: bool,
+    ) -> *const c_void;
+    fn CFStringGetCString(
+        the_string: *const c_void,
+        buffer: *mut u8,
+        buffer_size: isize,
+        encoding: u32,
+    ) -> bool;
+    fn CFURLCopyFileSystemPath(url: *const c_void, path_style: isize) -> *const c_void;
     static kCFBooleanTrue: *const c_void;
     static kCFTypeDictionaryKeyCallBacks: c_void;
     static kCFTypeDictionaryValueCallBacks: c_void;
 }
+
+#[link(name = "CoreText", kind = "framework")]
+unsafe extern "C" {
+    fn CTFontCreateWithName(
+        name: *const c_void,
+        size: f64,
+        matrix: *const c_void,
+    ) -> *const c_void;
+    fn CTFontCopyPostScriptName(font: *const c_void) -> *const c_void;
+    fn CTFontCopyAttribute(font: *const c_void, attribute: *const c_void) -> *const c_void;
+    static kCTFontURLAttribute: *const c_void;
+}
+
+const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+const K_CF_URL_POSIX_PATH_STYLE: isize = 0;
 
 struct CfOwned(*mut c_void);
 
@@ -264,6 +293,112 @@ pub fn open_url(url: &str) {
     let _ = Command::new("open").arg(url).spawn();
 }
 
+fn cf_string_to_rust(cf_str: *const c_void) -> Option<String> {
+    if cf_str.is_null() {
+        return None;
+    }
+    let mut buf = vec![0u8; 2048];
+    let ok = unsafe {
+        CFStringGetCString(
+            cf_str,
+            buf.as_mut_ptr(),
+            buf.len() as isize,
+            K_CF_STRING_ENCODING_UTF8,
+        )
+    };
+    if !ok {
+        return None;
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    String::from_utf8(buf[..end].to_vec()).ok()
+}
+
+pub fn resolve_font_path_by_postscript_name(ps_name: &str) -> Option<PathBuf> {
+    let cf_name = unsafe {
+        CFStringCreateWithBytes(
+            std::ptr::null(),
+            ps_name.as_ptr(),
+            ps_name.len() as isize,
+            K_CF_STRING_ENCODING_UTF8,
+            false,
+        )
+    };
+    if cf_name.is_null() {
+        return None;
+    }
+    let _name_guard = CfOwned(cf_name.cast_mut());
+
+    let ct_font = unsafe { CTFontCreateWithName(cf_name, 0.0, std::ptr::null()) };
+    if ct_font.is_null() {
+        return None;
+    }
+    let _font_guard = CfOwned(ct_font.cast_mut());
+
+    let actual_ps = unsafe { CTFontCopyPostScriptName(ct_font) };
+    if actual_ps.is_null() {
+        return None;
+    }
+    let _ps_guard = CfOwned(actual_ps.cast_mut());
+    if cf_string_to_rust(actual_ps).as_deref() != Some(ps_name) {
+        return None;
+    }
+
+    let url_ref = unsafe { CTFontCopyAttribute(ct_font, kCTFontURLAttribute) };
+    if url_ref.is_null() {
+        return None;
+    }
+    let _url_guard = CfOwned(url_ref.cast_mut());
+
+    let path_cf = unsafe { CFURLCopyFileSystemPath(url_ref, K_CF_URL_POSIX_PATH_STYLE) };
+    if path_cf.is_null() {
+        return None;
+    }
+    let _path_guard = CfOwned(path_cf.cast_mut());
+
+    let path = PathBuf::from(cf_string_to_rust(path_cf)?);
+    path.is_file().then_some(path)
+}
+
+pub fn preferred_system_fonts() -> PreferredSystemFonts {
+    let mut ui = Vec::new();
+    for (ps, fallback_path) in [
+        ("PingFangSC-Regular", None),
+        (
+            "HiraginoSansGB-W3",
+            Some("/System/Library/Fonts/Hiragino Sans GB.ttc"),
+        ),
+        (
+            "ArialUnicodeMS",
+            Some("/Library/Fonts/Arial Unicode.ttf"),
+        ),
+    ] {
+        let resolved = resolve_font_path_by_postscript_name(ps).or_else(|| {
+            fallback_path
+                .map(PathBuf::from)
+                .filter(|p| p.is_file())
+        });
+        if let Some(path) = resolved {
+            ui.push(SystemFontCandidate {
+                path,
+                postscript_name: ps,
+            });
+            break;
+        }
+    }
+
+    let mut monospace = Vec::new();
+    if let Some(path) = resolve_font_path_by_postscript_name("Menlo-Regular")
+        .or_else(|| Some(PathBuf::from("/System/Library/Fonts/Menlo.ttc")).filter(|p| p.is_file()))
+    {
+        monospace.push(SystemFontCandidate {
+            path,
+            postscript_name: "Menlo-Regular",
+        });
+    }
+
+    PreferredSystemFonts { ui, monospace }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,5 +414,14 @@ mod tests {
         })
         .join()
         .expect("worker thread panicked while building paste events");
+    }
+
+    #[test]
+    fn resolves_pingfang_and_menlo_via_coretext() {
+        let fonts = preferred_system_fonts();
+        assert!(!fonts.ui.is_empty(), "expected macOS UI font candidate");
+        assert!(fonts.ui[0].path.is_file());
+        assert!(!fonts.monospace.is_empty(), "expected macOS Menlo font candidate");
+        assert!(fonts.monospace[0].path.is_file());
     }
 }

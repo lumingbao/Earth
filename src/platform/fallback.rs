@@ -1,6 +1,6 @@
 use crate::model::ActiveAppInfo;
-use crate::platform::ScreenRect;
-use std::path::Path;
+use crate::platform::{PreferredSystemFonts, ScreenRect, SystemFontCandidate};
+use std::path::{Path, PathBuf};
 
 pub fn capture_frontmost_app() -> Option<ActiveAppInfo> {
     None
@@ -45,4 +45,26 @@ pub fn reveal_in_file_manager(path: &Path) {
 
 pub fn open_url(url: &str) {
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
+pub fn preferred_system_fonts() -> PreferredSystemFonts {
+    let mut ui = Vec::new();
+    for (path, ps) in [
+        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "NotoSansCJKsc-Regular"),
+        ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", "NotoSansCJKsc-Regular"),
+        ("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", "WenQuanYiMicroHei"),
+    ] {
+        let p = PathBuf::from(path);
+        if p.is_file() {
+            ui.push(SystemFontCandidate {
+                path: p,
+                postscript_name: ps,
+            });
+            break;
+        }
+    }
+    PreferredSystemFonts {
+        ui,
+        monospace: Vec::new(),
+    }
 }

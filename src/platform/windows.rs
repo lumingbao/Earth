@@ -1,7 +1,7 @@
 use crate::model::ActiveAppInfo;
-use crate::platform::ScreenRect;
+use crate::platform::{PreferredSystemFonts, ScreenRect, SystemFontCandidate};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, POINT, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
@@ -173,4 +173,36 @@ pub fn reveal_in_file_manager(path: &Path) {
 
 pub fn open_url(url: &str) {
     let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
+}
+
+pub fn preferred_system_fonts() -> PreferredSystemFonts {
+    let windir = std::env::var_os("WINDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
+    let fonts_dir = windir.join("Fonts");
+
+    let mut ui = Vec::new();
+    for (file, ps) in [
+        ("segoeui.ttf", "SegoeUI"),
+        ("msyh.ttc", "MicrosoftYaHei"),
+    ] {
+        let p = fonts_dir.join(file);
+        if p.is_file() {
+            ui.push(SystemFontCandidate {
+                path: p,
+                postscript_name: ps,
+            });
+        }
+    }
+
+    let mut monospace = Vec::new();
+    let consolas = fonts_dir.join("consola.ttf");
+    if consolas.is_file() {
+        monospace.push(SystemFontCandidate {
+            path: consolas,
+            postscript_name: "Consolas",
+        });
+    }
+
+    PreferredSystemFonts { ui, monospace }
 }
