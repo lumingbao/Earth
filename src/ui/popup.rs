@@ -1241,7 +1241,7 @@ fn render_item_row(
                             .inner_margin(egui::Margin::symmetric(6, 1))
                             .show(ui, |ui| {
                                 ui.label(
-                                    RichText::new(format!("🏷 {short_note}"))
+                                    RichText::new(short_note)
                                         .size(10.5)
                                         .color(palette.accent_text),
                                 );
@@ -1727,11 +1727,6 @@ fn render_preview_pane(
                 let mut cancel_note = false;
                 if let Some((_, ref mut note_buf)) = state.inline_edit_note {
                     ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new("🏷")
-                                .size(12.0)
-                                .color(palette.accent_text),
-                        );
                         let edit_w = (ui.available_width() - 116.0).max(80.0);
                         let resp = ui
                             .scope(|ui| {
@@ -1779,7 +1774,7 @@ fn render_preview_pane(
                 ui.add_space(2.0);
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!("🏷 备注：{note}"))
+                        RichText::new(format!("备注：{note}"))
                             .size(11.5)
                             .color(palette.accent_text),
                     );
