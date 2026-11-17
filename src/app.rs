@@ -601,6 +601,7 @@ impl eframe::App for EarthApp {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
+                handle_background_window_drag(ui, &ctx, panel_rect, "earth_window_drag_bg");
                 let outer_rect = panel_rect.shrink(1.0);
                 ui.painter().rect_filled(
                     outer_rect,
@@ -1062,5 +1063,174 @@ impl eframe::App for EarthApp {
             });
 
         self.sync_window_size(&ctx);
+    }
+}
+
+/// Registers a lowest-priority drag surface behind UI content so dragging anywhere outside
+/// widgets that genuinely consume drag (such as text inputs, scrollbars, and numeric steppers)
+/// moves the borderless window cleanly without breaking clicks.
+pub(crate) fn handle_background_window_drag(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    rect: egui::Rect,
+    id_salt: &str,
+) {
+    let resp = ui.interact(
+        rect,
+        ui.scope_id().with(id_salt),
+        egui::Sense::click_and_drag(),
+    );
+    if resp.drag_started() {
+        ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+        // Clear egui's active drag lock because Cocoa/OS takes over the pointer loop.
+        ctx.stop_dragging();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::handle_background_window_drag;
+    use egui::{pos2, vec2, Modifiers, ViewportCommand, ViewportId};
+
+    fn run_drag_sequence(
+        ctx: &egui::Context,
+        base_time: &mut f64,
+        start: egui::Pos2,
+        end: egui::Pos2,
+        release: bool,
+        mut build_ui: impl FnMut(&mut egui::Ui),
+    ) -> bool {
+        *base_time += 1.0;
+        let mut start_drag_emitted = false;
+        let mut steps = vec![
+            (0.0, vec![egui::Event::PointerMoved(start)]),
+            (
+                0.02,
+                vec![egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Modifiers::NONE,
+                }],
+            ),
+            (0.04, vec![egui::Event::PointerMoved(end)]),
+        ];
+        if release {
+            steps.push((
+                0.06,
+                vec![egui::Event::PointerButton {
+                    pos: end,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Modifiers::NONE,
+                }],
+            ));
+        }
+
+        for (t, events) in steps {
+            let raw = egui::RawInput {
+                time: Some(*base_time + t),
+                screen_rect: Some(egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(424.0, 520.0))),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                #[allow(deprecated)]
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show_inside(ui, |ui| {
+                        let rect = ctx.content_rect();
+                        handle_background_window_drag(ui, ctx, rect, "test_drag_bg");
+                        build_ui(ui);
+                    });
+            });
+            if let Some(vp) = out.viewport_output.get(&ViewportId::ROOT)
+                && vp
+                    .commands
+                    .iter()
+                    .any(|cmd| matches!(cmd, ViewportCommand::StartDrag))
+            {
+                start_drag_emitted = true;
+            }
+            out.textures_delta.clear();
+        }
+        start_drag_emitted
+    }
+
+    #[test]
+    fn background_drag_moves_window_from_empty_and_clickable_areas_without_breaking_clicks() {
+        let ctx = egui::Context::default();
+        let mut text = "hello world".to_string();
+        let mut clicked_count = 0usize;
+        let mut base_time = 10.0;
+
+        // 1. Dragging blank background starts window drag.
+        let started_blank = run_drag_sequence(
+            &ctx,
+            &mut base_time,
+            pos2(300.0, 400.0),
+            pos2(320.0, 415.0),
+            true,
+            |ui| {
+                ui.add(egui::TextEdit::singleline(&mut text).desired_width(120.0));
+                if ui.button("Action").clicked() {
+                    clicked_count += 1;
+                }
+            },
+        );
+        assert!(started_blank, "dragging empty space should start window drag");
+        assert_eq!(clicked_count, 0);
+
+        // 2. Normal click on a button activates it without starting window drag.
+        let started_click = run_drag_sequence(
+            &ctx,
+            &mut base_time,
+            pos2(30.0, 42.0),
+            pos2(31.0, 42.0),
+            true,
+            |ui| {
+                ui.add(egui::TextEdit::singleline(&mut text).desired_width(120.0));
+                if ui.button("Action").clicked() {
+                    clicked_count += 1;
+                }
+            },
+        );
+        assert!(!started_click, "normal button click must not trigger StartDrag");
+        assert_eq!(clicked_count, 1);
+
+        // 3. Pressing and dragging (> 6px) starting on a button drags the window and cancels the click.
+        let started_btn_drag = run_drag_sequence(
+            &ctx,
+            &mut base_time,
+            pos2(30.0, 42.0),
+            pos2(55.0, 42.0),
+            false,
+            |ui| {
+                ui.add(egui::TextEdit::singleline(&mut text).desired_width(120.0));
+                if ui.button("Action").clicked() {
+                    clicked_count += 1;
+                }
+            },
+        );
+        assert!(started_btn_drag, "dragging across a button should start window drag");
+        assert_eq!(clicked_count, 1);
+
+        // 4. Dragging inside a TextEdit selects text rather than dragging the window.
+        let ctx_text = egui::Context::default();
+        let mut text_time = 10.0;
+        let started_text_edit = run_drag_sequence(
+            &ctx_text,
+            &mut text_time,
+            pos2(20.0, 14.0),
+            pos2(80.0, 14.0),
+            false,
+            |ui| {
+                ui.add(egui::TextEdit::singleline(&mut text).desired_width(120.0));
+            },
+        );
+        assert!(
+            !started_text_edit,
+            "dragging inside TextEdit must keep text selection instead of dragging window"
+        );
     }
 }

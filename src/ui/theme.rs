@@ -181,6 +181,8 @@ impl EarthPalette {
         style.spacing.button_padding = egui::vec2(14.0, 6.0);
         style.spacing.scroll.bar_width = 5.0;
         style.spacing.scroll.bar_inner_margin = 2.0;
+        // Disable accidental label text selection so dragging anywhere across UI labels moves the window
+        style.interaction.selectable_labels = false;
 
         ctx.set_theme(if self.is_dark {
             egui::Theme::Dark
@@ -232,6 +234,16 @@ pub fn dismiss_button(ui: &mut Ui) -> egui::Response {
         egui::Button::new("×").corner_radius(CornerRadius::same(255)),
         egui::vec2(7.0, 3.0),
     )
+}
+
+/// Keeps mouse-wheel/trackpad and scrollbar-handle scrolling active while letting
+/// content drags bubble through to window dragging.
+pub fn desktop_scroll_source() -> egui::scroll_area::ScrollSource {
+    egui::scroll_area::ScrollSource {
+        scroll_bar: true,
+        drag: egui::scroll_area::DragScroll::Never,
+        mouse_wheel: true,
+    }
 }
 
 pub fn build_highlighted_layout_job(

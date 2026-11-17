@@ -14,8 +14,8 @@ use crate::ui::icons::{
     icon_button,
 };
 use crate::ui::theme::{
-    build_highlighted_layout_job, card_shadow, compact_button, dismiss_button, padded_button,
-    parse_hex_color32, EarthPalette,
+    build_highlighted_layout_job, card_shadow, compact_button, desktop_scroll_source,
+    dismiss_button, padded_button, parse_hex_color32, EarthPalette,
 };
 use crate::updater::{ReleaseInfo, UpdateDownloadState, CURRENT_VERSION};
 use chrono::{DateTime, Local};
@@ -724,9 +724,10 @@ fn render_header(
         let emblem_resp = draw_earth_emblem(ui, 24.0, palette, settings.paused);
         if emblem_resp.drag_started() {
             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            ctx.stop_dragging();
         }
         if emblem_resp.hovered() {
-            emblem_resp.on_hover_text("拖动移动窗口");
+            emblem_resp.on_hover_text("拖动移动窗口（界面任意位置均可拖动）");
         }
 
         let show_search = settings.search_box_visibility == SearchBoxVisibility::Always
@@ -935,6 +936,7 @@ fn render_filter_strip(
         .id_salt("earth_filter_capsules")
         .max_width(strip_w)
         .auto_shrink([false, true])
+        .scroll_source(desktop_scroll_source())
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -1062,6 +1064,7 @@ fn render_items_list(
     ScrollArea::vertical()
         .id_salt("earth_history_scroll")
         .auto_shrink([false, false])
+        .scroll_source(desktop_scroll_source())
         .max_width(list_avail_w)
         .show_viewport(ui, |ui, viewport| {
             ui.set_max_width(list_avail_w);
@@ -1394,10 +1397,6 @@ fn render_item_row(
         egui::StrokeKind::Inside,
     );
 
-    let primary_pressed =
-        (resp.is_pointer_button_down_on() || pointer_in_row)
-            && ui.input(|i| i.pointer.primary_pressed());
-
     match settings.copy_trigger_mode {
         CopyTriggerMode::DoubleClick => {
             if resp.double_clicked() {
@@ -1410,8 +1409,8 @@ fn render_item_row(
                     id: item.id,
                     behavior,
                 });
-            } else if primary_pressed || resp.clicked() {
-                // Single click: select the record and expand the quick-peek workbench immediately on press
+            } else if resp.clicked() {
+                // Single click: select the record and expand the quick-peek workbench (skip when dragging window)
                 if state.selected_id != Some(item.id) {
                     state.selected_id = Some(item.id);
                     state.selection_changed_at = Instant::now();
@@ -1824,6 +1823,7 @@ fn render_preview_pane(
                 .id_salt(("preview_body", item.id))
                 .max_height(body_h)
                 .auto_shrink([false, false])
+                .scroll_source(desktop_scroll_source())
                 .show(ui, |ui| {
                     ui.set_min_height(body_h);
                     match item.kind {
@@ -2103,6 +2103,7 @@ fn render_preview_pane(
                                             ScrollArea::vertical()
                                                 .id_salt("qa_result_scroll")
                                                 .max_height(56.0)
+                                                .scroll_source(desktop_scroll_source())
                                                 .show(ui, |ui| {
                                                     ui.add(
                                                         egui::Label::new(
@@ -2634,9 +2635,18 @@ fn render_about_overlay(ctx: &egui::Context, state: &mut PopupState, palette: &E
         .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
         .fixed_size(vec2(280.0, 158.0))
         .show(ctx, |ui| {
+            crate::app::handle_background_window_drag(
+                ui,
+                ctx,
+                ui.max_rect(),
+                "earth_about_modal_drag",
+            );
             ui.vertical_centered(|ui| {
                 ui.add_space(4.0);
-                draw_earth_emblem(ui, 42.0, palette, false);
+                if draw_earth_emblem(ui, 42.0, palette, false).drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                    ctx.stop_dragging();
+                }
                 ui.add_space(6.0);
                 ui.label(RichText::new("Earth 剪贴板").size(16.0).strong());
                 ui.label(
@@ -3630,5 +3640,197 @@ mod tests {
                 "keycap pill stretched too tall: {kh} in {keycap_heights:?}"
             );
         }
+    }
+
+    #[test]
+    fn popup_can_be_dragged_from_rows_footer_and_empty_space_but_not_search_text_edit() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        let mut settings = AppSettings {
+            copy_trigger_mode: CopyTriggerMode::DoubleClick,
+            ..Default::default()
+        };
+        let collections = Vec::new();
+        let results = vec![SearchResultItem {
+            item: ClipItem {
+                id: 1,
+                content_hash: "h1".into(),
+                kind: ClipKind::Text,
+                text_content: Some("drag test clipboard record".into()),
+                html_content: None,
+                rtf_content: None,
+                image_path: None,
+                thumb_path: None,
+                image_width: None,
+                image_height: None,
+                files: Vec::new(),
+                byte_size: 25,
+                source_app: Some("Notes".into()),
+                source_bundle_id: None,
+                pinned: false,
+                collection_id: None,
+                first_copied_at: 0,
+                last_copied_at: 0,
+                copy_count: 1,
+                note: None,
+                is_url: false,
+                detected_color: None,
+                sensitive_label: None,
+            },
+            score: 0,
+            matched_indices: HashSet::new(),
+        }];
+        let mut state = PopupState {
+            search_query: "drag".into(),
+            ..Default::default()
+        };
+
+        let mut sim_time = 20.0f64;
+        let mut run_pointer = |ctx: &egui::Context,
+                               settings: &mut AppSettings,
+                               state: &mut PopupState,
+                               start: egui::Pos2,
+                               end: egui::Pos2|
+         -> (bool, Vec<PopupAction>) {
+            let mut dragged = false;
+            let mut collected_actions = Vec::new();
+            for (dt, events) in [
+                (0.0, vec![egui::Event::PointerMoved(start)]),
+                (
+                    0.02,
+                    vec![egui::Event::PointerButton {
+                        pos: start,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: Modifiers::NONE,
+                    }],
+                ),
+                (0.04, vec![egui::Event::PointerMoved(end)]),
+                (
+                    0.06,
+                    vec![egui::Event::PointerButton {
+                        pos: end,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: Modifiers::NONE,
+                    }],
+                ),
+            ] {
+                let raw = egui::RawInput {
+                    time: Some(sim_time + dt),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::pos2(0.0, 0.0),
+                        vec2(424.0, 520.0),
+                    )),
+                    events,
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(raw, |ui| {
+                    #[allow(deprecated)]
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show_inside(ui, |ui| {
+                            let panel_rect = ctx.content_rect();
+                            crate::app::handle_background_window_drag(
+                                ui,
+                                ctx,
+                                panel_rect,
+                                "test_popup_drag_bg",
+                            );
+                            let content_rect = panel_rect.shrink(13.0);
+                            ui.scope_builder(
+                                egui::UiBuilder::new()
+                                    .max_rect(content_rect)
+                                    .layout(Layout::top_down(Align::Min)),
+                                |ui| {
+                                    ui.set_min_size(content_rect.size());
+                                    ui.set_max_size(content_rect.size());
+                                    let actions = render_popup_view(
+                                        ui,
+                                        ctx,
+                                        PopupViewData {
+                                            settings,
+                                            results: &results,
+                                            collections: &collections,
+                                            palette: &palette,
+                                            storage_bytes: 25,
+                                            total_items: 1,
+                                            has_accessibility: true,
+                                        },
+                                        state,
+                                    );
+                                    collected_actions.extend(actions);
+                                },
+                            );
+                        });
+                });
+                if let Some(vp) = out.viewport_output.get(&egui::ViewportId::ROOT)
+                    && vp
+                        .commands
+                        .iter()
+                        .any(|cmd| matches!(cmd, egui::ViewportCommand::StartDrag))
+                {
+                    dragged = true;
+                }
+                out.textures_delta.clear();
+            }
+            sim_time += 1.0;
+            (dragged, collected_actions)
+        };
+
+        // Prime first frame so layout rects exist.
+        let _ = run_pointer(
+            &ctx,
+            &mut settings,
+            &mut state,
+            egui::pos2(418.0, 418.0),
+            egui::pos2(418.0, 418.0),
+        );
+
+        // 1. Drag inside search input box keeps text selection (no window StartDrag).
+        let (drag_search, _) = run_pointer(
+            &ctx,
+            &mut settings,
+            &mut state,
+            egui::pos2(120.0, 26.0),
+            egui::pos2(160.0, 26.0),
+        );
+        assert!(!drag_search, "search TextEdit should keep text selection drag");
+
+        // 2. Dragging starting on a clipboard row drags window without opening preview or pasting.
+        let (drag_row, row_actions) = run_pointer(
+            &ctx,
+            &mut settings,
+            &mut state,
+            egui::pos2(120.0, 100.0),
+            egui::pos2(160.0, 120.0),
+        );
+        assert!(drag_row, "dragging on a clipboard row should drag window");
+        assert!(!state.preview_open, "dragging row must not open workbench");
+        assert!(row_actions.is_empty(), "dragging row must not paste or run actions");
+
+        // 3. Dragging on the footer bar / stats label drags window.
+        let (drag_footer, footer_actions) = run_pointer(
+            &ctx,
+            &mut settings,
+            &mut state,
+            egui::pos2(50.0, 492.0),
+            egui::pos2(90.0, 492.0),
+        );
+        assert!(drag_footer, "dragging on footer area should drag window");
+        assert!(footer_actions.is_empty());
+
+        // 4. Plain click on the clipboard row (without dragging) still opens workbench.
+        let (click_row_drag, _) = run_pointer(
+            &ctx,
+            &mut settings,
+            &mut state,
+            egui::pos2(120.0, 100.0),
+            egui::pos2(121.0, 100.0),
+        );
+        assert!(!click_row_drag, "clicking row must not emit StartDrag");
+        assert!(state.preview_open, "clicking row should still open workbench");
     }
 }

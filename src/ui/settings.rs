@@ -4,7 +4,8 @@ use crate::model::{
     PopupPosition, SearchBoxVisibility, SearchMode, SortOrder, ThemeMode,
 };
 use crate::ui::theme::{
-    card_shadow, compact_button, dismiss_button, padded_button, parse_hex_color32, EarthPalette,
+    card_shadow, compact_button, desktop_scroll_source, dismiss_button, padded_button,
+    parse_hex_color32, EarthPalette,
 };
 use crate::updater::{ReleaseInfo, UpdateDownloadState};
 use egui::{vec2, Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
@@ -171,6 +172,7 @@ pub fn render_settings_view(
         );
         if drag_resp.drag_started() {
             ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            ctx.stop_dragging();
         }
         ui.painter().text(
             drag_resp.rect.center(),
@@ -280,6 +282,7 @@ pub fn render_settings_view(
     }
 
     ScrollArea::vertical()
+        .scroll_source(desktop_scroll_source())
         .auto_shrink([false, false])
         .show(ui, |ui| match state.active_tab {
             SettingsTab::General => {
