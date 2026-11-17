@@ -79,15 +79,19 @@ impl EarthTray {
             ctx_m.request_repaint();
         }));
 
-        let rgba = build_earth_tray_rgba(32, paused);
-        let icon = Icon::from_rgba(rgba, 32, 32)
-            .map_err(|e| format!("创建托盘图标失败: {e}"))?;
+        let icon = build_tray_icon(paused)?;
 
-        let tray_icon = TrayIconBuilder::new()
+        let builder = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
-            .with_tooltip("Earth — 跨平台智能剪贴板")
-            .with_icon(icon)
+            .with_tooltip("Earth — 跨平台智能剪贴板");
+
+        #[cfg(target_os = "macos")]
+        let builder = builder.with_icon_templated(icon);
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.with_icon(icon);
+
+        let tray_icon = builder
             .build()
             .map_err(|e| format!("创建系统托盘失败: {e}"))?;
 
@@ -136,8 +140,10 @@ impl EarthTray {
         }
         if paused != self.last_paused {
             self.pause_item.set_checked(paused);
-            let rgba = build_earth_tray_rgba(32, paused);
-            if let Ok(icon) = Icon::from_rgba(rgba, 32, 32) {
+            if let Ok(icon) = build_tray_icon(paused) {
+                #[cfg(target_os = "macos")]
+                let _ = self.tray_icon.set_icon_templated(Some(icon));
+                #[cfg(not(target_os = "macos"))]
                 let _ = self.tray_icon.set_icon(Some(icon));
             }
             self.last_paused = paused;
@@ -293,4 +299,153 @@ pub fn build_earth_tray_rgba(size: u32, paused: bool) -> Vec<u8> {
         }
     }
     data
+}
+
+fn build_tray_icon(paused: bool) -> Result<Icon, String> {
+    #[cfg(target_os = "macos")]
+    const TRAY_ICON_SIZE: u32 = 44; // 2x Retina for 22pt macOS status bar cap
+    #[cfg(not(target_os = "macos"))]
+    const TRAY_ICON_SIZE: u32 = 32;
+
+    let rgba = build_earth_tray_monochrome_rgba(TRAY_ICON_SIZE, paused);
+    Icon::from_rgba(rgba, TRAY_ICON_SIZE, TRAY_ICON_SIZE)
+        .map_err(|e| format!("创建托盘图标失败: {e}"))
+}
+
+fn aa_fill(dist: f32, radius: f32) -> f32 {
+    (radius + 0.5 - dist).clamp(0.0, 1.0)
+}
+
+fn aa_stroke(dist: f32, half_width: f32) -> f32 {
+    (half_width + 0.5 - dist).clamp(0.0, 1.0)
+}
+
+fn ellipse_dist(x: f32, y: f32, rx: f32, ry: f32) -> f32 {
+    let nx = x / rx;
+    let ny = y / ry;
+    let f = nx * nx + ny * ny - 1.0;
+    let gx = (2.0 * x) / (rx * rx);
+    let gy = (2.0 * y) / (ry * ry);
+    let grad = (gx * gx + gy * gy).sqrt();
+    if grad < 1e-5 {
+        rx.min(ry)
+    } else {
+        f.abs() / grad
+    }
+}
+
+/// Generates an anti-aliased monochrome white Earth globe + orbital ring silhouette
+/// suitable for macOS menu bar template rendering (`isTemplate = true`).
+pub fn build_earth_tray_monochrome_rgba(size: u32, paused: bool) -> Vec<u8> {
+    let mut data = vec![0u8; (size * size * 4) as usize];
+    let s = size as f32;
+    let center = (s - 1.0) * 0.5;
+    let radius = s * 0.31;
+    let orbit_rx = s * 0.45;
+    let orbit_ry = s * 0.13;
+
+    let w_outer = (s * 0.032).max(0.9);
+    let w_orbit = (s * 0.029).max(0.85);
+    let w_inner = (s * 0.021).max(0.65);
+    let w_gap = (s * 0.028).max(0.9);
+
+    let angle = -0.50f32;
+    let cos_a = angle.cos();
+    let sin_a = angle.sin();
+    let opacity = if paused { 0.50 } else { 1.0 };
+
+    for y in 0..size {
+        for x in 0..size {
+            let dx = x as f32 - center;
+            let dy = y as f32 - center;
+            let dist = (dx * dx + dy * dy).sqrt();
+
+            // Globe outline + interior meridian/equator lines clipped cleanly to the sphere.
+            let outer_cov = aa_stroke((dist - radius).abs(), w_outer);
+            let globe_fill = aa_fill(dist, radius);
+            let mer_cov = aa_stroke(ellipse_dist(dx, dy, radius * 0.47, radius), w_inner) * globe_fill;
+            let eq_cov = aa_stroke(dy.abs(), w_inner) * globe_fill;
+            let globe_cov = outer_cov.max(mer_cov).max(eq_cov);
+
+            // Tilted orbital ring (-28.6 deg) with negative-space cutouts separating front and back arcs.
+            let rx = dx * cos_a - dy * sin_a;
+            let ry = dx * sin_a + dy * cos_a;
+            let d_orbit = ellipse_dist(rx, ry, orbit_rx, orbit_ry);
+            let orbit_cov = aa_stroke(d_orbit, w_orbit);
+
+            let (front_orbit, back_orbit, front_halo) = if ry > 0.0 {
+                (orbit_cov, 0.0, aa_stroke(d_orbit, w_orbit + w_gap))
+            } else {
+                let outside_globe = 1.0 - aa_fill(dist, radius + w_outer + w_gap);
+                (0.0, orbit_cov * outside_globe, 0.0)
+            };
+
+            let globe_masked = globe_cov * (1.0 - front_halo);
+            let cov = globe_masked.max(front_orbit).max(back_orbit);
+            let alpha = (cov * opacity * 255.0).round().clamp(0.0, 255.0) as u8;
+
+            if alpha > 0 {
+                let idx = ((y * size + x) * 4) as usize;
+                data[idx] = 255;
+                data[idx + 1] = 255;
+                data[idx + 2] = 255;
+                data[idx + 3] = alpha;
+            }
+        }
+    }
+    data
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_earth_tray_monochrome_rgba, build_earth_tray_rgba};
+
+    #[test]
+    fn monochrome_tray_icon_is_pure_white_with_alpha_silhouette() {
+        let active = build_earth_tray_monochrome_rgba(44, false);
+        assert_eq!(active.len(), 44 * 44 * 4);
+
+        let mut visible_pixels = 0usize;
+        let mut transparent_pixels = 0usize;
+        for px in active.as_chunks::<4>().0 {
+            if px[3] == 0 {
+                transparent_pixels += 1;
+                assert_eq!(*px, [0, 0, 0, 0]);
+            } else {
+                visible_pixels += 1;
+                assert_eq!(&px[..3], &[255, 255, 255]);
+            }
+        }
+        assert!(visible_pixels > 150);
+        assert!(transparent_pixels > 1000);
+
+        let paused = build_earth_tray_monochrome_rgba(44, true);
+        let active_max_a = active
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|px| px[3])
+            .max()
+            .unwrap_or(0);
+        let paused_max_a = paused
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|px| px[3])
+            .max()
+            .unwrap_or(0);
+        assert_eq!(active_max_a, 255);
+        assert!(paused_max_a < 130 && paused_max_a > 90);
+    }
+
+    #[test]
+    fn window_earth_icon_stays_colorful() {
+        let rgba = build_earth_tray_rgba(64, false);
+        let has_color = rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|px| px[3] > 200 && (px[0] != px[1] || px[1] != px[2]));
+        assert!(has_color);
+    }
 }
