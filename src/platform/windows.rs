@@ -126,15 +126,16 @@ fn system_dpi_scale() -> f32 {
     }
 }
 
-pub fn get_cursor_and_monitor_bounds(dpi_scale: f32) -> ((f32, f32), ScreenRect) {
-    let scale = if dpi_scale > 0.1 {
+fn resolve_dpi_scale(dpi_scale: f32) -> f32 {
+    if dpi_scale > 0.1 {
         dpi_scale
     } else {
         system_dpi_scale()
-    };
+    }
+}
+
+fn monitor_bounds_at_physical_point(pt: POINT, scale: f32) -> ScreenRect {
     unsafe {
-        let mut pt = POINT { x: 0, y: 0 };
-        let _ = GetCursorPos(&mut pt);
         let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -156,15 +157,39 @@ pub fn get_cursor_and_monitor_bounds(dpi_scale: f32) -> ((f32, f32), ScreenRect)
             GetMonitorInfoW(hmon, &mut info);
         }
         let work = info.rcWork;
-        let rect = ScreenRect {
+        ScreenRect {
             x: work.left as f32 / scale,
             y: work.top as f32 / scale,
             width: (work.right - work.left) as f32 / scale,
             height: (work.bottom - work.top) as f32 / scale,
-        };
-        ((pt.x as f32 / scale, pt.y as f32 / scale), rect)
+        }
     }
 }
+
+pub fn get_cursor_and_monitor_bounds(dpi_scale: f32) -> ((f32, f32), ScreenRect) {
+    let scale = resolve_dpi_scale(dpi_scale);
+    let mut pt = POINT { x: 0, y: 0 };
+    unsafe {
+        let _ = GetCursorPos(&mut pt);
+    }
+    (
+        (pt.x as f32 / scale, pt.y as f32 / scale),
+        monitor_bounds_at_physical_point(pt, scale),
+    )
+}
+
+pub fn monitor_bounds_for_point(x: f32, y: f32, dpi_scale: f32) -> ScreenRect {
+    let scale = resolve_dpi_scale(dpi_scale);
+    let pt = POINT {
+        x: (x * scale).round() as i32,
+        y: (y * scale).round() as i32,
+    };
+    monitor_bounds_at_physical_point(pt, scale)
+}
+
+pub fn invalidate_window_shadow() {}
+
+pub fn set_window_resize_anchor_right(_anchor_right: bool) {}
 
 pub fn reveal_in_file_manager(path: &Path) {
     let arg = format!("/select,{}", path.display());

@@ -1,10 +1,14 @@
 use crate::model::ActiveAppInfo;
 use crate::platform::{PreferredSystemFonts, ScreenRect, SystemFontCandidate};
+use objc2::rc::Retained;
+use objc2::runtime::ProtocolObject;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationOptions, NSApplicationActivationPolicy, NSEvent,
-    NSRunningApplication, NSScreen, NSWorkspace,
+    NSRunningApplication, NSScreen, NSViewLayerContentsPlacement, NSWindow, NSWorkspace,
 };
+use objc2_foundation::{ns_string, NSDictionary, NSNull};
+use objc2_quartz_core::{CAAction, CATransaction, kCAGravityLeft, kCAGravityRight};
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -236,6 +240,43 @@ pub fn hide_self_app() {
     }
 }
 
+fn screen_bounds_at_cocoa_point(mtm: MainThreadMarker, pt: objc2_foundation::NSPoint) -> ScreenRect {
+    let fallback_rect = ScreenRect {
+        x: 0.0,
+        y: 0.0,
+        width: 1440.0,
+        height: 900.0,
+    };
+
+    let screens = NSScreen::screens(mtm);
+    if screens.is_empty() {
+        return fallback_rect;
+    }
+
+    let primary_height = screens.objectAtIndex(0).frame().size.height;
+    let to_screen_rect = |screen: objc2::rc::Retained<NSScreen>| {
+        let vis = screen.visibleFrame();
+        ScreenRect {
+            x: vis.origin.x as f32,
+            y: (primary_height - (vis.origin.y + vis.size.height)) as f32,
+            width: vis.size.width as f32,
+            height: vis.size.height as f32,
+        }
+    };
+
+    for i in 0..screens.len() {
+        let screen = screens.objectAtIndex(i);
+        let frame = screen.frame();
+        let in_x = pt.x >= frame.origin.x && pt.x <= frame.origin.x + frame.size.width;
+        let in_y = pt.y >= frame.origin.y && pt.y <= frame.origin.y + frame.size.height;
+        if in_x && in_y {
+            return to_screen_rect(screen);
+        }
+    }
+
+    to_screen_rect(screens.objectAtIndex(0))
+}
+
 pub fn get_cursor_and_monitor_bounds(_dpi_scale: f32) -> ((f32, f32), ScreenRect) {
     let fallback_rect = ScreenRect {
         x: 0.0,
@@ -257,32 +298,90 @@ pub fn get_cursor_and_monitor_bounds(_dpi_scale: f32) -> ((f32, f32), ScreenRect
     let primary_height = screens.objectAtIndex(0).frame().size.height;
     let cursor_x = mouse.x as f32;
     let cursor_y = (primary_height - mouse.y) as f32;
+    ((cursor_x, cursor_y), screen_bounds_at_cocoa_point(mtm, mouse))
+}
 
-    for i in 0..screens.len() {
-        let screen = screens.objectAtIndex(i);
-        let frame = screen.frame();
-        let in_x = mouse.x >= frame.origin.x && mouse.x <= frame.origin.x + frame.size.width;
-        let in_y = mouse.y >= frame.origin.y && mouse.y <= frame.origin.y + frame.size.height;
-        if in_x && in_y {
-            let vis = screen.visibleFrame();
-            let rect = ScreenRect {
-                x: vis.origin.x as f32,
-                y: (primary_height - (vis.origin.y + vis.size.height)) as f32,
-                width: vis.size.width as f32,
-                height: vis.size.height as f32,
-            };
-            return ((cursor_x, cursor_y), rect);
+pub fn monitor_bounds_for_point(x: f32, y: f32, _dpi_scale: f32) -> ScreenRect {
+    let fallback_rect = ScreenRect {
+        x: 0.0,
+        y: 0.0,
+        width: 1440.0,
+        height: 900.0,
+    };
+    let Some(mtm) = MainThreadMarker::new() else {
+        return fallback_rect;
+    };
+    let screens = NSScreen::screens(mtm);
+    if screens.is_empty() {
+        return fallback_rect;
+    }
+    let primary_height = screens.objectAtIndex(0).frame().size.height;
+    let pt = objc2_foundation::NSPoint::new(x as f64, primary_height - y as f64);
+    screen_bounds_at_cocoa_point(mtm, pt)
+}
+
+fn earth_ns_window(mtm: MainThreadMarker) -> Option<Retained<NSWindow>> {
+    let app = NSApplication::sharedApplication(mtm);
+    app.keyWindow().or_else(|| {
+        let windows = app.windows();
+        (0..windows.len())
+            .map(|i| windows.objectAtIndex(i))
+            .find(|w| w.title().to_string() == "Earth")
+            .or_else(|| (!windows.is_empty()).then(|| windows.objectAtIndex(0)))
+    })
+}
+
+pub fn invalidate_window_shadow() {
+    if let Some(mtm) = MainThreadMarker::new()
+        && let Some(window) = earth_ns_window(mtm)
+    {
+        window.invalidateShadow();
+    }
+}
+
+/// Anchors AppKit/Metal layer contents to the right or left edge during OS viewport resizes
+/// so collapsing or expanding from the left never squashes or shifts the card rightward.
+pub fn set_window_resize_anchor_right(anchor_right: bool) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(window) = earth_ns_window(mtm) else {
+        return;
+    };
+    let Some(view) = window.contentView() else {
+        return;
+    };
+    let (placement, gravity) = if anchor_right {
+        unsafe { (NSViewLayerContentsPlacement::Right, kCAGravityRight) }
+    } else {
+        unsafe { (NSViewLayerContentsPlacement::Left, kCAGravityLeft) }
+    };
+
+    CATransaction::begin();
+    CATransaction::setDisableActions(true);
+    view.setLayerContentsPlacement(placement);
+    if let Some(root_layer) = view.layer() {
+        root_layer.setContentsGravity(gravity);
+        root_layer.setMasksToBounds(true);
+        if let Some(sublayers) = unsafe { root_layer.sublayers() } {
+            let null_action = NSNull::null();
+            let action_obj: &ProtocolObject<dyn CAAction> = ProtocolObject::from_ref(&*null_action);
+            let keys = [
+                ns_string!("bounds"),
+                ns_string!("position"),
+                ns_string!("contentsGravity"),
+            ];
+            let vals = [action_obj, action_obj, action_obj];
+            let no_actions = NSDictionary::from_slices(&keys, &vals);
+            for i in 0..sublayers.len() {
+                let sub = sublayers.objectAtIndex(i);
+                sub.setContentsGravity(gravity);
+                sub.setMasksToBounds(true);
+                sub.setActions(Some(&no_actions));
+            }
         }
     }
-
-    let vis = screens.objectAtIndex(0).visibleFrame();
-    let rect = ScreenRect {
-        x: vis.origin.x as f32,
-        y: (primary_height - (vis.origin.y + vis.size.height)) as f32,
-        width: vis.size.width as f32,
-        height: vis.size.height as f32,
-    };
-    ((cursor_x, cursor_y), rect)
+    CATransaction::commit();
 }
 
 pub fn reveal_in_file_manager(path: &Path) {

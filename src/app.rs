@@ -11,7 +11,9 @@ use crate::platform;
 use crate::search::{filter_and_search, SearchResultItem};
 use crate::storage::Storage;
 use crate::tray::{EarthTray, TrayAction};
-use crate::ui::popup::{render_popup_view, PopupAction, PopupState, PopupViewData};
+use crate::ui::popup::{
+    render_popup_view, PopupAction, PopupState, PopupViewData, WorkbenchSide,
+};
 use crate::ui::settings::{render_settings_view, SettingsAction, SettingsState, SettingsViewData};
 use crate::ui::theme::{install_crisp_fonts, EarthPalette};
 use crate::updater::{
@@ -23,6 +25,20 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
+
+const COMPACT_WIDTH: f32 = 424.0;
+const EXPANDED_WIDTH: f32 = 760.0;
+const WINDOW_HEIGHT: f32 = 520.0;
+const WORKBENCH_OPEN_DURATION: Duration = Duration::from_millis(190);
+const WORKBENCH_CLOSE_DURATION: Duration = Duration::from_millis(150);
+
+#[derive(Debug, Clone, Copy)]
+struct WorkbenchAnimation {
+    from: f32,
+    to: f32,
+    started_at: Instant,
+    duration: Duration,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
@@ -56,6 +72,10 @@ pub struct EarthApp {
     last_shown_at: Instant,
     was_focused_since_shown: bool,
     last_window_size: (f32, f32),
+    last_window_pos: (f32, f32),
+    workbench_os_expanded: bool,
+    workbench_collapse_pending: bool,
+    workbench_anim: Option<WorkbenchAnimation>,
     prev_app: Option<ActiveAppInfo>,
     quitting: bool,
     dialog_open: bool,
@@ -116,7 +136,7 @@ impl EarthApp {
             popup_state.status_banner = Some((warn, true));
         }
 
-        let initial_size = (424.0, 520.0);
+        let initial_size = (COMPACT_WIDTH, WINDOW_HEIGHT);
         let prev_app = platform::capture_frontmost_app();
         let (x, y) = platform::compute_popup_origin(
             settings.popup_position,
@@ -157,6 +177,10 @@ impl EarthApp {
             last_shown_at: Instant::now(),
             was_focused_since_shown: false,
             last_window_size: initial_size,
+            last_window_pos: (x, y),
+            workbench_os_expanded: false,
+            workbench_collapse_pending: false,
+            workbench_anim: None,
             prev_app,
             quitting: false,
             dialog_open: false,
@@ -217,26 +241,208 @@ impl EarthApp {
         }
     }
 
-    fn desired_window_size(&self) -> (f32, f32) {
-        match self.view_mode {
-            ViewMode::Launcher => {
-                if self.popup_state.preview_open {
-                    (760.0, 520.0)
-                } else {
-                    (424.0, 520.0)
-                }
+    fn advance_workbench_animation(&mut self, ctx: &egui::Context, panel_rect: egui::Rect) -> bool {
+        if self.workbench_collapse_pending {
+            if panel_rect.width() <= COMPACT_WIDTH + 4.0 {
+                self.workbench_collapse_pending = false;
+                self.workbench_os_expanded = false;
+                self.popup_state.workbench_side = WorkbenchSide::Right;
+                self.popup_state.preview_reveal = None;
+                return true;
             }
-            ViewMode::Settings => (424.0, 520.0),
+            self.popup_state.preview_reveal = Some(0.0);
+            ctx.request_repaint();
+            return false;
         }
+
+        if self.workbench_os_expanded
+            && !self.popup_state.preview_open
+            && self.workbench_anim.is_none()
+            && panel_rect.width() <= COMPACT_WIDTH + 4.0
+        {
+            self.workbench_os_expanded = false;
+            self.popup_state.workbench_side = WorkbenchSide::Right;
+            self.popup_state.preview_reveal = None;
+            return true;
+        }
+
+        let Some(ref mut anim) = self.workbench_anim else {
+            return false;
+        };
+
+        // Wait until the OS viewport actually grew to expanded width before starting the
+        // reveal timer so the first animation frames aren't consumed while Cocoa resizes.
+        if anim.to > 0.5 && panel_rect.width() < EXPANDED_WIDTH - 4.0 {
+            anim.started_at = Instant::now();
+            self.popup_state.preview_reveal = Some(anim.from);
+            ctx.request_repaint();
+            return true;
+        }
+
+        let dur = anim.duration.as_secs_f32().max(0.001);
+        let raw_t = (anim.started_at.elapsed().as_secs_f32() / dur).clamp(0.0, 1.0);
+        let eased = 1.0 - (1.0 - raw_t).powi(3);
+        let reveal = (anim.from + (anim.to - anim.from) * eased).clamp(0.0, 1.0);
+        self.popup_state.preview_reveal = Some(reveal);
+
+        if raw_t >= 1.0 {
+            let finished_to = anim.to;
+            self.workbench_anim = None;
+            if finished_to <= 0.01 {
+                self.popup_state.preview_reveal = Some(0.0);
+                self.collapse_workbench_os_viewport(ctx, panel_rect);
+            } else {
+                self.popup_state.preview_reveal = None;
+            }
+        } else {
+            ctx.request_repaint();
+        }
+        true
     }
 
-    fn sync_window_size(&mut self, ctx: &egui::Context) {
-        let target = self.desired_window_size();
-        if (target.0 - self.last_window_size.0).abs() > 1.0
-            || (target.1 - self.last_window_size.1).abs() > 1.0
+    fn animated_card_rect(&self, panel_rect: egui::Rect, outer_min_x: Option<f32>) -> egui::Rect {
+        if self.view_mode != ViewMode::Launcher || !self.workbench_os_expanded {
+            return panel_rect;
+        }
+        let reveal = match self.popup_state.preview_reveal {
+            Some(r) => r.clamp(0.0, 1.0),
+            None if self.popup_state.preview_open => 1.0,
+            None => 0.0,
+        };
+        let pending_target = self
+            .workbench_collapse_pending
+            .then_some((self.last_window_pos.0, outer_min_x));
+        compute_animated_card_rect(
+            panel_rect,
+            self.popup_state.workbench_side,
+            reveal,
+            pending_target,
+        )
+    }
+
+    fn collapse_workbench_os_viewport(&mut self, ctx: &egui::Context, panel_rect: egui::Rect) {
+        if self.workbench_collapse_pending && panel_rect.width() > COMPACT_WIDTH + 4.0 {
+            return;
+        }
+        if !self.workbench_os_expanded && (self.last_window_size.0 - COMPACT_WIDTH).abs() <= 1.0 {
+            self.workbench_collapse_pending = false;
+            return;
+        }
+        let side = self.popup_state.workbench_side;
+        platform::set_window_resize_anchor_right(side == WorkbenchSide::Left);
+        let (cur_x, cur_y) = self.last_window_pos;
+        let dpi = ctx.pixels_per_point();
+        let mon = platform::monitor_bounds_for_point(
+            cur_x + EXPANDED_WIDTH * 0.5,
+            cur_y + WINDOW_HEIGHT * 0.5,
+            dpi,
+        );
+        let (target_x, target_y) = plan_workbench_collapse(
+            (cur_x, cur_y),
+            side,
+            COMPACT_WIDTH,
+            EXPANDED_WIDTH,
+            WINDOW_HEIGHT,
+            mon,
+        );
+        self.last_window_size = (COMPACT_WIDTH, WINDOW_HEIGHT);
+        self.last_window_pos = (target_x, target_y);
+        ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(
+            COMPACT_WIDTH,
+            WINDOW_HEIGHT,
+        )));
+        if (target_x - cur_x).abs() > 0.5 || (target_y - cur_y).abs() > 0.5 {
+            ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2(target_x, target_y)));
+        }
+        if panel_rect.width() <= COMPACT_WIDTH + 4.0 {
+            self.workbench_collapse_pending = false;
+            self.workbench_os_expanded = false;
+            self.popup_state.workbench_side = WorkbenchSide::Right;
+            self.popup_state.preview_reveal = None;
+        } else {
+            self.workbench_collapse_pending = true;
+        }
+        ctx.request_repaint();
+    }
+
+    fn sync_window_size(&mut self, ctx: &egui::Context, panel_rect: egui::Rect) {
+        if self.workbench_collapse_pending {
+            ctx.request_repaint();
+            return;
+        }
+        if self.view_mode != ViewMode::Launcher {
+            self.workbench_anim = None;
+            if self.workbench_os_expanded || (self.last_window_size.0 - COMPACT_WIDTH).abs() > 1.0 {
+                self.collapse_workbench_os_viewport(ctx, panel_rect);
+            }
+            return;
+        }
+
+        let want_open = self.popup_state.preview_open;
+        let opening_or_open = self
+            .workbench_anim
+            .map(|a| a.to > 0.5)
+            .unwrap_or(self.workbench_os_expanded);
+
+        if want_open && !opening_or_open {
+            let cur_reveal = self
+                .popup_state
+                .preview_reveal
+                .unwrap_or(if self.workbench_os_expanded { 1.0 } else { 0.0 });
+            if !self.workbench_os_expanded {
+                let (cur_x, cur_y) = self.last_window_pos;
+                let dpi = ctx.pixels_per_point();
+                let mon = platform::monitor_bounds_for_point(
+                    cur_x + COMPACT_WIDTH * 0.5,
+                    cur_y + WINDOW_HEIGHT * 0.5,
+                    dpi,
+                );
+                let (side, (target_x, target_y)) = plan_workbench_expansion(
+                    (cur_x, cur_y),
+                    (COMPACT_WIDTH, WINDOW_HEIGHT),
+                    EXPANDED_WIDTH,
+                    mon,
+                );
+                platform::set_window_resize_anchor_right(side == WorkbenchSide::Left);
+                self.popup_state.workbench_side = side;
+                self.workbench_os_expanded = true;
+                self.last_window_size = (EXPANDED_WIDTH, WINDOW_HEIGHT);
+                self.last_window_pos = (target_x, target_y);
+                if (target_x - cur_x).abs() > 0.5 || (target_y - cur_y).abs() > 0.5 {
+                    ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2(
+                        target_x, target_y,
+                    )));
+                }
+                ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(
+                    EXPANDED_WIDTH,
+                    WINDOW_HEIGHT,
+                )));
+            }
+            let ratio = (1.0 - cur_reveal).clamp(0.2, 1.0);
+            self.workbench_anim = Some(WorkbenchAnimation {
+                from: cur_reveal,
+                to: 1.0,
+                started_at: Instant::now(),
+                duration: WORKBENCH_OPEN_DURATION.mul_f32(ratio),
+            });
+            self.popup_state.preview_reveal = Some(cur_reveal);
+            ctx.request_repaint();
+        } else if !want_open
+            && self.workbench_os_expanded
+            && !self.workbench_anim.is_some_and(|a| a.to <= 0.5)
         {
-            self.last_window_size = target;
-            ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(target.0, target.1)));
+            platform::set_window_resize_anchor_right(
+                self.popup_state.workbench_side == WorkbenchSide::Left,
+            );
+            let cur_reveal = self.popup_state.preview_reveal.unwrap_or(1.0);
+            let ratio = cur_reveal.clamp(0.2, 1.0);
+            self.workbench_anim = Some(WorkbenchAnimation {
+                from: cur_reveal,
+                to: 0.0,
+                started_at: Instant::now(),
+                duration: WORKBENCH_CLOSE_DURATION.mul_f32(ratio),
+            });
+            self.popup_state.preview_reveal = Some(cur_reveal);
             ctx.request_repaint();
         }
     }
@@ -246,6 +452,12 @@ impl EarthApp {
             self.prev_app = Some(active);
         }
         self.view_mode = mode;
+        self.workbench_anim = None;
+        self.workbench_collapse_pending = false;
+        self.workbench_os_expanded = false;
+        platform::set_window_resize_anchor_right(false);
+        self.popup_state.workbench_side = WorkbenchSide::Right;
+        self.popup_state.preview_reveal = None;
         if mode == ViewMode::Launcher {
             self.popup_state.request_search_focus = true;
             self.popup_state.ime_composing = false;
@@ -258,7 +470,7 @@ impl EarthApp {
             self.popup_state.qr_preview_id = None;
         }
 
-        let target_size = self.desired_window_size();
+        let target_size = (COMPACT_WIDTH, WINDOW_HEIGHT);
         self.last_window_size = target_size;
         let resolved_tray = tray_pos.or_else(|| self.tray.as_ref().and_then(|t| t.last_tray_pos()));
         let (x, y) = platform::compute_popup_origin(
@@ -268,6 +480,7 @@ impl EarthApp {
             resolved_tray,
             ctx.pixels_per_point(),
         );
+        self.last_window_pos = (x, y);
 
         ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(target_size.0, target_size.1)));
         ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2(x, y)));
@@ -285,6 +498,13 @@ impl EarthApp {
         self.visible = false;
         self.popup_state.show_about_modal = false;
         self.settings_state.recording = None;
+        self.workbench_anim = None;
+        self.workbench_collapse_pending = false;
+        self.workbench_os_expanded = false;
+        platform::set_window_resize_anchor_right(false);
+        self.popup_state.preview_open = false;
+        self.popup_state.preview_reveal = None;
+        self.popup_state.workbench_side = WorkbenchSide::Right;
         ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         if restore_focus {
             platform::hide_self_app();
@@ -599,12 +819,20 @@ impl eframe::App for EarthApp {
         }
         let has_accessibility = self.cached_accessibility;
         let panel_rect = ctx.content_rect();
+        let outer_min_x = ctx.input(|i| i.viewport().outer_rect).map(|outer| {
+            if self.workbench_anim.is_none() && !self.workbench_collapse_pending {
+                self.last_window_pos = (outer.min.x, outer.min.y);
+            }
+            outer.min.x
+        });
+        let shadow_dirty = self.advance_workbench_animation(&ctx, panel_rect);
+        let card_rect = self.animated_card_rect(panel_rect, outer_min_x);
 
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
-                handle_background_window_drag(ui, &ctx, panel_rect, "earth_window_drag_bg");
-                let outer_rect = panel_rect.shrink(1.0);
+                let outer_rect = card_rect.shrink(1.0);
+                handle_background_window_drag(ui, &ctx, outer_rect, "earth_window_drag_bg");
                 ui.painter().rect_filled(
                     outer_rect,
                     CornerRadius::same(18),
@@ -1064,8 +1292,113 @@ impl eframe::App for EarthApp {
                     });
             });
 
-        self.sync_window_size(&ctx);
+        self.sync_window_size(&ctx, panel_rect);
+        if shadow_dirty {
+            platform::invalidate_window_shadow();
+        }
     }
+}
+
+pub(crate) fn compute_animated_card_rect(
+    panel_rect: egui::Rect,
+    side: WorkbenchSide,
+    reveal: f32,
+    collapse_pending_target_and_outer_x: Option<(f32, Option<f32>)>,
+) -> egui::Rect {
+    if let Some((target_screen_x, outer_min_x)) = collapse_pending_target_and_outer_x
+        && panel_rect.width() > COMPACT_WIDTH + 4.0
+        && let Some(ox) = outer_min_x
+    {
+        // Keep the compact card anchored at its screen X even if OS OuterPosition moves
+        // before WindowEvent::Resized shrinks panel_rect.
+        let local_x = (target_screen_x - ox)
+            .clamp(0.0, (panel_rect.width() - COMPACT_WIDTH).max(0.0));
+        return egui::Rect::from_min_size(
+            pos2(panel_rect.min.x + local_x, panel_rect.min.y),
+            vec2(COMPACT_WIDTH, panel_rect.height()),
+        );
+    }
+
+    let reveal = reveal.clamp(0.0, 1.0);
+    let target_w = (COMPACT_WIDTH + (EXPANDED_WIDTH - COMPACT_WIDTH) * reveal)
+        .round()
+        .clamp(COMPACT_WIDTH, panel_rect.width().max(COMPACT_WIDTH));
+    if (panel_rect.width() - target_w).abs() <= 1.0 {
+        return panel_rect;
+    }
+    match side {
+        WorkbenchSide::Right => {
+            egui::Rect::from_min_size(panel_rect.min, vec2(target_w, panel_rect.height()))
+        }
+        WorkbenchSide::Left => egui::Rect::from_min_max(
+            pos2(
+                (panel_rect.max.x - target_w).max(panel_rect.min.x),
+                panel_rect.min.y,
+            ),
+            panel_rect.max,
+        ),
+    }
+}
+
+/// Decides whether the workbench should expand to the right or flip to the left so the
+/// expanded window stays completely inside the monitor containing the window.
+pub(crate) fn plan_workbench_expansion(
+    compact_origin: (f32, f32),
+    compact_size: (f32, f32),
+    expanded_width: f32,
+    monitor: platform::ScreenRect,
+) -> (WorkbenchSide, (f32, f32)) {
+    const EDGE_MARGIN: f32 = 4.0;
+    let (win_x, win_y) = compact_origin;
+    let (compact_w, win_h) = compact_size;
+    let win_right = win_x + compact_w;
+    let mon_left = monitor.x + EDGE_MARGIN;
+    let mon_right = (monitor.x + monitor.width - EDGE_MARGIN).max(mon_left);
+    let mon_top = monitor.y + EDGE_MARGIN;
+    let mon_bottom = (monitor.y + monitor.height - EDGE_MARGIN).max(mon_top);
+
+    let max_y = (mon_bottom - win_h).max(mon_top);
+    let clamped_y = win_y.clamp(mon_top, max_y);
+
+    let right_fits = win_x >= mon_left && win_x + expanded_width <= mon_right;
+    let right_space = mon_right - win_x;
+    let left_space = win_right - mon_left;
+
+    if right_fits {
+        (WorkbenchSide::Right, (win_x, clamped_y))
+    } else if left_space >= expanded_width || left_space > right_space {
+        let anchored_right = win_right.min(mon_right);
+        let target_x = (anchored_right - expanded_width).max(mon_left);
+        (WorkbenchSide::Left, (target_x, clamped_y))
+    } else {
+        let max_x = (mon_right - expanded_width).max(mon_left);
+        (WorkbenchSide::Right, (win_x.clamp(mon_left, max_x), clamped_y))
+    }
+}
+
+/// Computes the compact window origin after collapsing the workbench while keeping the list pane anchored.
+pub(crate) fn plan_workbench_collapse(
+    current_origin: (f32, f32),
+    side: WorkbenchSide,
+    compact_width: f32,
+    expanded_width: f32,
+    window_height: f32,
+    monitor: platform::ScreenRect,
+) -> (f32, f32) {
+    const EDGE_MARGIN: f32 = 4.0;
+    let (cur_x, cur_y) = current_origin;
+    let mon_left = monitor.x + EDGE_MARGIN;
+    let mon_right = (monitor.x + monitor.width - EDGE_MARGIN).max(mon_left);
+    let mon_top = monitor.y + EDGE_MARGIN;
+    let mon_bottom = (monitor.y + monitor.height - EDGE_MARGIN).max(mon_top);
+
+    let target_x = match side {
+        WorkbenchSide::Right => cur_x,
+        WorkbenchSide::Left => cur_x + (expanded_width - compact_width),
+    };
+    let max_x = (mon_right - compact_width).max(mon_left);
+    let max_y = (mon_bottom - window_height).max(mon_top);
+    (target_x.clamp(mon_left, max_x), cur_y.clamp(mon_top, max_y))
 }
 
 /// Registers a lowest-priority drag surface behind UI content so dragging anywhere outside
@@ -1234,5 +1567,72 @@ mod tests {
             !started_text_edit,
             "dragging inside TextEdit must keep text selection instead of dragging window"
         );
+    }
+
+    #[test]
+    fn workbench_expansion_flips_left_near_right_edge_and_collapses_back_cleanly() {
+        use super::{plan_workbench_collapse, plan_workbench_expansion};
+        use crate::platform::ScreenRect;
+        use crate::ui::popup::WorkbenchSide;
+
+        let monitor = ScreenRect {
+            x: 0.0,
+            y: 25.0,
+            width: 1920.0,
+            height: 1055.0,
+        };
+
+        // 1. Plenty of space on the right -> opens rightward from original origin.
+        let (side, pos) = plan_workbench_expansion((400.0, 120.0), (424.0, 520.0), 760.0, monitor);
+        assert_eq!(side, WorkbenchSide::Right);
+        assert_eq!(pos, (400.0, 120.0));
+
+        // 2. Window near the right screen edge -> flips leftward and anchors right edge.
+        let compact_x = 1480.0; // right = 1904; 1480 + 760 = 2240 > 1916
+        let (side_r, pos_r) =
+            plan_workbench_expansion((compact_x, 120.0), (424.0, 520.0), 760.0, monitor);
+        assert_eq!(side_r, WorkbenchSide::Left);
+        assert_eq!(pos_r.0, 1144.0);
+        assert_eq!(pos_r.0 + 760.0, compact_x + 424.0);
+        assert!(pos_r.0 + 760.0 <= monitor.x + monitor.width - 4.0);
+
+        // Collapsing back restores exact compact right-side origin.
+        let collapsed = plan_workbench_collapse(pos_r, side_r, 424.0, 760.0, 520.0, monitor);
+        assert_eq!(collapsed, (compact_x, 120.0));
+
+        // 3. Secondary monitor on the left (negative coordinates) near its right edge.
+        let left_monitor = ScreenRect {
+            x: -1920.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        };
+        let (side_neg, pos_neg) =
+            plan_workbench_expansion((-440.0, 80.0), (424.0, 520.0), 760.0, left_monitor);
+        assert_eq!(side_neg, WorkbenchSide::Left);
+        assert_eq!(pos_neg.0, -776.0);
+        assert!(pos_neg.0 + 760.0 <= left_monitor.x + left_monitor.width - 4.0);
+    }
+
+    #[test]
+    fn pending_left_collapse_keeps_card_screen_x_even_if_outer_pos_updates_before_resize() {
+        use super::compute_animated_card_rect;
+        use crate::ui::popup::WorkbenchSide;
+
+        let panel_760 = egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(760.0, 520.0));
+
+        // 1. OS viewport still at expanded left origin (1144), target compact X = 1480:
+        //    card stays at local [336..760], which maps to screen [1480..1904].
+        let rect_before_move =
+            compute_animated_card_rect(panel_760, WorkbenchSide::Left, 0.0, Some((1480.0, Some(1144.0))));
+        assert!((rect_before_move.min.x - 336.0).abs() < 0.5);
+        assert!((rect_before_move.width() - 424.0).abs() < 0.5);
+
+        // 2. If OS OuterPosition jumped to 1480 before WindowEvent::Resized shrunk panel_rect:
+        //    card pins to local [0..424] so screen position stays [1480..1904] without jumping right.
+        let rect_after_move =
+            compute_animated_card_rect(panel_760, WorkbenchSide::Left, 0.0, Some((1480.0, Some(1480.0))));
+        assert!((rect_after_move.min.x - 0.0).abs() < 0.5);
+        assert!((rect_after_move.width() - 424.0).abs() < 0.5);
     }
 }

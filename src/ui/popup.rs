@@ -27,6 +27,13 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Instant;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkbenchSide {
+    #[default]
+    Right,
+    Left,
+}
+
 pub enum PopupAction {
     HidePopup,
     PasteItem { id: i64, behavior: PasteBehavior },
@@ -75,6 +82,8 @@ pub struct PopupState {
     pub selected_id: Option<i64>,
     pub preview_open: bool,
     pub preview_manually_toggled: bool,
+    pub workbench_side: WorkbenchSide,
+    pub preview_reveal: Option<f32>,
     pub request_search_focus: bool,
     pub selection_changed_at: Instant,
     pub revealed_sensitive_ids: HashSet<i64>,
@@ -102,6 +111,8 @@ impl Default for PopupState {
             selected_id: None,
             preview_open: false,
             preview_manually_toggled: false,
+            workbench_side: WorkbenchSide::Right,
+            preview_reveal: None,
             request_search_focus: true,
             selection_changed_at: Instant::now(),
             revealed_sensitive_ids: HashSet::new(),
@@ -124,6 +135,20 @@ impl Default for PopupState {
 }
 
 impl PopupState {
+    /// Updates workbench open state while seeding `preview_reveal` so the toggle frame never snaps before animating.
+    pub fn set_preview_open(&mut self, open: bool) {
+        if self.preview_open != open {
+            if self.preview_reveal.is_none() {
+                self.preview_reveal = Some(if self.preview_open { 1.0 } else { 0.0 });
+            }
+            self.preview_open = open;
+        }
+    }
+
+    pub fn toggle_preview(&mut self) {
+        self.set_preview_open(!self.preview_open);
+    }
+
     pub fn ensure_preview_cache(&mut self, item: &ClipItem) -> &CachedPreviewItem {
         const MAX_PREVIEW_TEXT_CHARS: usize = 4000;
         let needs_rebuild = self
@@ -414,76 +439,165 @@ pub fn render_popup_view(
         ui.add_space(4.0);
     }
 
-    // Main Split Area: Left History List + Optional Right Quick-Peek Workbench
+    // Main Split Area: History List + Optional Quick-Peek Workbench (Left or Right depending on screen bounds)
     let footer_reserved = if settings.show_footer_menu { 44.0 } else { 0.0 };
     let body_height = (ui.available_height() - footer_reserved).max(160.0);
     let total_width = ui.available_width();
     let split_gap = 8.0;
 
     let (body_rect, _) = ui.allocate_exact_size(vec2(total_width, body_height), Sense::hover());
-    // Wait until the OS viewport has expanded before splitting into two columns so we never
-    // layout/wrap both panes at cramped intermediate widths (240px + 150px) inside the 424px frame.
-    let split_ready = state.preview_open && body_rect.width() >= 560.0;
+    let reveal = state
+        .preview_reveal
+        .unwrap_or(if state.preview_open { 1.0 } else { 0.0 })
+        .clamp(0.0, 1.0);
+    let target_open = state.preview_open || reveal > 0.001;
+    // Wait until the OS viewport has expanded past compact width (424 - 26 = 398) before revealing
+    // the second pane, keeping workbench layout at full target width so text never wraps narrowly.
+    let split_ready = target_open && body_rect.width() > 416.0;
     if state.preview_open && !split_ready {
         ctx.request_repaint();
     }
-    let (left_rect, right_rect) = if split_ready {
-        let lw = (body_rect.width() * 0.45).clamp(240.0, 320.0);
-        let l = egui::Rect::from_min_max(
-            body_rect.min,
-            pos2(body_rect.min.x + lw, body_rect.max.y),
-        );
-        let r = egui::Rect::from_min_max(
-            pos2(body_rect.min.x + lw + split_gap, body_rect.min.y),
-            body_rect.max,
-        );
-        (l, Some(r))
+
+    let (list_rect, workbench_slot) = if split_ready {
+        let compact_body_w = 398.0_f32.min(body_rect.width());
+        let full_list_w = (734.0_f32 * 0.45).clamp(240.0, 320.0);
+        let full_wb_w = (734.0_f32 - full_list_w - split_gap).max(320.0);
+        let target_list_w = if reveal >= 0.999 {
+            (body_rect.width() * 0.45).clamp(240.0, 320.0)
+        } else {
+            full_list_w
+        };
+        let cur_list_w = if reveal >= 0.999 {
+            target_list_w
+        } else {
+            (compact_body_w + (target_list_w - compact_body_w) * reveal)
+                .min((body_rect.width() - split_gap - 8.0).max(240.0))
+                .max(240.0)
+        };
+        let wb_avail_w = (body_rect.width() - cur_list_w - split_gap).max(0.0);
+        let layout_wb_w = if reveal >= 0.999 {
+            wb_avail_w
+        } else {
+            full_wb_w
+        };
+
+        let (l_rect, wb_clip, wb_layout) = match state.workbench_side {
+            WorkbenchSide::Right => {
+                let l_rect = egui::Rect::from_min_max(
+                    body_rect.min,
+                    pos2(body_rect.min.x + cur_list_w, body_rect.max.y),
+                );
+                let wb_clip = egui::Rect::from_min_max(
+                    pos2(body_rect.min.x + cur_list_w + split_gap, body_rect.min.y),
+                    body_rect.max,
+                );
+                let slide = (1.0 - reveal) * 18.0;
+                let wb_layout = egui::Rect::from_min_size(
+                    pos2(wb_clip.min.x + slide, body_rect.min.y),
+                    vec2(layout_wb_w, body_rect.height()),
+                );
+                (l_rect, wb_clip, wb_layout)
+            }
+            WorkbenchSide::Left => {
+                let l_rect = egui::Rect::from_min_max(
+                    pos2(body_rect.max.x - cur_list_w, body_rect.min.y),
+                    body_rect.max,
+                );
+                let wb_clip = egui::Rect::from_min_max(
+                    body_rect.min,
+                    pos2(
+                        (body_rect.max.x - cur_list_w - split_gap).max(body_rect.min.x),
+                        body_rect.max.y,
+                    ),
+                );
+                let slide = -(1.0 - reveal) * 18.0;
+                let wb_layout = egui::Rect::from_min_size(
+                    pos2(wb_clip.min.x + slide, body_rect.min.y),
+                    vec2(layout_wb_w, body_rect.height()),
+                );
+                (l_rect, wb_clip, wb_layout)
+            }
+        };
+
+        let wb_opacity = (reveal * 1.18).clamp(0.0, 1.0);
+        let slot = (wb_clip.width() >= 8.0 && wb_opacity > 0.01).then_some((
+            wb_clip,
+            wb_layout,
+            wb_opacity,
+        ));
+        (l_rect, slot)
     } else {
         (body_rect, None)
     };
 
-    ui.scope_builder(
-        egui::UiBuilder::new()
-            .max_rect(left_rect)
-            .layout(Layout::top_down(Align::Min)),
-        |ui| {
-            ui.set_clip_rect(left_rect);
-            ui.set_min_size(left_rect.size());
-            ui.set_max_size(left_rect.size());
-            render_items_list(ui, settings, results, collections, state, palette, &mut actions);
-        },
-    );
+    let render_list = |ui: &mut Ui, state: &mut PopupState, actions: &mut Vec<PopupAction>| {
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(list_rect)
+                .layout(Layout::top_down(Align::Min)),
+            |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(list_rect));
+                ui.set_min_size(list_rect.size());
+                ui.set_max_size(list_rect.size());
+                render_items_list(ui, settings, results, collections, state, palette, actions);
+            },
+        );
+    };
 
-    if state.preview_open
+    let render_workbench =
+        |ui: &mut Ui,
+         state: &mut PopupState,
+         actions: &mut Vec<PopupAction>,
+         wb_clip: egui::Rect,
+         wb_layout: egui::Rect,
+         wb_opacity: f32| {
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(wb_layout)
+                    .layout(Layout::top_down(Align::Min)),
+                |ui| {
+                    ui.set_clip_rect(ui.clip_rect().intersect(wb_clip));
+                    ui.set_min_size(wb_layout.size());
+                    ui.set_max_size(wb_layout.size());
+                    if wb_opacity < 0.999 {
+                        ui.multiply_opacity(wb_opacity);
+                    }
+                    let selected_item = state
+                        .selected_id
+                        .and_then(|sid| results.iter().find(|r| r.item.id == sid))
+                        .map(|r| &r.item);
+                    render_preview_pane(
+                        ui,
+                        selected_item,
+                        collections,
+                        state,
+                        palette,
+                        actions,
+                    );
+                },
+            );
+        };
+
+    if target_open
         && let Some(sid) = state.selected_id
         && let Some(sel) = results.iter().find(|r| r.item.id == sid)
     {
         state.ensure_preview_cache(&sel.item);
     }
 
-    if let Some(r_rect) = right_rect {
-        ui.scope_builder(
-            egui::UiBuilder::new()
-                .max_rect(r_rect)
-                .layout(Layout::top_down(Align::Min)),
-            |ui| {
-                ui.set_clip_rect(r_rect);
-                ui.set_min_size(r_rect.size());
-                ui.set_max_size(r_rect.size());
-                let selected_item = state
-                    .selected_id
-                    .and_then(|sid| results.iter().find(|r| r.item.id == sid))
-                    .map(|r| &r.item);
-                render_preview_pane(
-                    ui,
-                    selected_item,
-                    collections,
-                    state,
-                    palette,
-                    &mut actions,
-                );
-            },
-        );
+    match state.workbench_side {
+        WorkbenchSide::Right => {
+            render_list(ui, state, &mut actions);
+            if let Some((wb_clip, wb_layout, wb_opacity)) = workbench_slot {
+                render_workbench(ui, state, &mut actions, wb_clip, wb_layout, wb_opacity);
+            }
+        }
+        WorkbenchSide::Left => {
+            if let Some((wb_clip, wb_layout, wb_opacity)) = workbench_slot {
+                render_workbench(ui, state, &mut actions, wb_clip, wb_layout, wb_opacity);
+            }
+            render_list(ui, state, &mut actions);
+        }
     }
 
     if settings.show_footer_menu {
@@ -680,7 +794,7 @@ fn handle_popup_keyboard(
             actions.push(PopupAction::DeleteItem(id));
         }
     if preview_hit {
-        state.preview_open = !state.preview_open;
+        state.toggle_preview();
         state.preview_manually_toggled = true;
     }
     if settings_hit {
@@ -882,7 +996,7 @@ fn render_header(
             )
             .clicked()
             {
-                state.preview_open = !state.preview_open;
+                state.toggle_preview();
                 state.preview_manually_toggled = true;
             }
 
@@ -1417,7 +1531,7 @@ fn render_item_row(
                     state.image_actual_size = false;
                 }
                 if !state.preview_open {
-                    state.preview_open = true;
+                    state.set_preview_open(true);
                     state.preview_manually_toggled = true;
                     ui.ctx().request_repaint();
                 }
@@ -1513,7 +1627,7 @@ fn render_item_row(
         });
         if ui.button("在右侧速览面板查看").clicked() {
             state.selected_id = Some(item.id);
-            state.preview_open = true;
+            state.set_preview_open(true);
             state.preview_manually_toggled = true;
             ui.close();
         }
@@ -3832,5 +3946,147 @@ mod tests {
         );
         assert!(!click_row_drag, "clicking row must not emit StartDrag");
         assert!(state.preview_open, "clicking row should still open workbench");
+    }
+
+    #[test]
+    fn workbench_renders_on_left_when_flipped_and_stays_uncramped_mid_animation() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        let mut settings = AppSettings::default();
+        let collections = Vec::new();
+        let results = vec![SearchResultItem {
+            item: ClipItem {
+                id: 7,
+                content_hash: "left7".into(),
+                kind: ClipKind::Text,
+                text_content: Some("UNIQUE_LEFT_WORKBENCH_PAYLOAD".into()),
+                html_content: None,
+                rtf_content: None,
+                image_path: None,
+                thumb_path: None,
+                image_width: None,
+                image_height: None,
+                files: Vec::new(),
+                byte_size: 29,
+                source_app: Some("Terminal".into()),
+                source_bundle_id: None,
+                pinned: false,
+                collection_id: None,
+                first_copied_at: 0,
+                last_copied_at: 0,
+                copy_count: 1,
+                note: None,
+                is_url: false,
+                detected_color: None,
+                sensitive_label: None,
+            },
+            score: 0,
+            matched_indices: HashSet::new(),
+        }];
+
+        let mut render_at_width = |card_w: f32, reveal: Option<f32>| -> Vec<(String, f32)> {
+            let mut state = PopupState {
+                selected_id: Some(7),
+                preview_open: true,
+                workbench_side: WorkbenchSide::Left,
+                preview_reveal: reveal,
+                ..Default::default()
+            };
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    vec2(card_w, 520.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                #[allow(deprecated)]
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show_inside(ui, |ui| {
+                        let content_rect = ui.ctx().content_rect().shrink(13.0);
+                        ui.scope_builder(
+                            egui::UiBuilder::new()
+                                .max_rect(content_rect)
+                                .layout(Layout::top_down(Align::Min)),
+                            |ui| {
+                                ui.set_min_size(content_rect.size());
+                                ui.set_max_size(content_rect.size());
+                                let _ = render_popup_view(
+                                    ui,
+                                    &ctx,
+                                    PopupViewData {
+                                        settings: &mut settings,
+                                        results: &results,
+                                        collections: &collections,
+                                        palette: &palette,
+                                        storage_bytes: 29,
+                                        total_items: 1,
+                                        has_accessibility: true,
+                                    },
+                                    &mut state,
+                                );
+                            },
+                        );
+                    });
+            });
+            let text_positions = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::epaint::Shape::Text(t) => Some((t.galley.text().to_string(), t.pos.x)),
+                    _ => None,
+                })
+                .collect();
+            out.textures_delta.clear();
+            text_positions
+        };
+
+        // Full expanded on Left: workbench actions/payload appear cleanly to the left of list items.
+        let full_texts = render_at_width(760.0, Some(1.0));
+        let wb_x = full_texts
+            .iter()
+            .find(|(t, _)| t.contains("UNIQUE_LEFT_WORKBENCH_PAYLOAD"))
+            .map(|(_, x)| *x)
+            .expect("workbench body should render");
+        let list_x = full_texts
+            .iter()
+            .find(|(t, _)| t.contains("⌘ 1"))
+            .map(|(_, x)| *x)
+            .expect("list row shortcut pill should stay visible on right");
+        assert!(
+            wb_x < 100.0 && list_x > 600.0,
+            "expected workbench on left ({wb_x}) and list anchored on right ({list_x})"
+        );
+
+        // Mid-animation (590px card, reveal = 0.5): workbench still renders cleanly without wrapping away.
+        let mid_texts = render_at_width(590.0, Some(0.5));
+        assert!(
+            mid_texts
+                .iter()
+                .any(|(t, _)| t.contains("UNIQUE_LEFT_WORKBENCH_PAYLOAD")),
+            "expected workbench content during smooth reveal animation"
+        );
+    }
+
+    #[test]
+    fn closing_left_workbench_preserves_reveal_on_toggle_frame_without_snap() {
+        let mut state = PopupState {
+            selected_id: Some(7),
+            preview_open: true,
+            workbench_side: WorkbenchSide::Left,
+            preview_reveal: None,
+            ..Default::default()
+        };
+
+        state.toggle_preview();
+        assert!(!state.preview_open);
+        assert_eq!(
+            state.preview_reveal,
+            Some(1.0),
+            "closing toggle must keep reveal at 1.0 on frame 0 so the list does not jump full-width"
+        );
     }
 }

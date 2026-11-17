@@ -71,6 +71,18 @@ pub fn get_cursor_and_monitor_bounds(dpi_scale: f32) -> ((f32, f32), ScreenRect)
     imp::get_cursor_and_monitor_bounds(dpi_scale)
 }
 
+pub fn monitor_bounds_for_point(x: f32, y: f32, dpi_scale: f32) -> ScreenRect {
+    imp::monitor_bounds_for_point(x, y, dpi_scale)
+}
+
+pub fn invalidate_window_shadow() {
+    imp::invalidate_window_shadow();
+}
+
+pub fn set_window_resize_anchor_right(anchor_right: bool) {
+    imp::set_window_resize_anchor_right(anchor_right);
+}
+
 pub fn reveal_in_file_manager(path: &Path) {
     imp::reveal_in_file_manager(path);
 }

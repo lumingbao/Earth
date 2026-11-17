@@ -38,6 +38,19 @@ pub fn get_cursor_and_monitor_bounds(_dpi_scale: f32) -> ((f32, f32), ScreenRect
     )
 }
 
+pub fn monitor_bounds_for_point(_x: f32, _y: f32, _dpi_scale: f32) -> ScreenRect {
+    ScreenRect {
+        x: 0.0,
+        y: 0.0,
+        width: 1440.0,
+        height: 900.0,
+    }
+}
+
+pub fn invalidate_window_shadow() {}
+
+pub fn set_window_resize_anchor_right(_anchor_right: bool) {}
+
 pub fn reveal_in_file_manager(path: &Path) {
     let target = path.parent().unwrap_or(path);
     let _ = std::process::Command::new("xdg-open").arg(target).spawn();
