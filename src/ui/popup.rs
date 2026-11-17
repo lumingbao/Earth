@@ -1801,9 +1801,9 @@ fn render_preview_pane(
                         .map(|(id, _, _)| *id == item.id)
                         .unwrap_or(false)
                     {
-                        165.0
+                        176.0
                     } else {
-                        68.0
+                        76.0
                     }
                 }
                 _ => 42.0,
@@ -2007,12 +2007,12 @@ fn render_preview_pane(
                         .map(|c| c.quick_actions.clone())
                         .unwrap_or_default();
                     ui.horizontal_wrapped(|ui| {
-                        if item.is_url && compact_button(ui, "🌐 打开链接").clicked() {
+                        if item.is_url && compact_button(ui, "打开链接").clicked() {
                             actions.push(PopupAction::OpenUrl(raw.trim().to_string()));
                         }
                         if raw.len() <= 2048 {
                             let qr_active = state.qr_preview_id == Some(item.id);
-                            let qr_lbl = if qr_active { "收起二维码" } else { "📱 二维码" };
+                            let qr_lbl = if qr_active { "收起二维码" } else { "二维码" };
                             if compact_button(ui, qr_lbl).clicked() {
                                 state.qr_preview_id = if qr_active { None } else { Some(item.id) };
                             }

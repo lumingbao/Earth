@@ -205,13 +205,15 @@ pub fn card_shadow(palette: &EarthPalette) -> egui::Shadow {
     }
 }
 
-/// Renders a button with scoped padding so compact/tag/footer buttons keep comfortable breathing room.
+/// Renders a button with custom padding directly in `ui` (without `ui.scope`) so
+/// `ui.horizontal_wrapped` can wrap the entire button onto the next row instead of
+/// squeezing button text vertically at the end of a line.
 pub fn padded_button(ui: &mut Ui, btn: egui::Button<'_>, padding: egui::Vec2) -> egui::Response {
-    ui.scope(|ui| {
-        ui.spacing_mut().button_padding = padding;
-        ui.add(btn)
-    })
-    .inner
+    let prev = ui.spacing().button_padding;
+    ui.spacing_mut().button_padding = padding;
+    let resp = ui.add(btn.wrap_mode(egui::TextWrapMode::Extend));
+    ui.spacing_mut().button_padding = prev;
+    resp
 }
 
 /// Compact pill button replacement for `ui.small_button` with balanced breathing room.
