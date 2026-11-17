@@ -1886,7 +1886,7 @@ fn render_preview_pane(
                                     .as_ref()
                                     .and_then(|c| c.qr_matrix.clone());
                                 if let Some(res) = qr_res {
-                                    render_qr_card(ui, &res, palette, actions);
+                                    render_qr_card(ui, &res, body_h, palette, actions);
                                 }
                             } else {
                                 if let Some(rgba) = item.detected_color {
@@ -2193,88 +2193,187 @@ fn encode_qr_png(width: usize, modules: &[bool]) -> Result<Vec<u8>, String> {
     Ok(buf.into_inner())
 }
 
-fn render_qr_card(
+fn draw_qr_square(
     ui: &mut Ui,
-    qr_res: &Result<(usize, Vec<bool>), String>,
+    canvas_px: f32,
+    width: usize,
+    modules: &[bool],
+    palette: &EarthPalette,
+) {
+    let quiet_zone = 2usize;
+    let total_modules = (width + quiet_zone * 2) as f32;
+    let cell_px = (canvas_px / total_modules).max(2.0);
+    let actual_px = cell_px * total_modules;
+
+    let (qr_rect, _) = ui.allocate_exact_size(vec2(actual_px, actual_px), Sense::hover());
+    ui.painter()
+        .rect_filled(qr_rect, CornerRadius::same(10), Color32::WHITE);
+    ui.painter().rect_stroke(
+        qr_rect,
+        CornerRadius::same(10),
+        Stroke::new(1.0, palette.border),
+        egui::StrokeKind::Inside,
+    );
+
+    let origin_x = qr_rect.min.x + quiet_zone as f32 * cell_px;
+    let origin_y = qr_rect.min.y + quiet_zone as f32 * cell_px;
+    let dark_color = Color32::from_rgb(5, 9, 20);
+    for y in 0..width {
+        for x in 0..width {
+            if modules[y * width + x] {
+                let min = pos2(origin_x + x as f32 * cell_px, origin_y + y as f32 * cell_px);
+                let max = pos2(min.x + cell_px + 0.35, min.y + cell_px + 0.35);
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_max(min, max),
+                    CornerRadius::ZERO,
+                    dark_color,
+                );
+            }
+        }
+    }
+}
+
+fn draw_qr_action_buttons(
+    ui: &mut Ui,
+    width: usize,
+    modules: &[bool],
     palette: &EarthPalette,
     actions: &mut Vec<PopupAction>,
 ) {
+    let copy_btn = egui::Button::new(
+        RichText::new("复制二维码图片")
+            .size(11.5)
+            .color(palette.on_accent),
+    )
+    .fill(palette.accent)
+    .stroke(Stroke::NONE)
+    .corner_radius(CornerRadius::same(255));
+    if padded_button(ui, copy_btn, vec2(11.0, 4.5)).clicked()
+        && let Ok(png) = encode_qr_png(width, modules)
+    {
+        actions.push(PopupAction::CopyQrImage(png));
+    }
+}
+
+fn draw_qr_save_button(
+    ui: &mut Ui,
+    width: usize,
+    modules: &[bool],
+    actions: &mut Vec<PopupAction>,
+) {
+    if compact_button(ui, RichText::new("另存为图片...").size(11.5)).clicked()
+        && let Ok(png) = encode_qr_png(width, modules)
+    {
+        actions.push(PopupAction::SaveQrImageAs(png));
+    }
+}
+
+fn render_qr_card(
+    ui: &mut Ui,
+    qr_res: &Result<(usize, Vec<bool>), String>,
+    body_h: f32,
+    palette: &EarthPalette,
+    actions: &mut Vec<PopupAction>,
+) {
+    let card_outer_w = ui.available_width().max(160.0);
+    let card_outer_h = (body_h - 2.0).max(116.0);
+    let card_inner_w = (card_outer_w - 20.0).max(140.0);
+    let card_inner_h = (card_outer_h - 20.0).max(96.0);
+
     egui::Frame::NONE
         .fill(palette.card_bg)
         .stroke(Stroke::new(1.0, palette.border_subtle))
         .corner_radius(CornerRadius::same(14))
         .inner_margin(egui::Margin::same(10))
-        .show(ui, |ui| match qr_res {
-            Ok((width, modules)) if *width > 0 => {
-                let quiet_zone = 2usize;
-                let total_modules = (*width + quiet_zone * 2) as f32;
-                let canvas_px = 148.0f32;
-                let cell_px = (canvas_px / total_modules).max(2.0);
-                let actual_px = cell_px * total_modules;
+        .show(ui, |ui| {
+            ui.set_min_size(vec2(card_inner_w, card_inner_h));
+            ui.set_max_size(vec2(card_inner_w, card_inner_h));
 
-                ui.horizontal(|ui| {
-                    let (qr_rect, _) =
-                        ui.allocate_exact_size(vec2(actual_px, actual_px), Sense::hover());
-                    ui.painter().rect_filled(
-                        qr_rect,
-                        CornerRadius::same(8),
-                        Color32::WHITE,
-                    );
-                    ui.painter().rect_stroke(
-                        qr_rect,
-                        CornerRadius::same(8),
-                        Stroke::new(1.0, palette.border),
-                        egui::StrokeKind::Inside,
-                    );
-
-                    let origin_x = qr_rect.min.x + quiet_zone as f32 * cell_px;
-                    let origin_y = qr_rect.min.y + quiet_zone as f32 * cell_px;
-                    let dark_color = Color32::from_rgb(5, 9, 20);
-                    for y in 0..*width {
-                        for x in 0..*width {
-                            if modules[y * *width + x] {
-                                let min = pos2(
-                                    origin_x + x as f32 * cell_px,
-                                    origin_y + y as f32 * cell_px,
-                                );
-                                let max = pos2(min.x + cell_px + 0.35, min.y + cell_px + 0.35);
-                                ui.painter().rect_filled(
-                                    egui::Rect::from_min_max(min, max),
-                                    CornerRadius::ZERO,
-                                    dark_color,
-                                );
-                            }
-                        }
-                    }
-
-                    ui.add_space(6.0);
-                    ui.vertical(|ui| {
-                        let copy_btn = egui::Button::new(
-                            RichText::new("复制二维码图片")
-                                .size(11.5)
-                                .color(palette.on_accent),
+            match qr_res {
+                Ok((width, modules)) if *width > 0 => {
+                    let font_id = FontId::proportional(11.5);
+                    let (w1, w2, btn_h) = ui.fonts_mut(|f| {
+                        let g1 = f.layout_no_wrap(
+                            "复制二维码图片".into(),
+                            font_id.clone(),
+                            Color32::WHITE,
+                        );
+                        let g2 = f.layout_no_wrap("另存为图片...".into(), font_id, Color32::WHITE);
+                        (
+                            g1.size().x + 22.0,
+                            g2.size().x + 22.0,
+                            g1.size().y.max(g2.size().y) + 9.0,
                         )
-                        .fill(palette.accent)
-                        .stroke(Stroke::NONE)
-                        .corner_radius(CornerRadius::same(255));
-                        if padded_button(ui, copy_btn, vec2(11.0, 4.5)).clicked()
-                            && let Ok(png) = encode_qr_png(*width, modules)
-                        {
-                            actions.push(PopupAction::CopyQrImage(png));
-                        }
-                        ui.add_space(4.0);
-                        if compact_button(ui, "另存为图片...").clicked()
-                            && let Ok(png) = encode_qr_png(*width, modules)
-                        {
-                            actions.push(PopupAction::SaveQrImageAs(png));
-                        }
                     });
-                });
+
+                    let quiet_zone = 2usize;
+                    let total_modules = (*width + quiet_zone * 2) as f32;
+
+                    if card_inner_h >= 150.0 {
+                        // Centered vertical stack: crisp QR square above centered action pills
+                        let v_gap = 12.0;
+                        let h_gap = 8.0;
+                        let target_px = (card_inner_h - btn_h - v_gap - 8.0).clamp(112.0, 156.0);
+                        let cell_px = (target_px / total_modules).max(2.0);
+                        let actual_px = cell_px * total_modules;
+                        let total_h = actual_px + v_gap + btn_h;
+                        let top_pad = ((card_inner_h - total_h) * 0.5).max(0.0);
+
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.add_space(top_pad);
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                ui.add_space(((card_inner_w - actual_px) * 0.5).max(0.0));
+                                draw_qr_square(ui, target_px, *width, modules, palette);
+                            });
+                            ui.add_space(v_gap);
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                let total_btn_w = w1 + h_gap + w2;
+                                ui.add_space(((card_inner_w - total_btn_w) * 0.5).max(0.0));
+                                draw_qr_action_buttons(ui, *width, modules, palette, actions);
+                                ui.add_space(h_gap);
+                                draw_qr_save_button(ui, *width, modules, actions);
+                            });
+                        });
+                    } else {
+                        // Compact centered horizontal group when transform drawer reduces height
+                        let target_px = (card_inner_h - 6.0).clamp(76.0, 132.0);
+                        let cell_px = (target_px / total_modules).max(2.0);
+                        let actual_px = cell_px * total_modules;
+                        let col_w = w1.max(w2);
+                        let h_gap = 16.0;
+                        let total_w = actual_px + h_gap + col_w;
+                        let col_h = btn_h * 2.0 + 8.0;
+                        let lead_x = ((card_inner_w - total_w) * 0.5).max(0.0);
+
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            ui.add_space(lead_x);
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.add_space(((card_inner_h - actual_px) * 0.5).max(0.0));
+                                draw_qr_square(ui, target_px, *width, modules, palette);
+                            });
+                            ui.add_space(h_gap);
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.add_space(((card_inner_h - col_h) * 0.5).max(0.0));
+                                draw_qr_action_buttons(ui, *width, modules, palette, actions);
+                                ui.add_space(8.0);
+                                draw_qr_save_button(ui, *width, modules, actions);
+                            });
+                        });
+                    }
+                }
+                Err(err) => {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(RichText::new(err).size(11.5).color(palette.danger));
+                    });
+                }
+                _ => {}
             }
-            Err(err) => {
-                ui.label(RichText::new(err).size(11.5).color(palette.danger));
-            }
-            _ => {}
         });
 }
 
@@ -3204,14 +3303,16 @@ mod tests {
             matched_indices: HashSet::new(),
         }];
 
-        let run_workbench = |state: &mut PopupState| -> Vec<String> {
+        let run_workbench = |state: &mut PopupState| -> (Vec<String>, Vec<egui::Rect>) {
             let raw = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(760.0, 520.0))),
                 ..Default::default()
             };
             let mut texts = Vec::new();
+            let mut rects = Vec::new();
             for _ in 0..2 {
                 texts.clear();
+                rects.clear();
                 let mut out = ctx.run_ui(raw.clone(), |ui| {
                     #[allow(deprecated)]
                     egui::CentralPanel::default()
@@ -3239,13 +3340,19 @@ mod tests {
                         });
                 });
                 for cs in &out.shapes {
-                    if let egui::epaint::Shape::Text(t) = &cs.shape {
-                        texts.push(t.galley.text().to_string());
+                    match &cs.shape {
+                        egui::epaint::Shape::Text(t) => {
+                            texts.push(t.galley.text().to_string());
+                        }
+                        egui::epaint::Shape::Rect(r) => {
+                            rects.push(r.rect);
+                        }
+                        _ => {}
                     }
                 }
                 out.textures_delta.clear();
             }
-            texts
+            (texts, rects)
         };
 
         let mut state_text = PopupState {
@@ -3253,7 +3360,7 @@ mod tests {
             preview_open: true,
             ..Default::default()
         };
-        let texts_without_qr = run_workbench(&mut state_text);
+        let (texts_without_qr, _) = run_workbench(&mut state_text);
         assert!(
             texts_without_qr
                 .iter()
@@ -3267,7 +3374,7 @@ mod tests {
             qr_preview_id: Some(42),
             ..Default::default()
         };
-        let texts_with_qr = run_workbench(&mut state_qr);
+        let (texts_with_qr, rects_with_qr) = run_workbench(&mut state_qr);
         assert!(
             texts_with_qr.iter().any(|t| t.contains("复制二维码图片")),
             "expected QR action button when QR preview is active"
@@ -3277,6 +3384,28 @@ mod tests {
                 .iter()
                 .any(|t| t.contains("UNIQUE_QR_PREVIEW_TEXT_PAYLOAD")),
             "text body should be hidden when QR preview is active, got: {texts_with_qr:?}"
+        );
+
+        let qr_card = rects_with_qr
+            .iter()
+            .find(|r| r.width() > 370.0 && r.height() > 140.0 && r.height() < 300.0)
+            .copied()
+            .expect("full-width QR card rect found");
+        let qr_square = rects_with_qr
+            .iter()
+            .find(|r| {
+                r.width() > 90.0
+                    && r.width() < 200.0
+                    && (r.width() - r.height()).abs() < 1.5
+                    && qr_card.contains(r.center())
+            })
+            .copied()
+            .expect("QR square rect found");
+        assert!(
+            (qr_card.center().x - qr_square.center().x).abs() < 3.0,
+            "QR square not horizontally centered inside card: card_cx={} qr_cx={}",
+            qr_card.center().x,
+            qr_square.center().x
         );
     }
 }
