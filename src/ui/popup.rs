@@ -2632,28 +2632,23 @@ fn render_about_overlay(ctx: &egui::Context, state: &mut PopupState, palette: &E
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
-        .fixed_size(vec2(320.0, 190.0))
+        .fixed_size(vec2(280.0, 158.0))
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
+                ui.add_space(4.0);
                 draw_earth_emblem(ui, 42.0, palette, false);
                 ui.add_space(6.0);
                 ui.label(RichText::new("Earth 剪贴板").size(16.0).strong());
                 ui.label(
-                    RichText::new(concat!(
-                        "v",
-                        env!("CARGO_PKG_VERSION"),
-                        " · Pure Rust (macOS & Windows)"
-                    ))
-                    .size(11.5)
-                    .color(palette.text_secondary),
+                    RichText::new(concat!("v", env!("CARGO_PKG_VERSION"), " · Pure Rust"))
+                        .size(11.5)
+                        .color(palette.text_secondary),
                 );
-                ui.add_space(8.0);
+                ui.add_space(4.0);
                 ui.label(
-                    RichText::new(
-                        "支持文字、图片、文件的极速剪贴板工作台。\n内置速览预览、快捷数据加工、收藏分组与本地敏感信息脱敏。",
-                    )
-                    .size(12.0)
-                    .color(palette.text_muted),
+                    RichText::new("By 西岚")
+                        .size(12.0)
+                        .color(palette.text_muted),
                 );
                 ui.add_space(12.0);
                 let close_btn = egui::Button::new(
