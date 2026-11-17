@@ -47,6 +47,8 @@ pub enum PopupAction {
     ToggleIgnoreNext,
     SettingsChanged,
     SaveImageAs(String),
+    CopyQrImage(Vec<u8>),
+    SaveQrImageAs(Vec<u8>),
     RevealFile(PathBuf),
     OpenUrl(String),
     StartUpdateDownload(ReleaseInfo),
@@ -1821,20 +1823,6 @@ fn render_preview_pane(
                             let raw = item.text_content.as_deref().unwrap_or("");
                             let hidden = item.is_sensitive()
                                 && !state.revealed_sensitive_ids.contains(&item.id);
-                            if let Some(rgba) = item.detected_color {
-                                render_color_card(ui, raw.trim(), rgba, palette, actions);
-                                ui.add_space(6.0);
-                            }
-                            if state.qr_preview_id == Some(item.id) {
-                                let qr_res = state
-                                    .preview_cache
-                                    .as_ref()
-                                    .and_then(|c| c.qr_matrix.clone());
-                                if let Some(res) = qr_res {
-                                    render_qr_card(ui, &res, palette);
-                                    ui.add_space(6.0);
-                                }
-                            }
                             if is_editing_text {
                                 let mut commit_edit: Option<(String, bool)> = None;
                                 let mut cancel_edit = false;
@@ -1892,7 +1880,19 @@ fn render_preview_pane(
                                     .size(12.5)
                                     .color(palette.text_secondary),
                                 );
+                            } else if state.qr_preview_id == Some(item.id) {
+                                let qr_res = state
+                                    .preview_cache
+                                    .as_ref()
+                                    .and_then(|c| c.qr_matrix.clone());
+                                if let Some(res) = qr_res {
+                                    render_qr_card(ui, &res, palette, actions);
+                                }
                             } else {
+                                if let Some(rgba) = item.detected_color {
+                                    render_color_card(ui, raw.trim(), rgba, palette, actions);
+                                    ui.add_space(6.0);
+                                }
                                 let display = state
                                     .preview_cache
                                     .as_ref()
@@ -2006,15 +2006,23 @@ fn render_preview_pane(
                         .as_ref()
                         .map(|c| c.quick_actions.clone())
                         .unwrap_or_default();
+                    let hidden = item.is_sensitive()
+                        && !state.revealed_sensitive_ids.contains(&item.id);
                     ui.horizontal_wrapped(|ui| {
                         if item.is_url && compact_button(ui, "打开链接").clicked() {
                             actions.push(PopupAction::OpenUrl(raw.trim().to_string()));
                         }
-                        if raw.len() <= 2048 {
+                        if raw.len() <= 2048 && !hidden {
                             let qr_active = state.qr_preview_id == Some(item.id);
                             let qr_lbl = if qr_active { "收起二维码" } else { "二维码" };
                             if compact_button(ui, qr_lbl).clicked() {
-                                state.qr_preview_id = if qr_active { None } else { Some(item.id) };
+                                if qr_active {
+                                    state.qr_preview_id = None;
+                                } else {
+                                    state.qr_preview_id = Some(item.id);
+                                    state.inline_edit_text = None;
+                                }
+                                ui.ctx().request_repaint();
                             }
                         }
                         for qa in quick_list {
@@ -2159,10 +2167,37 @@ fn render_preview_pane(
         });
 }
 
+fn encode_qr_png(width: usize, modules: &[bool]) -> Result<Vec<u8>, String> {
+    let scale = 10u32;
+    let quiet = 4u32;
+    let total = (width as u32 + quiet * 2) * scale;
+    let mut img = image::RgbaImage::from_pixel(total, total, image::Rgba([255, 255, 255, 255]));
+    let dark = image::Rgba([5, 9, 20, 255]);
+    for y in 0..width {
+        for x in 0..width {
+            if modules[y * width + x] {
+                let px0 = (x as u32 + quiet) * scale;
+                let py0 = (y as u32 + quiet) * scale;
+                for dy in 0..scale {
+                    for dx in 0..scale {
+                        img.put_pixel(px0 + dx, py0 + dy, dark);
+                    }
+                }
+            }
+        }
+    }
+    let mut buf = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(&mut buf, image::ImageFormat::Png)
+        .map_err(|e| format!("编码二维码 PNG 失败: {e}"))?;
+    Ok(buf.into_inner())
+}
+
 fn render_qr_card(
     ui: &mut Ui,
     qr_res: &Result<(usize, Vec<bool>), String>,
     palette: &EarthPalette,
+    actions: &mut Vec<PopupAction>,
 ) {
     egui::Frame::NONE
         .fill(palette.card_bg)
@@ -2212,19 +2247,27 @@ fn render_qr_card(
                         }
                     }
 
+                    ui.add_space(6.0);
                     ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new("📱 扫码获取当前内容")
-                                .size(12.5)
-                                .strong()
-                                .color(palette.text_primary),
-                        );
+                        let copy_btn = egui::Button::new(
+                            RichText::new("复制二维码图片")
+                                .size(11.5)
+                                .color(palette.on_accent),
+                        )
+                        .fill(palette.accent)
+                        .stroke(Stroke::NONE)
+                        .corner_radius(CornerRadius::same(255));
+                        if padded_button(ui, copy_btn, vec2(11.0, 4.5)).clicked()
+                            && let Ok(png) = encode_qr_png(*width, modules)
+                        {
+                            actions.push(PopupAction::CopyQrImage(png));
+                        }
                         ui.add_space(4.0);
-                        ui.label(
-                            RichText::new("使用手机相机或微信扫一扫，即可直接在手机端打开链接或复制文本（本地离线生成）。")
-                                .size(11.0)
-                                .color(palette.text_muted),
-                        );
+                        if compact_button(ui, "另存为图片...").clicked()
+                            && let Ok(png) = encode_qr_png(*width, modules)
+                        {
+                            actions.push(PopupAction::SaveQrImageAs(png));
+                        }
                     });
                 });
             }
@@ -2661,8 +2704,8 @@ mod tests {
         let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
         palette.apply_to_ctx(&ctx);
 
-        let mut settings = AppSettings::default();
         let collections = Vec::new();
+        let mut settings = AppSettings::default();
         let large_text = "{\"key\":\"value\",\"list\":[1,2,3]}\n".repeat(4000);
         let results = vec![SearchResultItem {
             item: ClipItem {
@@ -3122,5 +3165,118 @@ mod tests {
         run_click(&ctx, &settings, &mut state, &mut actions);
         assert!(state.preview_open, "DoubleClick mode single click should open workbench");
         assert!(actions.is_empty(), "DoubleClick mode single click should not copy");
+    }
+
+    #[test]
+    fn qr_preview_hides_duplicate_text_below() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        let collections = Vec::new();
+        let results = [SearchResultItem {
+            item: ClipItem {
+                id: 42,
+                content_hash: "h42".into(),
+                kind: ClipKind::Text,
+                text_content: Some("UNIQUE_QR_PREVIEW_TEXT_PAYLOAD".into()),
+                html_content: None,
+                rtf_content: None,
+                image_path: None,
+                thumb_path: None,
+                image_width: None,
+                image_height: None,
+                files: Vec::new(),
+                byte_size: 30,
+                source_app: None,
+                source_bundle_id: None,
+                pinned: false,
+                collection_id: None,
+                first_copied_at: 0,
+                last_copied_at: 0,
+                copy_count: 1,
+                sensitive_label: None,
+                detected_color: None,
+                is_url: false,
+                note: None,
+            },
+            score: 100,
+            matched_indices: HashSet::new(),
+        }];
+
+        let run_workbench = |state: &mut PopupState| -> Vec<String> {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(760.0, 520.0))),
+                ..Default::default()
+            };
+            let mut texts = Vec::new();
+            for _ in 0..2 {
+                texts.clear();
+                let mut out = ctx.run_ui(raw.clone(), |ui| {
+                    #[allow(deprecated)]
+                    egui::CentralPanel::default()
+                        .frame(egui::Frame::NONE)
+                        .show_inside(ui, |ui| {
+                            let r_rect = egui::Rect::from_min_size(egui::pos2(330.0, 60.0), vec2(410.0, 400.0));
+                            ui.scope_builder(
+                                egui::UiBuilder::new()
+                                    .max_rect(r_rect)
+                                    .layout(Layout::top_down(Align::Min)),
+                                |ui| {
+                                    ui.set_min_size(r_rect.size());
+                                    ui.set_max_size(r_rect.size());
+                                    let mut actions = Vec::new();
+                                    render_preview_pane(
+                                        ui,
+                                        Some(&results[0].item),
+                                        &collections,
+                                        state,
+                                        &palette,
+                                        &mut actions,
+                                    );
+                                },
+                            );
+                        });
+                });
+                for cs in &out.shapes {
+                    if let egui::epaint::Shape::Text(t) = &cs.shape {
+                        texts.push(t.galley.text().to_string());
+                    }
+                }
+                out.textures_delta.clear();
+            }
+            texts
+        };
+
+        let mut state_text = PopupState {
+            selected_id: Some(42),
+            preview_open: true,
+            ..Default::default()
+        };
+        let texts_without_qr = run_workbench(&mut state_text);
+        assert!(
+            texts_without_qr
+                .iter()
+                .any(|t| t.contains("UNIQUE_QR_PREVIEW_TEXT_PAYLOAD")),
+            "expected text body when QR preview is closed"
+        );
+
+        let mut state_qr = PopupState {
+            selected_id: Some(42),
+            preview_open: true,
+            qr_preview_id: Some(42),
+            ..Default::default()
+        };
+        let texts_with_qr = run_workbench(&mut state_qr);
+        assert!(
+            texts_with_qr.iter().any(|t| t.contains("复制二维码图片")),
+            "expected QR action button when QR preview is active"
+        );
+        assert!(
+            !texts_with_qr
+                .iter()
+                .any(|t| t.contains("UNIQUE_QR_PREVIEW_TEXT_PAYLOAD")),
+            "text body should be hidden when QR preview is active, got: {texts_with_qr:?}"
+        );
     }
 }

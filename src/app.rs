@@ -1,6 +1,7 @@
 use crate::clipboard::{
-    clear_system_clipboard, start_clipboard_watcher, write_custom_text_to_clipboard,
-    write_item_to_clipboard, ClipboardEvent, ClipboardHandle, ClipboardSuppression,
+    clear_system_clipboard, start_clipboard_watcher, write_custom_png_to_clipboard,
+    write_custom_text_to_clipboard, write_item_to_clipboard, ClipboardEvent, ClipboardHandle,
+    ClipboardSuppression,
 };
 use crate::hotkey::GlobalHotkeyController;
 use crate::model::{
@@ -756,6 +757,38 @@ impl eframe::App for EarthApp {
                                                 } else {
                                                     self.popup_state.status_banner = Some((
                                                         format!("✓ 已保存到 {}", dest.display()),
+                                                        false,
+                                                    ));
+                                                }
+                                            }
+                                            self.dialog_open = false;
+                                        }
+                                        PopupAction::CopyQrImage(png_bytes) => {
+                                            match write_custom_png_to_clipboard(&png_bytes) {
+                                                Ok(()) => {
+                                                    self.popup_state.status_banner = Some((
+                                                        "✓ 已复制二维码图片到剪贴板".to_string(),
+                                                        false,
+                                                    ));
+                                                }
+                                                Err(e) => {
+                                                    self.popup_state.status_banner = Some((e, true));
+                                                }
+                                            }
+                                        }
+                                        PopupAction::SaveQrImageAs(png_bytes) => {
+                                            self.dialog_open = true;
+                                            if let Some(dest) = rfd::FileDialog::new()
+                                                .set_file_name("earth_qrcode.png")
+                                                .add_filter("PNG Image", &["png"])
+                                                .save_file()
+                                            {
+                                                if let Err(e) = std::fs::write(&dest, &png_bytes) {
+                                                    self.popup_state.status_banner =
+                                                        Some((format!("保存二维码失败: {e}"), true));
+                                                } else {
+                                                    self.popup_state.status_banner = Some((
+                                                        format!("✓ 二维码已保存到 {}", dest.display()),
                                                         false,
                                                     ));
                                                 }

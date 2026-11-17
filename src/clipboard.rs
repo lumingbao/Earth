@@ -500,6 +500,14 @@ pub fn write_custom_text_to_clipboard(
     Ok(())
 }
 
+pub fn write_custom_png_to_clipboard(png_bytes: &[u8]) -> Result<(), String> {
+    let ctx = ClipboardContext::new().map_err(|e| format!("无法访问系统剪贴板: {e}"))?;
+    let img = <RustImageData as clipboard_rs::common::RustImage>::from_bytes(png_bytes)
+        .map_err(|e| format!("解析二维码图片失败: {e}"))?;
+    ctx.set_image(img)
+        .map_err(|e| format!("写入二维码图片到剪贴板失败: {e}"))
+}
+
 pub fn clear_system_clipboard() -> Result<(), String> {
     let ctx = ClipboardContext::new().map_err(|e| format!("无法访问系统剪贴板: {e}"))?;
     ctx.clear().map_err(|e| format!("清空系统剪贴板失败: {e}"))
