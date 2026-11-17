@@ -1733,11 +1733,20 @@ fn render_preview_pane(
                                 .color(palette.accent_text),
                         );
                         let edit_w = (ui.available_width() - 116.0).max(80.0);
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(note_buf)
-                                .hint_text("输入备注别名（支持搜索匹配）…")
-                                .desired_width(edit_w),
-                        );
+                        let resp = ui
+                            .scope(|ui| {
+                                let r = CornerRadius::same(8);
+                                ui.visuals_mut().widgets.inactive.corner_radius = r;
+                                ui.visuals_mut().widgets.hovered.corner_radius = r;
+                                ui.visuals_mut().widgets.active.corner_radius = r;
+                                ui.add(
+                                    egui::TextEdit::singleline(note_buf)
+                                        .hint_text("输入备注别名（支持搜索匹配）…")
+                                        .margin(egui::Margin::symmetric(8, 4))
+                                        .desired_width(edit_w),
+                                )
+                            })
+                            .inner;
                         let enter_hit = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                         let save_btn = egui::Button::new(
                             RichText::new("保存").size(11.0).color(palette.on_accent),
@@ -1855,12 +1864,19 @@ fn render_preview_pane(
                                         }
                                     });
                                     ui.add_space(4.0);
-                                    ui.add(
-                                        egui::TextEdit::multiline(edit_buf)
-                                            .font(FontId::monospace(12.2))
-                                            .desired_width(f32::INFINITY)
-                                            .desired_rows(8),
-                                    );
+                                    ui.scope(|ui| {
+                                        let r = CornerRadius::same(10);
+                                        ui.visuals_mut().widgets.inactive.corner_radius = r;
+                                        ui.visuals_mut().widgets.hovered.corner_radius = r;
+                                        ui.visuals_mut().widgets.active.corner_radius = r;
+                                        ui.add(
+                                            egui::TextEdit::multiline(edit_buf)
+                                                .font(FontId::monospace(12.2))
+                                                .margin(egui::Margin::same(10))
+                                                .desired_width(f32::INFINITY)
+                                                .desired_rows(8),
+                                        );
+                                    });
                                 }
                                 if let Some((new_text, paste_after)) = commit_edit {
                                     actions.push(PopupAction::UpdateItemText {
