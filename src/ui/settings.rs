@@ -783,20 +783,6 @@ fn render_appearance_tab(
         });
 
         ui.horizontal(|ui| {
-            ui.label("列表缩略图高度：");
-            if ui
-                .add(
-                    egui::DragValue::new(&mut settings.image_height)
-                        .range(24.0..=110.0)
-                        .suffix(" px"),
-                )
-                .changed()
-            {
-                actions.push(SettingsAction::SettingsChanged);
-            }
-        });
-
-        ui.horizontal(|ui| {
             ui.label("高亮搜索匹配：");
             egui::ComboBox::from_id_salt("highlight_combo")
                 .selected_text(settings.match_highlight.label())

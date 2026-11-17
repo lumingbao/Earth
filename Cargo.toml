@@ -8,7 +8,7 @@ license = "MIT"
 [dependencies]
 eframe = "0.37"
 egui = "0.37"
-egui_extras = { version = "0.37", features = ["image"] }
+egui_extras = { version = "0.37", features = ["file", "image"] }
 clipboard-rs = "0.3.5"
 global-hotkey = "0.10"
 tray-icon = "0.26"

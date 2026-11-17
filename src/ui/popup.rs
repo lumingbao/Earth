@@ -1085,10 +1085,7 @@ fn render_items_list(
                 prev_pinned = Some(item.pinned);
 
                 let selected = state.selected_id == Some(item.id);
-                let row_height = match item.kind {
-                    ClipKind::Image => settings.image_height.max(28.0) + 12.0,
-                    _ => 34.0,
-                };
+                let row_height = LIST_ROW_HEIGHT;
                 let rel_y = ui.cursor().min.y - origin_y;
                 let in_viewport =
                     (rel_y + row_height >= vis_min_y && rel_y <= vis_max_y) || selected;
@@ -1119,6 +1116,8 @@ fn render_items_list(
         });
 }
 
+const LIST_ROW_HEIGHT: f32 = 34.0;
+
 #[allow(clippy::too_many_arguments)]
 fn render_item_row(
     ui: &mut Ui,
@@ -1132,10 +1131,7 @@ fn render_item_row(
     actions: &mut Vec<PopupAction>,
 ) -> egui::Response {
     let item = &res.item;
-    let row_height = match item.kind {
-        ClipKind::Image => settings.image_height.max(28.0) + 12.0,
-        _ => 34.0,
-    };
+    let row_height = LIST_ROW_HEIGHT;
 
     let row_fill = if selected {
         palette.row_selected_bg
@@ -1202,10 +1198,10 @@ fn render_item_row(
                 ClipKind::Image => {
                     if let Some(thumb) = item.thumb_path.as_deref().or(item.image_path.as_deref()) {
                         let uri = path_to_file_uri(thumb);
-                        let h = settings.image_height.max(24.0);
                         ui.add(
                             egui::Image::from_uri(uri)
-                                .max_size(vec2(h * 2.2, h))
+                                .max_size(vec2(36.0, 22.0))
+                                .maintain_aspect_ratio(true)
                                 .corner_radius(CornerRadius::same(4)),
                         );
                     }
@@ -1316,26 +1312,38 @@ fn render_item_row(
                     #[cfg(not(target_os = "macos"))]
                     let label = format!("Alt+{num}");
 
-                    egui::Frame::NONE
-                        .fill(if selected { palette.accent } else { palette.keycap_bg })
-                        .stroke(if selected {
-                            Stroke::NONE
+                    let fg = if selected {
+                        palette.on_accent
+                    } else {
+                        palette.keycap_text
+                    };
+                    let galley = ui.fonts_mut(|f| {
+                        f.layout_no_wrap(label, FontId::proportional(10.5), fg)
+                    });
+                    let pill_size = vec2(
+                        (galley.size().x + 12.0).max(28.0),
+                        (galley.size().y + 6.0).clamp(20.0, 22.0),
+                    );
+                    let (pill_rect, _) = ui.allocate_exact_size(pill_size, Sense::hover());
+                    ui.painter().rect_filled(
+                        pill_rect,
+                        CornerRadius::same(255),
+                        if selected {
+                            palette.accent
                         } else {
-                            Stroke::new(1.0, palette.border_subtle)
-                        })
-                        .corner_radius(CornerRadius::same(255))
-                        .inner_margin(egui::Margin::symmetric(6, 2))
-                        .show(ui, |ui| {
-                            ui.label(
-                                RichText::new(label)
-                                    .size(10.5)
-                                    .color(if selected {
-                                        palette.on_accent
-                                    } else {
-                                        palette.keycap_text
-                                    }),
-                            );
-                        });
+                            palette.keycap_bg
+                        },
+                    );
+                    if !selected {
+                        ui.painter().rect_stroke(
+                            pill_rect,
+                            CornerRadius::same(255),
+                            Stroke::new(1.0, palette.border_subtle),
+                            egui::StrokeKind::Inside,
+                        );
+                    }
+                    let text_pos = pill_rect.center() - galley.size() * 0.5;
+                    ui.painter().galley(text_pos, galley, fg);
                 }
 
                 if item.pinned {
@@ -3407,5 +3415,225 @@ mod tests {
             qr_card.center().x,
             qr_square.center().x
         );
+    }
+
+    #[test]
+    fn image_files_and_text_rows_have_uniform_height_and_loaded_thumbnail() {
+        let dir = std::env::temp_dir().join("Application Support Earth Test");
+        let _ = std::fs::create_dir_all(&dir);
+        let thumb_path = dir.join("thumb test.png");
+        let img = image::RgbaImage::from_pixel(64, 64, image::Rgba([69, 110, 253, 255]));
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::fs::File::create(&thumb_path).unwrap(), image::ImageFormat::Png)
+            .unwrap();
+        let thumb_str = thumb_path.to_string_lossy().into_owned();
+
+        let ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&ctx);
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        let settings = AppSettings {
+            image_height: 80.0,
+            ..Default::default()
+        };
+        let collections = Vec::new();
+        let results = [
+            SearchResultItem {
+                item: ClipItem {
+                    id: 1,
+                    content_hash: "img1".into(),
+                    kind: ClipKind::Image,
+                    text_content: None,
+                    html_content: None,
+                    rtf_content: None,
+                    image_path: Some(thumb_str.clone()),
+                    thumb_path: Some(thumb_str.clone()),
+                    image_width: Some(370),
+                    image_height: Some(370),
+                    files: Vec::new(),
+                    byte_size: 5200,
+                    source_app: None,
+                    source_bundle_id: None,
+                    pinned: false,
+                    collection_id: None,
+                    first_copied_at: 0,
+                    last_copied_at: 0,
+                    copy_count: 1,
+                    sensitive_label: None,
+                    detected_color: None,
+                    is_url: false,
+                    note: None,
+                },
+                score: 100,
+                matched_indices: HashSet::new(),
+            },
+            SearchResultItem {
+                item: ClipItem {
+                    id: 2,
+                    content_hash: "file2".into(),
+                    kind: ClipKind::Files,
+                    text_content: None,
+                    html_content: None,
+                    rtf_content: None,
+                    image_path: None,
+                    thumb_path: None,
+                    image_width: None,
+                    image_height: None,
+                    files: vec![crate::model::FileEntry {
+                        path: "/tmp/demo.png".into(),
+                        name: "demo.png".into(),
+                        is_dir: false,
+                        size_bytes: 1200,
+                    }],
+                    byte_size: 1200,
+                    source_app: None,
+                    source_bundle_id: None,
+                    pinned: false,
+                    collection_id: None,
+                    first_copied_at: 0,
+                    last_copied_at: 0,
+                    copy_count: 1,
+                    sensitive_label: None,
+                    detected_color: None,
+                    is_url: false,
+                    note: None,
+                },
+                score: 100,
+                matched_indices: HashSet::new(),
+            },
+            SearchResultItem {
+                item: ClipItem {
+                    id: 3,
+                    content_hash: "txt3".into(),
+                    kind: ClipKind::Text,
+                    text_content: Some("uniform row height text".into()),
+                    html_content: None,
+                    rtf_content: None,
+                    image_path: None,
+                    thumb_path: None,
+                    image_width: None,
+                    image_height: None,
+                    files: Vec::new(),
+                    byte_size: 24,
+                    source_app: None,
+                    source_bundle_id: None,
+                    pinned: false,
+                    collection_id: None,
+                    first_copied_at: 0,
+                    last_copied_at: 0,
+                    copy_count: 1,
+                    sensitive_label: None,
+                    detected_color: None,
+                    is_url: false,
+                    note: None,
+                },
+                score: 100,
+                matched_indices: HashSet::new(),
+            },
+        ];
+
+        let mut state = PopupState {
+            selected_id: Some(1),
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(424.0, 520.0))),
+            ..Default::default()
+        };
+
+        let mut row_heights = [0.0f32; 3];
+        let mut saw_loaded_image = false;
+        let mut shapes_last = Vec::new();
+        for _ in 0..20 {
+            let mut out = ctx.run_ui(raw.clone(), |ui| {
+                #[allow(deprecated)]
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show_inside(ui, |ui| {
+                        let content_rect =
+                            egui::Rect::from_min_size(egui::pos2(13.0, 60.0), vec2(398.0, 380.0));
+                        ui.scope_builder(
+                            egui::UiBuilder::new()
+                                .max_rect(content_rect)
+                                .layout(Layout::top_down(Align::Min)),
+                            |ui| {
+                                ui.set_min_size(content_rect.size());
+                                ui.set_max_size(content_rect.size());
+                                for (i, res) in results.iter().enumerate() {
+                                    let resp = render_item_row(
+                                        ui,
+                                        res,
+                                        Some(i + 1),
+                                        i == 0,
+                                        &settings,
+                                        &collections,
+                                        &mut state,
+                                        &palette,
+                                        &mut actions,
+                                    );
+                                    row_heights[i] = resp.rect.height();
+                                }
+                            },
+                        );
+                    });
+            });
+            shapes_last = out.shapes.clone();
+            if shapes_last.iter().any(|cs| match &cs.shape {
+                egui::epaint::Shape::Rect(r) => r.fill_texture_id() != egui::TextureId::default(),
+                egui::epaint::Shape::Mesh(m) => m.texture_id != egui::TextureId::default(),
+                _ => false,
+            }) {
+                saw_loaded_image = true;
+            }
+            out.textures_delta.clear();
+            if saw_loaded_image {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+
+        for (idx, h) in row_heights.iter().enumerate() {
+            assert!(
+                (*h - LIST_ROW_HEIGHT).abs() < 0.5,
+                "row {idx} height {h} != uniform {LIST_ROW_HEIGHT}: {row_heights:?}"
+            );
+        }
+        assert!(
+            saw_loaded_image,
+            "expected file:// thumbnail PNG with space in path to render texture, shapes: {:?}",
+            shapes_last
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::epaint::Shape::Text(t) => Some(t.galley.text().to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        );
+
+        let keycap_heights: Vec<f32> = shapes_last
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::epaint::Shape::Rect(r)
+                    if r.fill != Color32::TRANSPARENT
+                        && r.rect.width() >= 24.0
+                        && r.rect.width() <= 46.0
+                        && r.rect.left() > 350.0 =>
+                {
+                    Some(r.rect.height())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(keycap_heights.len(), 3, "expected 3 keycap pills, got {keycap_heights:?}");
+        for kh in &keycap_heights {
+            assert!(
+                *kh <= 24.0,
+                "keycap pill stretched too tall: {kh} in {keycap_heights:?}"
+            );
+        }
     }
 }
