@@ -7,6 +7,8 @@ use std::sync::mpsc::{self, Receiver};
 pub struct GlobalHotkeyController {
     manager: GlobalHotKeyManager,
     active_open_hotkey: Option<HotKey>,
+    desired_open_shortcut: String,
+    suspended: bool,
     rx: Receiver<GlobalHotKeyEvent>,
 }
 
@@ -25,6 +27,8 @@ impl GlobalHotkeyController {
         let mut ctrl = Self {
             manager,
             active_open_hotkey: None,
+            desired_open_shortcut: initial_open_shortcut.trim().to_string(),
+            suspended: false,
             rx,
         };
         let warn = ctrl.set_open_shortcut(initial_open_shortcut).err();
@@ -32,7 +36,30 @@ impl GlobalHotkeyController {
     }
 
     pub fn set_open_shortcut(&mut self, shortcut: &str) -> Result<(), String> {
-        let trimmed = shortcut.trim();
+        self.desired_open_shortcut = shortcut.trim().to_string();
+        if self.suspended {
+            return Ok(());
+        }
+        self.apply_open_shortcut()
+    }
+
+    pub fn set_suspended(&mut self, suspended: bool) {
+        if self.suspended == suspended {
+            return;
+        }
+        self.suspended = suspended;
+        while self.rx.try_recv().is_ok() {}
+        if suspended {
+            if let Some(prev) = self.active_open_hotkey.take() {
+                let _ = self.manager.unregister(prev);
+            }
+        } else {
+            let _ = self.apply_open_shortcut();
+        }
+    }
+
+    fn apply_open_shortcut(&mut self) -> Result<(), String> {
+        let trimmed = self.desired_open_shortcut.trim();
         if trimmed.is_empty() {
             if let Some(prev) = self.active_open_hotkey.take() {
                 let _ = self.manager.unregister(prev);
@@ -59,6 +86,10 @@ impl GlobalHotkeyController {
     }
 
     pub fn poll_open_triggered(&self) -> bool {
+        if self.suspended {
+            while self.rx.try_recv().is_ok() {}
+            return false;
+        }
         let Some(target) = self.active_open_hotkey else {
             return false;
         };
@@ -107,6 +138,20 @@ pub fn format_shortcut_display(shortcut: &str) -> String {
                     "escape" | "esc" => "⎋".to_string(),
                     "arrowup" | "up" => "↑".to_string(),
                     "arrowdown" | "down" => "↓".to_string(),
+                    "arrowleft" | "left" => "←".to_string(),
+                    "arrowright" | "right" => "→".to_string(),
+                    "comma" => ",".to_string(),
+                    "period" => ".".to_string(),
+                    "slash" => "/".to_string(),
+                    "semicolon" => ";".to_string(),
+                    "minus" => "-".to_string(),
+                    "equal" => "=".to_string(),
+                    "numpadadd" => "+".to_string(),
+                    "backquote" => "`".to_string(),
+                    "bracketleft" => "[".to_string(),
+                    "bracketright" => "]".to_string(),
+                    "backslash" => "\\".to_string(),
+                    "quote" => "'".to_string(),
                     _ => part.to_uppercase(),
                 };
                 out.push_str(&key_disp);
@@ -127,6 +172,22 @@ pub fn format_shortcut_display(shortcut: &str) -> String {
                 "backspace" => "Backspace".to_string(),
                 "delete" => "Del".to_string(),
                 "space" => "Space".to_string(),
+                "arrowup" | "up" => "↑".to_string(),
+                "arrowdown" | "down" => "↓".to_string(),
+                "arrowleft" | "left" => "←".to_string(),
+                "arrowright" | "right" => "→".to_string(),
+                "comma" => ",".to_string(),
+                "period" => ".".to_string(),
+                "slash" => "/".to_string(),
+                "semicolon" => ";".to_string(),
+                "minus" => "-".to_string(),
+                "equal" => "=".to_string(),
+                "numpadadd" => "+".to_string(),
+                "backquote" => "`".to_string(),
+                "bracketleft" => "[".to_string(),
+                "bracketright" => "]".to_string(),
+                "backslash" => "\\".to_string(),
+                "quote" => "'".to_string(),
                 _ => p.to_uppercase(),
             })
             .collect::<Vec<_>>()
@@ -193,47 +254,191 @@ pub fn matches_egui_shortcut(input: &InputState, shortcut: &str) -> bool {
         && actual_super == target_super
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShortcutCapture {
+    Combo(String),
+    NeedsModifier,
+}
+
+pub fn assemble_shortcut_combo(
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    super_key: bool,
+    key_token: &str,
+) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::with_capacity(5);
+    if ctrl {
+        parts.push("Ctrl");
+    }
+    if alt {
+        parts.push("Alt");
+    }
+    if shift {
+        parts.push("Shift");
+    }
+    if super_key {
+        parts.push("Super");
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    parts.push(key_token);
+    Some(parts.join("+"))
+}
+
+pub fn format_live_modifiers(ctrl: bool, alt: bool, shift: bool, super_key: bool) -> Option<String> {
+    if !ctrl && !alt && !shift && !super_key {
+        return None;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut out = String::new();
+        if ctrl {
+            out.push('⌃');
+        }
+        if alt {
+            out.push('⌥');
+        }
+        if shift {
+            out.push('⇧');
+        }
+        if super_key {
+            out.push('⌘');
+        }
+        Some(out)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut parts: Vec<&str> = Vec::with_capacity(4);
+        if ctrl {
+            parts.push("Ctrl");
+        }
+        if alt {
+            parts.push("Alt");
+        }
+        if shift {
+            parts.push("Shift");
+        }
+        if super_key {
+            parts.push("Win");
+        }
+        Some(parts.join("+"))
+    }
+}
+
 /// Captures a new shortcut string when the user presses a modifier+key combo inside recorder mode.
-pub fn capture_egui_shortcut(input: &InputState) -> Option<String> {
+pub fn capture_egui_shortcut(input: &InputState) -> Option<ShortcutCapture> {
     for ev in &input.events {
-        if let egui::Event::Key {
-            key,
-            pressed: true,
-            modifiers,
-            ..
-        } = ev
-        {
-            if *key == Key::Escape {
-                return None;
+        match ev {
+            egui::Event::Key {
+                key,
+                physical_key,
+                pressed: true,
+                modifiers,
+                ..
+            } => {
+                if *key == Key::Escape {
+                    return None;
+                }
+                let Some(key_name) =
+                    egui_key_to_token(*key).or_else(|| physical_key.and_then(egui_key_to_token))
+                else {
+                    continue;
+                };
+                #[cfg(target_os = "macos")]
+                let (ctrl, super_key) = (modifiers.ctrl, modifiers.mac_cmd || modifiers.command);
+                #[cfg(not(target_os = "macos"))]
+                let (ctrl, super_key) = (modifiers.ctrl || modifiers.command, false);
+                return Some(
+                    assemble_shortcut_combo(ctrl, modifiers.alt, modifiers.shift, super_key, &key_name)
+                        .map(ShortcutCapture::Combo)
+                        .unwrap_or(ShortcutCapture::NeedsModifier),
+                );
             }
-            let key_name = egui_key_to_token(*key)?;
-            let mut parts: Vec<String> = Vec::new();
-            if modifiers.ctrl {
-                parts.push("Ctrl".to_string());
+            egui::Event::Cut => {
+                // egui-winit intercepts Ctrl/Cmd+X and Shift+Delete (Windows) as Event::Cut
+                if !cfg!(target_os = "macos") && input.modifiers.shift && !input.modifiers.ctrl {
+                    return Some(ShortcutCapture::Combo("Shift+Delete".to_string()));
+                }
+                let combo = if cfg!(target_os = "macos") {
+                    "Super+X"
+                } else {
+                    "Ctrl+X"
+                };
+                return Some(ShortcutCapture::Combo(combo.to_string()));
             }
-            if modifiers.alt {
-                parts.push("Alt".to_string());
+            egui::Event::Copy => {
+                // egui-winit intercepts Ctrl/Cmd+C and Ctrl+Insert (Windows) as Event::Copy
+                let combo = if cfg!(target_os = "macos") {
+                    "Super+C"
+                } else {
+                    "Ctrl+C"
+                };
+                return Some(ShortcutCapture::Combo(combo.to_string()));
             }
-            if modifiers.shift {
-                parts.push("Shift".to_string());
+            egui::Event::Paste(_) | egui::Event::PasteImage(_) => {
+                // egui-winit intercepts Ctrl/Cmd+V and Shift+Insert (Windows) as Event::Paste
+                if !cfg!(target_os = "macos") && input.modifiers.shift && !input.modifiers.ctrl {
+                    return Some(ShortcutCapture::Combo("Shift+Insert".to_string()));
+                }
+                let combo = if cfg!(target_os = "macos") {
+                    "Super+V"
+                } else {
+                    "Ctrl+V"
+                };
+                return Some(ShortcutCapture::Combo(combo.to_string()));
             }
-            #[cfg(target_os = "macos")]
-            if modifiers.mac_cmd || modifiers.command {
-                parts.push("Super".to_string());
-            }
-            #[cfg(not(target_os = "macos"))]
-            if modifiers.command && !modifiers.ctrl {
-                parts.push("Ctrl".to_string());
-            }
-            // Require at least one modifier for safety so typing normal letters doesn't bind globally
-            if parts.is_empty() {
-                return None;
-            }
-            parts.push(key_name);
-            return Some(parts.join("+"));
+            _ => {}
         }
     }
     None
+}
+
+#[cfg(any(target_os = "windows", test))]
+pub fn win32_vk_to_token(vk: u16) -> Option<&'static str> {
+    const LETTERS: [&str; 26] = [
+        "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R",
+        "S", "T", "U", "V", "W", "X", "Y", "Z",
+    ];
+    const DIGITS: [&str; 10] = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+    const FKEYS: [&str; 24] = [
+        "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "F13", "F14",
+        "F15", "F16", "F17", "F18", "F19", "F20", "F21", "F22", "F23", "F24",
+    ];
+
+    match vk {
+        0x41..=0x5A => Some(LETTERS[(vk - 0x41) as usize]),
+        0x30..=0x39 => Some(DIGITS[(vk - 0x30) as usize]),
+        0x70..=0x87 => Some(FKEYS[(vk - 0x70) as usize]),
+        0x20 => Some("Space"),
+        0x08 => Some("Backspace"),
+        0x2E => Some("Delete"),
+        0x0D => Some("Enter"),
+        0x09 => Some("Tab"),
+        0x2D => Some("Insert"),
+        0x24 => Some("Home"),
+        0x23 => Some("End"),
+        0x21 => Some("PageUp"),
+        0x22 => Some("PageDown"),
+        0x26 => Some("ArrowUp"),
+        0x28 => Some("ArrowDown"),
+        0x25 => Some("ArrowLeft"),
+        0x27 => Some("ArrowRight"),
+        0xBC => Some("Comma"),
+        0xBE => Some("Period"),
+        0xBF => Some("Slash"),
+        0xBA => Some("Semicolon"),
+        0xBD | 0x6D => Some("Minus"),
+        0xBB => Some("Equal"),
+        0x6B => Some("NumpadAdd"),
+        0xC0 => Some("Backquote"),
+        0xDB => Some("BracketLeft"),
+        0xDC => Some("Backslash"),
+        0xDD => Some("BracketRight"),
+        0xDE => Some("Quote"),
+        _ => None,
+    }
 }
 
 fn parse_egui_key(raw: &str) -> Option<Key> {
@@ -279,12 +484,27 @@ fn parse_egui_key(raw: &str) -> Option<Key> {
         "delete" => Some(Key::Delete),
         "enter" | "return" => Some(Key::Enter),
         "tab" => Some(Key::Tab),
+        "insert" => Some(Key::Insert),
+        "home" => Some(Key::Home),
+        "end" => Some(Key::End),
+        "pageup" => Some(Key::PageUp),
+        "pagedown" => Some(Key::PageDown),
+        "arrowup" | "up" => Some(Key::ArrowUp),
+        "arrowdown" | "down" => Some(Key::ArrowDown),
+        "arrowleft" | "left" => Some(Key::ArrowLeft),
+        "arrowright" | "right" => Some(Key::ArrowRight),
         "comma" | "," => Some(Key::Comma),
         "period" | "." => Some(Key::Period),
         "slash" | "/" => Some(Key::Slash),
         "semicolon" | ";" => Some(Key::Semicolon),
         "minus" | "-" => Some(Key::Minus),
         "equal" | "=" => Some(Key::Equals),
+        "numpadadd" | "+" => Some(Key::Plus),
+        "backquote" | "backtick" | "`" => Some(Key::Backtick),
+        "bracketleft" | "openbracket" | "[" => Some(Key::OpenBracket),
+        "bracketright" | "closebracket" | "]" => Some(Key::CloseBracket),
+        "backslash" | "\\" => Some(Key::Backslash),
+        "quote" | "'" => Some(Key::Quote),
         "f1" => Some(Key::F1),
         "f2" => Some(Key::F2),
         "f3" => Some(Key::F3),
@@ -297,6 +517,18 @@ fn parse_egui_key(raw: &str) -> Option<Key> {
         "f10" => Some(Key::F10),
         "f11" => Some(Key::F11),
         "f12" => Some(Key::F12),
+        "f13" => Some(Key::F13),
+        "f14" => Some(Key::F14),
+        "f15" => Some(Key::F15),
+        "f16" => Some(Key::F16),
+        "f17" => Some(Key::F17),
+        "f18" => Some(Key::F18),
+        "f19" => Some(Key::F19),
+        "f20" => Some(Key::F20),
+        "f21" => Some(Key::F21),
+        "f22" => Some(Key::F22),
+        "f23" => Some(Key::F23),
+        "f24" => Some(Key::F24),
         _ => None,
     }
 }
@@ -344,12 +576,27 @@ fn egui_key_to_token(key: Key) -> Option<String> {
         Key::Delete => "Delete",
         Key::Enter => "Enter",
         Key::Tab => "Tab",
+        Key::Insert => "Insert",
+        Key::Home => "Home",
+        Key::End => "End",
+        Key::PageUp => "PageUp",
+        Key::PageDown => "PageDown",
+        Key::ArrowUp => "ArrowUp",
+        Key::ArrowDown => "ArrowDown",
+        Key::ArrowLeft => "ArrowLeft",
+        Key::ArrowRight => "ArrowRight",
         Key::Comma => "Comma",
         Key::Period => "Period",
         Key::Slash => "Slash",
         Key::Semicolon => "Semicolon",
         Key::Minus => "Minus",
         Key::Equals => "Equal",
+        Key::Plus => "NumpadAdd",
+        Key::Backtick => "Backquote",
+        Key::OpenBracket => "BracketLeft",
+        Key::CloseBracket => "BracketRight",
+        Key::Backslash => "Backslash",
+        Key::Quote => "Quote",
         Key::F1 => "F1",
         Key::F2 => "F2",
         Key::F3 => "F3",
@@ -362,6 +609,18 @@ fn egui_key_to_token(key: Key) -> Option<String> {
         Key::F10 => "F10",
         Key::F11 => "F11",
         Key::F12 => "F12",
+        Key::F13 => "F13",
+        Key::F14 => "F14",
+        Key::F15 => "F15",
+        Key::F16 => "F16",
+        Key::F17 => "F17",
+        Key::F18 => "F18",
+        Key::F19 => "F19",
+        Key::F20 => "F20",
+        Key::F21 => "F21",
+        Key::F22 => "F22",
+        Key::F23 => "F23",
+        Key::F24 => "F24",
         _ => return None,
     };
     Some(s.to_string())
@@ -373,9 +632,65 @@ mod tests {
 
     #[test]
     fn parses_default_shortcuts_for_global_hotkey_and_egui() {
-        for s in ["Shift+Super+C", "Alt+V", "Alt+P", "Alt+Backspace", "Alt+Delete", "Ctrl+Space"] {
+        for s in [
+            "Shift+Super+C",
+            "Alt+V",
+            "Alt+P",
+            "Alt+Backspace",
+            "Alt+Delete",
+            "Ctrl+Space",
+            "Ctrl+V",
+            "Ctrl+C",
+            "Ctrl+X",
+            "Ctrl+ArrowUp",
+            "Alt+BracketLeft",
+        ] {
             assert!(HotKey::from_str(s).is_ok(), "HotKey failed for {s}");
             assert!(parse_shortcut_to_egui(s).is_some(), "egui failed for {s}");
+        }
+    }
+
+    #[test]
+    fn capture_egui_shortcut_handles_clipboard_events_and_modifiers() {
+        let mut input = InputState::default();
+        input.events.push(egui::Event::Paste("hello".to_string()));
+        assert_eq!(
+            capture_egui_shortcut(&input),
+            Some(ShortcutCapture::Combo(if cfg!(target_os = "macos") {
+                "Super+V".to_string()
+            } else {
+                "Ctrl+V".to_string()
+            }))
+        );
+
+        let mut bare_key = InputState::default();
+        bare_key.events.push(egui::Event::Key {
+            key: Key::V,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        assert_eq!(
+            capture_egui_shortcut(&bare_key),
+            Some(ShortcutCapture::NeedsModifier)
+        );
+    }
+
+    #[test]
+    fn win32_vk_tokens_parse_for_global_hotkey_and_egui() {
+        for vk in [
+            0x41u16, 0x56, 0x30, 0x39, 0x70, 0x7B, 0x20, 0x08, 0x2E, 0x0D, 0x09, 0x2D, 0x24, 0x23,
+            0x21, 0x22, 0x26, 0x28, 0x25, 0x27, 0xBC, 0xBE, 0xBF, 0xBA, 0xBD, 0xBB, 0xC0, 0xDB,
+            0xDC, 0xDD, 0xDE, 0x6B,
+        ] {
+            let tok = win32_vk_to_token(vk).expect("vk token must map");
+            let combo = format!("Ctrl+Alt+{tok}");
+            assert!(HotKey::from_str(&combo).is_ok(), "HotKey rejected {combo}");
+            assert!(
+                parse_shortcut_to_egui(&combo).is_some(),
+                "egui rejected {combo}"
+            );
         }
     }
 }

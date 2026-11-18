@@ -314,3 +314,170 @@ fn read_reg_sz(
     let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
     Some(String::from_utf16_lossy(&buf[..len]))
 }
+
+static SHORTCUT_RECORDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static SHORTCUT_ALLOW_SUPER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static SHORTCUT_EVENTS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::VecDeque<crate::platform::NativeShortcutEvent>>,
+> = std::sync::OnceLock::new();
+static SHORTCUT_REPAINT_CTX: std::sync::OnceLock<std::sync::Mutex<Option<egui::Context>>> =
+    std::sync::OnceLock::new();
+
+pub fn install_shortcut_repaint_ctx(ctx: &egui::Context) {
+    let slot = SHORTCUT_REPAINT_CTX.get_or_init(|| std::sync::Mutex::new(None));
+    if let Ok(mut guard) = slot.lock() {
+        *guard = Some(ctx.clone());
+    }
+}
+
+pub fn set_shortcut_recording(active: bool, allow_super: bool) {
+    SHORTCUT_ALLOW_SUPER.store(allow_super, std::sync::atomic::Ordering::Release);
+    SHORTCUT_RECORDING.store(active, std::sync::atomic::Ordering::Release);
+    if !active && let Some(queue) = SHORTCUT_EVENTS.get()
+        && let Ok(mut guard) = queue.lock()
+    {
+        guard.clear();
+    }
+}
+
+pub fn poll_native_shortcut_event() -> Option<crate::platform::NativeShortcutEvent> {
+    let queue = SHORTCUT_EVENTS.get()?;
+    queue.lock().ok()?.pop_front()
+}
+
+pub fn native_recording_modifiers() -> Option<(bool, bool, bool, bool)> {
+    if !SHORTCUT_RECORDING.load(std::sync::atomic::Ordering::Acquire) {
+        return None;
+    }
+    let (ctrl, alt, shift, super_raw) = read_async_modifiers();
+    let allow_super = SHORTCUT_ALLOW_SUPER.load(std::sync::atomic::Ordering::Acquire);
+    Some((ctrl, alt, shift, super_raw && allow_super))
+}
+
+fn push_shortcut_event(ev: crate::platform::NativeShortcutEvent) {
+    let queue =
+        SHORTCUT_EVENTS.get_or_init(|| std::sync::Mutex::new(std::collections::VecDeque::new()));
+    if let Ok(mut guard) = queue.lock() {
+        guard.push_back(ev);
+    }
+    request_shortcut_repaint();
+}
+
+fn request_shortcut_repaint() {
+    if let Some(slot) = SHORTCUT_REPAINT_CTX.get()
+        && let Ok(guard) = slot.lock()
+        && let Some(ctx) = guard.as_ref()
+    {
+        ctx.request_repaint();
+    }
+}
+
+fn is_vk_down(vk: u16) -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+    (unsafe { GetAsyncKeyState(i32::from(vk)) } as u16 & 0x8000) != 0
+}
+
+fn read_async_modifiers() -> (bool, bool, bool, bool) {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+    };
+    (
+        is_vk_down(VK_CONTROL),
+        is_vk_down(VK_MENU),
+        is_vk_down(VK_SHIFT),
+        is_vk_down(VK_LWIN) || is_vk_down(VK_RWIN),
+    )
+}
+
+fn is_modifier_vk(vk: u16) -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU,
+        VK_RSHIFT, VK_RWIN, VK_SHIFT,
+    };
+    matches!(
+        vk,
+        VK_SHIFT
+            | VK_LSHIFT
+            | VK_RSHIFT
+            | VK_CONTROL
+            | VK_LCONTROL
+            | VK_RCONTROL
+            | VK_MENU
+            | VK_LMENU
+            | VK_RMENU
+            | VK_LWIN
+            | VK_RWIN
+    )
+}
+
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn handle_windows_msg_hook(msg_ptr: *const core::ffi::c_void) -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        MapVirtualKeyW, MAPVK_VSC_TO_VK_EX, VK_ESCAPE, VK_PROCESSKEY,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        MSG, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    };
+
+    if !SHORTCUT_RECORDING.load(std::sync::atomic::Ordering::Acquire) || msg_ptr.is_null() {
+        return false;
+    }
+
+    let msg = unsafe { &*msg_ptr.cast::<MSG>() };
+    match msg.message {
+        WM_KEYDOWN | WM_SYSKEYDOWN => {
+            let mut vk = (msg.wParam & 0xffff) as u16;
+            if vk == VK_PROCESSKEY {
+                let scancode = ((msg.lParam as usize >> 16) & 0xff) as u32;
+                let extended = (msg.lParam as usize & (1usize << 24)) != 0;
+                let ext_scancode = scancode | if extended { 0xe000 } else { 0 };
+                let resolved = unsafe { MapVirtualKeyW(ext_scancode, MAPVK_VSC_TO_VK_EX) } as u16;
+                if resolved != 0 {
+                    vk = resolved;
+                } else {
+                    let fallback = unsafe { MapVirtualKeyW(scancode, MAPVK_VSC_TO_VK_EX) } as u16;
+                    if fallback != 0 {
+                        vk = fallback;
+                    }
+                }
+            }
+
+            if vk == VK_ESCAPE {
+                push_shortcut_event(crate::platform::NativeShortcutEvent::Cancelled);
+                return true;
+            }
+
+            if is_modifier_vk(vk) {
+                request_shortcut_repaint();
+                return false;
+            }
+
+            let is_repeat = (msg.lParam as usize & (1usize << 30)) != 0;
+            if is_repeat {
+                return true;
+            }
+
+            if let Some(token) = crate::hotkey::win32_vk_to_token(vk) {
+                let (ctrl, alt, shift, super_raw) = read_async_modifiers();
+                let allow_super = SHORTCUT_ALLOW_SUPER.load(std::sync::atomic::Ordering::Acquire);
+                let super_key = super_raw && allow_super;
+                if let Some(combo) =
+                    crate::hotkey::assemble_shortcut_combo(ctrl, alt, shift, super_key, token)
+                {
+                    push_shortcut_event(crate::platform::NativeShortcutEvent::Captured(combo));
+                } else {
+                    push_shortcut_event(crate::platform::NativeShortcutEvent::NeedsModifier);
+                }
+                return true;
+            }
+            false
+        }
+        WM_KEYUP | WM_SYSKEYUP => {
+            request_shortcut_repaint();
+            false
+        }
+        _ => false,
+    }
+}

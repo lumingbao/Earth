@@ -35,6 +35,35 @@ pub struct ScreenRect {
     pub height: f32,
 }
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeShortcutEvent {
+    Captured(String),
+    Cancelled,
+    NeedsModifier,
+}
+
+pub fn install_shortcut_repaint_ctx(ctx: &egui::Context) {
+    imp::install_shortcut_repaint_ctx(ctx);
+}
+
+pub fn set_shortcut_recording(active: bool, allow_super: bool) {
+    imp::set_shortcut_recording(active, allow_super);
+}
+
+pub fn poll_native_shortcut_event() -> Option<NativeShortcutEvent> {
+    imp::poll_native_shortcut_event()
+}
+
+pub fn native_recording_modifiers() -> Option<(bool, bool, bool, bool)> {
+    imp::native_recording_modifiers()
+}
+
+#[cfg(target_os = "windows")]
+pub fn handle_windows_msg_hook(msg: *const core::ffi::c_void) -> bool {
+    imp::handle_windows_msg_hook(msg)
+}
+
 pub fn capture_frontmost_app() -> Option<ActiveAppInfo> {
     imp::capture_frontmost_app()
 }

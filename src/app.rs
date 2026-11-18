@@ -14,7 +14,9 @@ use crate::tray::{EarthTray, TrayAction};
 use crate::ui::popup::{
     render_popup_view, PopupAction, PopupState, PopupViewData, WorkbenchSide,
 };
-use crate::ui::settings::{render_settings_view, SettingsAction, SettingsState, SettingsViewData};
+use crate::ui::settings::{
+    render_settings_view, RecordingTarget, SettingsAction, SettingsState, SettingsViewData,
+};
 use crate::ui::theme::{install_crisp_fonts, EarthPalette};
 use crate::updater::{
     apply_staged_update_and_restart, spawn_update_check, spawn_update_download, UpdateCheckOutcome,
@@ -136,6 +138,7 @@ impl EarthApp {
         install_crisp_fonts(&cc.egui_ctx);
         platform::configure_macos_accessory_mode();
         platform::configure_main_window(cc);
+        platform::install_shortcut_repaint_ctx(&cc.egui_ctx);
 
         let storage = Storage::open_default().expect("无法初始化 Earth 本地数据库");
         let settings = storage.load_settings();
@@ -609,6 +612,7 @@ impl EarthApp {
         self.visible = false;
         self.popup_state.show_about_modal = false;
         self.settings_state.recording = None;
+        self.sync_shortcut_recording_guards();
         self.workbench_anim = None;
         self.workbench_collapse_pending = false;
         self.workbench_os_expanded = false;
@@ -626,6 +630,19 @@ impl EarthApp {
             if let Some(ref prev) = self.prev_app {
                 platform::restore_frontmost_app(prev);
             }
+        }
+    }
+
+    fn sync_shortcut_recording_guards(&mut self) {
+        let recording_target = (self.visible && self.view_mode == ViewMode::Settings)
+            .then_some(self.settings_state.recording)
+            .flatten();
+        platform::set_shortcut_recording(
+            recording_target.is_some(),
+            recording_target == Some(RecordingTarget::Open),
+        );
+        if let Some(ctrl) = &mut self.hotkey_ctrl {
+            ctrl.set_suspended(recording_target.is_some());
         }
     }
 
@@ -810,14 +827,16 @@ impl EarthApp {
             }
         }
 
-        if let Some(ctrl) = &self.hotkey_ctrl
-            && ctrl.poll_open_triggered() {
-                if self.visible && self.last_shown_at.elapsed() > Duration::from_millis(250) {
-                    self.hide_popup(ctx, true);
-                } else {
-                    self.show_popup(ctx, ViewMode::Launcher, None);
-                }
+        if self.settings_state.recording.is_none()
+            && let Some(ctrl) = &self.hotkey_ctrl
+            && ctrl.poll_open_triggered()
+        {
+            if self.visible && self.last_shown_at.elapsed() > Duration::from_millis(250) {
+                self.hide_popup(ctx, true);
+            } else {
+                self.show_popup(ctx, ViewMode::Launcher, None);
             }
+        }
 
         let dpi = ctx.pixels_per_point();
         let tray_actions = self
@@ -876,27 +895,33 @@ impl eframe::App for EarthApp {
             let focused = ctx.input(|i| i.focused);
             if focused {
                 self.was_focused_since_shown = true;
-            } else if self.popup_state.window_pinned {
-                if self.last_known_focused {
-                    self.apply_window_pinned_state(ctx);
+            } else {
+                if self.was_focused_since_shown && self.settings_state.recording.is_some() {
+                    self.settings_state.recording = None;
+                    self.sync_shortcut_recording_guards();
                 }
-                if self.last_frontmost_poll.elapsed() > Duration::from_millis(150) {
-                    self.last_frontmost_poll = Instant::now();
-                    if let Some(active) = platform::capture_frontmost_app_identity() {
-                        self.prev_app = Some(active);
+                if self.popup_state.window_pinned {
+                    if self.last_known_focused {
+                        self.apply_window_pinned_state(ctx);
                     }
+                    if self.last_frontmost_poll.elapsed() > Duration::from_millis(150) {
+                        self.last_frontmost_poll = Instant::now();
+                        if let Some(active) = platform::capture_frontmost_app_identity() {
+                            self.prev_app = Some(active);
+                        }
+                    }
+                } else if should_auto_hide_on_blur(&FocusBlurCheck {
+                    visible: self.visible,
+                    focused,
+                    was_focused_since_shown: self.was_focused_since_shown,
+                    view_mode: self.view_mode,
+                    show_about_modal: self.popup_state.show_about_modal,
+                    dialog_open: self.dialog_open,
+                    window_pinned: self.popup_state.window_pinned,
+                    since_shown: self.last_shown_at.elapsed(),
+                }) {
+                    self.hide_popup(ctx, false);
                 }
-            } else if should_auto_hide_on_blur(&FocusBlurCheck {
-                visible: self.visible,
-                focused,
-                was_focused_since_shown: self.was_focused_since_shown,
-                view_mode: self.view_mode,
-                show_about_modal: self.popup_state.show_about_modal,
-                dialog_open: self.dialog_open,
-                window_pinned: self.popup_state.window_pinned,
-                since_shown: self.last_shown_at.elapsed(),
-            }) {
-                self.hide_popup(ctx, false);
             }
             self.last_known_focused = focused;
         }
@@ -1206,12 +1231,14 @@ impl eframe::App for EarthApp {
                                     },
                                     &mut self.settings_state,
                                 );
+                                self.sync_shortcut_recording_guards();
 
                                 for action in actions {
                                     match action {
                                         SettingsAction::CloseSettings => {
                                             self.view_mode = ViewMode::Launcher;
                                             self.popup_state.request_search_focus = true;
+                                            self.sync_shortcut_recording_guards();
                                             ctx.request_repaint();
                                         }
                                         SettingsAction::SettingsChanged => {

@@ -49,6 +49,7 @@ fn main() -> eframe::Result<()> {
 
     #[cfg(target_os = "windows")]
     {
+        use winit::platform::windows::EventLoopBuilderExtWindows as _;
         // On Windows, wgpu DX12 HWND swapchains only support CompositeAlphaMode::Opaque, which
         // fills transparent corners and empty workbench animation areas with solid black.
         // Switch to Glow (WGL + DwmEnableBlurBehindWindow), keeping `viewport.transparent` false
@@ -57,6 +58,9 @@ fn main() -> eframe::Result<()> {
         native_options.renderer = eframe::Renderer::Glow;
         native_options.window_builder =
             Some(Box::new(|builder| builder.with_transparent(true)));
+        native_options.event_loop_builder = Some(Box::new(|builder| {
+            builder.with_msg_hook(platform::handle_windows_msg_hook);
+        }));
     }
 
     #[cfg(target_os = "macos")]

@@ -1,8 +1,11 @@
-use crate::hotkey::{capture_egui_shortcut, format_shortcut_display};
+use crate::hotkey::{
+    capture_egui_shortcut, format_live_modifiers, format_shortcut_display, ShortcutCapture,
+};
 use crate::model::{
     format_bytes, AppSettings, Collection, CopyTriggerMode, MatchHighlight, PinPosition,
     PopupPosition, SearchBoxVisibility, SearchMode, SortOrder, ThemeMode,
 };
+use crate::platform::{self, NativeShortcutEvent};
 use crate::ui::theme::{
     card_shadow, compact_button, desktop_scroll_source, dismiss_button, padded_button,
     parse_hex_color32, EarthPalette, StatusToast,
@@ -58,6 +61,7 @@ pub struct SettingsState {
     pub active_tab: SettingsTab,
     pub ignore_sub_tab: IgnoreSubTab,
     pub recording: Option<RecordingTarget>,
+    pub recording_suppress_reclick: bool,
     pub new_ignore_app: String,
     pub new_ignore_type: String,
     pub new_ignore_regex: String,
@@ -77,6 +81,7 @@ impl Default for SettingsState {
             active_tab: SettingsTab::General,
             ignore_sub_tab: IgnoreSubTab::Apps,
             recording: None,
+            recording_suppress_reclick: false,
             new_ignore_app: String::new(),
             new_ignore_type: String::new(),
             new_ignore_regex: String::new(),
@@ -125,35 +130,61 @@ pub fn render_settings_view(
     let mut actions = Vec::new();
 
     // Handle active shortcut recording
+    state.recording_suppress_reclick = state.recording.is_some();
     if let Some(target) = state.recording {
-        let (esc_pressed, captured) = ctx.input(|input| {
-            (
-                input.key_pressed(egui::Key::Escape),
-                capture_egui_shortcut(input),
-            )
-        });
-        if esc_pressed {
-            state.recording = None;
-        } else if let Some(combo) = captured {
-            match target {
-                RecordingTarget::Open => {
-                    settings.hotkey_open = combo.clone();
-                    actions.push(SettingsAction::OpenHotkeyChanged(combo));
+        enum CapturePoll {
+            Combo(String),
+            Cancel,
+            NeedsModifier,
+            None,
+        }
+
+        let captured = match platform::poll_native_shortcut_event() {
+            Some(NativeShortcutEvent::Captured(combo)) => CapturePoll::Combo(combo),
+            Some(NativeShortcutEvent::Cancelled) => CapturePoll::Cancel,
+            Some(NativeShortcutEvent::NeedsModifier) => CapturePoll::NeedsModifier,
+            None => ctx.input(|input| {
+                if input.key_pressed(egui::Key::Escape) {
+                    CapturePoll::Cancel
+                } else {
+                    match capture_egui_shortcut(input) {
+                        Some(ShortcutCapture::Combo(combo)) => CapturePoll::Combo(combo),
+                        Some(ShortcutCapture::NeedsModifier) => CapturePoll::NeedsModifier,
+                        None => CapturePoll::None,
+                    }
                 }
-                RecordingTarget::Pin => {
-                    settings.hotkey_pin = combo;
-                    actions.push(SettingsAction::SettingsChanged);
-                }
-                RecordingTarget::Delete => {
-                    settings.hotkey_delete = combo;
-                    actions.push(SettingsAction::SettingsChanged);
-                }
-                RecordingTarget::Preview => {
-                    settings.hotkey_preview = combo;
-                    actions.push(SettingsAction::SettingsChanged);
-                }
+            }),
+        };
+
+        match captured {
+            CapturePoll::Cancel => {
+                state.recording = None;
             }
-            state.recording = None;
+            CapturePoll::NeedsModifier => {
+                state.set_status_message("请配合 Ctrl / Alt / Shift 等修饰键组合使用", true);
+            }
+            CapturePoll::Combo(combo) => {
+                match target {
+                    RecordingTarget::Open => {
+                        settings.hotkey_open = combo.clone();
+                        actions.push(SettingsAction::OpenHotkeyChanged(combo));
+                    }
+                    RecordingTarget::Pin => {
+                        settings.hotkey_pin = combo;
+                        actions.push(SettingsAction::SettingsChanged);
+                    }
+                    RecordingTarget::Delete => {
+                        settings.hotkey_delete = combo;
+                        actions.push(SettingsAction::SettingsChanged);
+                    }
+                    RecordingTarget::Preview => {
+                        settings.hotkey_preview = combo;
+                        actions.push(SettingsAction::SettingsChanged);
+                    }
+                }
+                state.recording = None;
+            }
+            CapturePoll::None => {}
         }
     } else if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
         if state.editing_collection_id.is_some() {
@@ -607,8 +638,29 @@ fn shortcut_row(
             ui.label(label);
         });
 
+        let live_mods = if is_recording {
+            platform::native_recording_modifiers()
+                .or_else(|| {
+                    ui.ctx().input(|input| {
+                        let m = input.modifiers;
+                        #[cfg(target_os = "macos")]
+                        let (ctrl, super_key) = (m.ctrl, m.mac_cmd || m.command);
+                        #[cfg(not(target_os = "macos"))]
+                        let (ctrl, super_key) = (m.ctrl || m.command, false);
+                        (ctrl || m.alt || m.shift || super_key)
+                            .then_some((ctrl, m.alt, m.shift, super_key))
+                    })
+                })
+                .and_then(|(c, a, s, w)| format_live_modifiers(c, a, s, w))
+        } else {
+            None
+        };
         let text = if is_recording {
-            "请按下组合键 (Esc 取消)...".to_string()
+            if let Some(mods) = live_mods {
+                format!("{mods}+... (Esc 取消)")
+            } else {
+                "请按下组合键 (Esc 取消)...".to_string()
+            }
         } else {
             format_shortcut_display(value)
         };
@@ -635,8 +687,10 @@ fn shortcut_row(
         .fill(fill)
         .stroke(stroke)
         .corner_radius(CornerRadius::same(12));
-        if ui.add(btn).clicked() {
+        let resp = ui.add(btn);
+        if !state.recording_suppress_reclick && resp.clicked() {
             state.recording = Some(target);
+            ui.ctx().memory_mut(|m| m.surrender_focus(resp.id));
         }
 
         if compact_button(ui, "重置")
@@ -1193,4 +1247,217 @@ fn section_card(ui: &mut Ui, palette: &EarthPalette, add_contents: impl FnOnce(&
             ui.set_max_width(card_w);
             add_contents(ui);
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run_settings_frame(
+        ctx: &egui::Context,
+        settings: &mut AppSettings,
+        state: &mut SettingsState,
+        events: Vec<egui::Event>,
+    ) -> Vec<SettingsAction> {
+        let palette = EarthPalette::resolve(ThemeMode::Light, false);
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                vec2(560.0, 620.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let mut actions = Vec::new();
+        let mut out = ctx.run_ui(raw, |ui| {
+            let ctx = ui.ctx().clone();
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
+                    actions = render_settings_view(
+                        ui,
+                        &ctx,
+                        SettingsViewData {
+                            settings,
+                            collections: &[],
+                            palette: &palette,
+                            storage_bytes: 0,
+                            item_count: 0,
+                            has_accessibility: true,
+                        },
+                        state,
+                    );
+                });
+        });
+        out.textures_delta.clear();
+        actions
+    }
+
+    #[test]
+    fn settings_recorder_captures_clipboard_and_space_combos_and_cancels_on_escape() {
+        let ctx = egui::Context::default();
+        let mut settings = AppSettings::default();
+        let mut state = SettingsState {
+            active_tab: SettingsTab::General,
+            recording: Some(RecordingTarget::Open),
+            ..Default::default()
+        };
+
+        let expected_paste = if cfg!(target_os = "macos") {
+            "Super+V"
+        } else {
+            "Ctrl+V"
+        };
+        let expected_copy = if cfg!(target_os = "macos") {
+            "Super+C"
+        } else {
+            "Ctrl+C"
+        };
+
+        // Frame 1: Ctrl/Cmd+V arrives from egui-winit as Event::Paste while recording Open shortcut.
+        let actions = run_settings_frame(
+            &ctx,
+            &mut settings,
+            &mut state,
+            vec![egui::Event::Paste("copied text".into())],
+        );
+        assert_eq!(settings.hotkey_open, expected_paste);
+        assert!(state.recording.is_none());
+        assert!(matches!(
+            actions.as_slice(),
+            [SettingsAction::OpenHotkeyChanged(combo)] if combo == expected_paste
+        ));
+
+        // Frame 2: Ctrl/Cmd+C arrives as Event::Copy while recording Pin shortcut.
+        state.recording = Some(RecordingTarget::Pin);
+        let actions = run_settings_frame(
+            &ctx,
+            &mut settings,
+            &mut state,
+            vec![egui::Event::Copy],
+        );
+        assert_eq!(settings.hotkey_pin, expected_copy);
+        assert!(state.recording.is_none());
+        assert!(matches!(
+            actions.as_slice(),
+            [SettingsAction::SettingsChanged]
+        ));
+
+        // Frame 3: Ctrl+Space updates Preview shortcut cleanly.
+        state.recording = Some(RecordingTarget::Preview);
+        let actions = run_settings_frame(
+            &ctx,
+            &mut settings,
+            &mut state,
+            vec![egui::Event::Key {
+                key: egui::Key::Space,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::CTRL,
+            }],
+        );
+        assert_eq!(settings.hotkey_preview, "Ctrl+Space");
+        assert!(state.recording.is_none());
+        assert!(matches!(
+            actions.as_slice(),
+            [SettingsAction::SettingsChanged]
+        ));
+
+        // Frame 4: Escape while recording cancels recording without closing Settings.
+        state.recording = Some(RecordingTarget::Delete);
+        let actions = run_settings_frame(
+            &ctx,
+            &mut settings,
+            &mut state,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(state.recording.is_none());
+        assert!(actions.is_empty());
+    }
+
+    #[test]
+    fn shortcut_row_focus_space_does_not_retrigger_recording_on_capture_frame() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(ThemeMode::Light, false);
+        let mut settings = AppSettings::default();
+        let mut state = SettingsState::default();
+
+        // Frame 1: press Tab inside a minimal panel containing shortcut_row so the shortcut button gains focus.
+        let tab_raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                vec2(480.0, 120.0),
+            )),
+            events: vec![egui::Event::Key {
+                key: egui::Key::Tab,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(tab_raw, |ui| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
+                    let _ = shortcut_row(
+                        ui,
+                        "打开面板快捷键",
+                        &mut settings.hotkey_open,
+                        "Alt+V",
+                        RecordingTarget::Open,
+                        &mut state,
+                        &palette,
+                    );
+                });
+        });
+        out.textures_delta.clear();
+
+        // Frame 2: mimic a capture frame where recording was active at frame start (so recording_suppress_reclick is true)
+        // and Ctrl+Space completes capture (setting state.recording = None) before shortcut_row runs.
+        state.recording_suppress_reclick = true;
+        state.recording = None;
+        let space_raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                vec2(480.0, 120.0),
+            )),
+            events: vec![egui::Event::Key {
+                key: egui::Key::Space,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::CTRL,
+            }],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(space_raw, |ui| {
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
+                    let _ = shortcut_row(
+                        ui,
+                        "打开面板快捷键",
+                        &mut settings.hotkey_open,
+                        "Alt+V",
+                        RecordingTarget::Open,
+                        &mut state,
+                        &palette,
+                    );
+                });
+        });
+        out.textures_delta.clear();
+        assert!(
+            state.recording.is_none(),
+            "focused button Space activation must not re-start recording on the frame capture finishes"
+        );
+    }
 }
