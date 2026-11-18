@@ -500,8 +500,24 @@ fn load_mmap_font_data(path: &Path, target_ps_name: &str) -> Option<FontData> {
     let file = std::fs::File::open(path).ok()?;
     // SAFETY: OS system font collections are read-only immutable assets mapped for the app lifetime.
     let mapped = unsafe { memmap2::Mmap::map(&file).ok()? };
-    let index = find_ttc_face_index(&mapped, target_ps_name);
+    let index = resolve_rasterizable_ttc_face(&mapped, target_ps_name)?;
     Some(FontData::from_blob(Arc::new(mapped), index))
+}
+
+/// Checks whether `path` is a font file containing standard vector outlines (`glyf`, `CFF `,
+/// `CFF2`, or `VARC`) and (for `.ttc` collections) a matching `target_ps_name` face.
+/// This filters out Apple `PingFangUI.ttc` (`hvgl`-only) on macOS 15+, which `epaint`/`skrifa`
+/// cannot rasterize and would otherwise render blank glyphs.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn font_file_supports_face(path: &Path, target_ps_name: &str) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    // SAFETY: OS system font collections are read-only immutable files.
+    let Ok(mapped) = (unsafe { memmap2::Mmap::map(&file) }) else {
+        return false;
+    };
+    resolve_rasterizable_ttc_face(&mapped, target_ps_name).is_some()
 }
 
 fn read_u16_be(bytes: &[u8], off: usize) -> Option<u16> {
@@ -514,25 +530,43 @@ fn read_u32_be(bytes: &[u8], off: usize) -> Option<u32> {
     Some(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
 }
 
-/// Finds the sub-font face index inside a `.ttc` TrueType Collection whose PostScript name
-/// (`nameID == 6`) matches `target_ps_name`, returning `0` if single-face or not found.
-pub(crate) fn find_ttc_face_index(bytes: &[u8], target_ps_name: &str) -> u32 {
-    if bytes.get(0..4) != Some(b"ttcf") {
-        return 0;
-    }
-    let Some(num_fonts) = read_u32_be(bytes, 8) else {
-        return 0;
+/// Returns `true` if the OpenType/TrueType face at `face_off` contains at least one outline
+/// table supported by `epaint`/`skrifa` (`glyf`, `CFF `, `CFF2`, `VARC`).
+fn face_has_supported_outlines(bytes: &[u8], face_off: usize) -> bool {
+    let Some(num_tables) = read_u16_be(bytes, face_off.saturating_add(4)) else {
+        return false;
     };
-    let count = num_fonts.min(128);
-    for face_idx in 0..count {
-        let Some(face_off_u32) = read_u32_be(bytes, 12 + face_idx as usize * 4) else {
-            break;
-        };
-        if face_postscript_matches(bytes, face_off_u32 as usize, target_ps_name) {
-            return face_idx;
+    let records_start = face_off.saturating_add(12);
+    for i in 0..num_tables.min(128) as usize {
+        let rec_off = records_start + i * 16;
+        if let Some(tag) = bytes.get(rec_off..rec_off + 4)
+            && matches!(tag, b"glyf" | b"CFF " | b"CFF2" | b"VARC")
+        {
+            return true;
         }
     }
-    0
+    false
+}
+
+/// Finds the sub-font face index inside a `.ttc` TrueType Collection whose PostScript name
+/// (`nameID == 6`) matches `target_ps_name` and has rasterizable outline tables.
+/// Returns `Some(0)` for single-face outline fonts, or `None` if no rasterizable face matches.
+pub(crate) fn resolve_rasterizable_ttc_face(bytes: &[u8], target_ps_name: &str) -> Option<u32> {
+    if bytes.get(0..4) != Some(b"ttcf") {
+        return face_has_supported_outlines(bytes, 0).then_some(0);
+    }
+    let num_fonts = read_u32_be(bytes, 8)?;
+    let count = num_fonts.min(128);
+    for face_idx in 0..count {
+        let face_off_u32 = read_u32_be(bytes, 12 + face_idx as usize * 4)?;
+        let face_off = face_off_u32 as usize;
+        if face_postscript_matches(bytes, face_off, target_ps_name)
+            && face_has_supported_outlines(bytes, face_off)
+        {
+            return Some(face_idx);
+        }
+    }
+    None
 }
 
 fn face_postscript_matches(bytes: &[u8], face_off: usize, target_ps_name: &str) -> bool {
@@ -671,36 +705,41 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn install_crisp_fonts_loads_pingfang_and_menlo_with_correct_ttc_indices() {
+        let pingfang_ui = Path::new(
+            "/System/Library/PrivateFrameworks/FontServices.framework/Resources/Reserved/PingFangUI.ttc",
+        );
+        if pingfang_ui.is_file() {
+            assert!(
+                !font_file_supports_face(pingfang_ui, "PingFangSC-Regular"),
+                "hvgl-only PingFangUI.ttc must be rejected so epaint never loads invisible glyphs"
+            );
+        }
+
         let preferred = crate::platform::preferred_system_fonts();
         let pf = preferred.ui.first().expect("macOS should resolve primary CJK UI font");
         let bytes = std::fs::read(&pf.path).unwrap();
-        let idx = find_ttc_face_index(&bytes, pf.postscript_name);
+        let idx = resolve_rasterizable_ttc_face(&bytes, pf.postscript_name)
+            .expect("selected UI font must have rasterizable outlines and matching PostScript name");
         if bytes.get(0..4) == Some(b"ttcf") {
             let face_off = read_u32_be(&bytes, 12 + idx as usize * 4)
                 .expect("TTC face offset should exist") as usize;
-            assert!(
-                face_postscript_matches(&bytes, face_off, pf.postscript_name),
-                "TTC face {idx} in {} must match PostScript name {}",
-                pf.path.display(),
-                pf.postscript_name
-            );
+            assert!(face_has_supported_outlines(&bytes, face_off));
+            assert!(face_postscript_matches(&bytes, face_off, pf.postscript_name));
         } else {
             assert_eq!(idx, 0, "single-face font must resolve to index 0");
-            assert!(
-                face_postscript_matches(&bytes, 0, pf.postscript_name),
-                "font {} must match PostScript name {}",
-                pf.path.display(),
-                pf.postscript_name
-            );
+            assert!(face_has_supported_outlines(&bytes, 0));
         }
 
         let ctx = egui::Context::default();
         install_crisp_fonts(&ctx);
         let raw = egui::RawInput::default();
+        let mut text_width = 0.0;
         let mut out = ctx.run_ui(raw, |ui| {
-            ui.label("测试 Crisp PingFang 字体");
+            let resp = ui.label("测试 Crisp Font 字体");
+            text_width = resp.rect.width();
         });
         out.textures_delta.clear();
+        assert!(text_width > 20.0, "expected rendered CJK text width > 20px, got {text_width}");
 
         ctx.fonts(|f| {
             let prop_primary = f

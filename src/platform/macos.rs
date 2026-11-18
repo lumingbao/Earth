@@ -504,15 +504,29 @@ pub fn preferred_system_fonts() -> PreferredSystemFonts {
             Some("/System/Library/Fonts/Hiragino Sans GB.ttc"),
         ),
         (
+            "STHeitiSC-Light",
+            Some("/System/Library/Fonts/STHeiti Light.ttc"),
+        ),
+        (
+            "STHeitiSC-Medium",
+            Some("/System/Library/Fonts/STHeiti Medium.ttc"),
+        ),
+        (
+            "ArialUnicodeMS",
+            Some("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+        ),
+        (
             "ArialUnicodeMS",
             Some("/Library/Fonts/Arial Unicode.ttf"),
         ),
     ] {
-        let resolved = resolve_font_path_by_postscript_name(ps).or_else(|| {
-            fallback_path
-                .map(PathBuf::from)
-                .filter(|p| p.is_file())
-        });
+        let resolved = resolve_font_path_by_postscript_name(ps)
+            .filter(|p| crate::ui::theme::font_file_supports_face(p, ps))
+            .or_else(|| {
+                fallback_path
+                    .map(PathBuf::from)
+                    .filter(|p| p.is_file() && crate::ui::theme::font_file_supports_face(p, ps))
+            });
         if let Some(path) = resolved {
             ui.push(SystemFontCandidate {
                 path,
@@ -524,7 +538,11 @@ pub fn preferred_system_fonts() -> PreferredSystemFonts {
 
     let mut monospace = Vec::new();
     if let Some(path) = resolve_font_path_by_postscript_name("Menlo-Regular")
-        .or_else(|| Some(PathBuf::from("/System/Library/Fonts/Menlo.ttc")).filter(|p| p.is_file()))
+        .filter(|p| crate::ui::theme::font_file_supports_face(p, "Menlo-Regular"))
+        .or_else(|| {
+            Some(PathBuf::from("/System/Library/Fonts/Menlo.ttc"))
+                .filter(|p| p.is_file() && crate::ui::theme::font_file_supports_face(p, "Menlo-Regular"))
+        })
     {
         monospace.push(SystemFontCandidate {
             path,
