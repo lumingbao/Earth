@@ -71,6 +71,8 @@ pub struct EarthApp {
     visible: bool,
     last_shown_at: Instant,
     was_focused_since_shown: bool,
+    last_known_focused: bool,
+    last_frontmost_poll: Instant,
     last_window_size: (f32, f32),
     last_window_pos: (f32, f32),
     workbench_os_expanded: bool,
@@ -176,6 +178,8 @@ impl EarthApp {
             visible: true,
             last_shown_at: Instant::now(),
             was_focused_since_shown: false,
+            last_known_focused: false,
+            last_frontmost_poll: Instant::now(),
             last_window_size: initial_size,
             last_window_pos: (x, y),
             workbench_os_expanded: false,
@@ -447,9 +451,61 @@ impl EarthApp {
         }
     }
 
+    fn apply_window_pinned_state(&self, ctx: &egui::Context) {
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = ctx.send_viewport_cmd(ViewportCommand::WindowLevel(
+                egui::viewport::WindowLevel::AlwaysOnTop,
+            ));
+        }
+        #[cfg(target_os = "macos")]
+        let _ = ctx;
+        platform::set_window_pinned(self.popup_state.window_pinned);
+    }
+
+    fn complete_copy_or_paste(
+        &mut self,
+        ctx: &egui::Context,
+        do_paste: bool,
+        pinned_copy_msg: &str,
+        pinned_paste_msg: &str,
+    ) {
+        if do_paste {
+            if !platform::has_accessibility_permission() {
+                self.popup_state.status_banner = Some((
+                    "已复制到剪贴板，但自动粘贴需要 macOS「辅助功能」权限（请按 ⌘V 粘贴）"
+                        .to_string(),
+                    true,
+                ));
+                return;
+            }
+            if self.popup_state.window_pinned {
+                if let Some(ref prev) = self.prev_app {
+                    platform::restore_frontmost_app(prev);
+                }
+                self.apply_window_pinned_state(ctx);
+                self.popup_state.status_banner = Some((pinned_paste_msg.to_string(), false));
+            } else {
+                self.hide_popup(ctx, true);
+            }
+            std::thread::spawn(|| {
+                if let Err(err) = platform::simulate_paste() {
+                    eprintln!("自动粘贴失败: {err}");
+                }
+            });
+        } else if self.popup_state.window_pinned {
+            self.popup_state.status_banner = Some((pinned_copy_msg.to_string(), false));
+        } else {
+            self.hide_popup(ctx, true);
+        }
+    }
+
     fn show_popup(&mut self, ctx: &egui::Context, mode: ViewMode, tray_pos: Option<(f32, f32)>) {
         if let Some(active) = platform::capture_frontmost_app() {
             self.prev_app = Some(active);
+        }
+        if !self.visible {
+            self.popup_state.window_pinned = false;
         }
         self.view_mode = mode;
         self.workbench_anim = None;
@@ -487,10 +543,12 @@ impl EarthApp {
         ctx.send_viewport_cmd(ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(ViewportCommand::Focus);
         platform::activate_self_window();
+        self.apply_window_pinned_state(ctx);
 
         self.visible = true;
         self.last_shown_at = Instant::now();
         self.was_focused_since_shown = false;
+        self.last_known_focused = false;
         ctx.request_repaint();
     }
 
@@ -502,6 +560,8 @@ impl EarthApp {
         self.workbench_collapse_pending = false;
         self.workbench_os_expanded = false;
         platform::set_window_resize_anchor_right(false);
+        self.popup_state.window_pinned = false;
+        self.apply_window_pinned_state(ctx);
         self.popup_state.preview_open = false;
         self.popup_state.preview_reveal = None;
         self.popup_state.workbench_side = WorkbenchSide::Right;
@@ -546,24 +606,7 @@ impl EarthApp {
         let _ = self.storage.mark_copied(id);
         self.reload_items();
 
-        if do_paste {
-            if !platform::has_accessibility_permission() {
-                self.popup_state.status_banner = Some((
-                    "已复制到剪贴板，但自动粘贴需要 macOS「辅助功能」权限（请按 ⌘V 粘贴）"
-                        .to_string(),
-                    true,
-                ));
-                return;
-            }
-            self.hide_popup(ctx, true);
-            std::thread::spawn(|| {
-                if let Err(err) = platform::simulate_paste() {
-                    eprintln!("自动粘贴失败: {err}");
-                }
-            });
-        } else {
-            self.hide_popup(ctx, true);
-        }
+        self.complete_copy_or_paste(ctx, do_paste, "✓ 已复制到剪贴板", "✓ 已粘贴到当前目标窗口");
     }
 
     fn handle_paste_transformed(&mut self, ctx: &egui::Context, text: String, paste_now: bool) {
@@ -572,19 +615,12 @@ impl EarthApp {
             return;
         }
         if paste_now {
-            if !platform::has_accessibility_permission() {
-                self.popup_state.status_banner = Some((
-                    "已复制加工结果，请授权限后自动粘贴或直接 ⌘V".to_string(),
-                    true,
-                ));
-                return;
-            }
-            self.hide_popup(ctx, true);
-            std::thread::spawn(|| {
-                if let Err(err) = platform::simulate_paste() {
-                    eprintln!("自动粘贴失败: {err}");
-                }
-            });
+            self.complete_copy_or_paste(
+                ctx,
+                true,
+                "✓ 已复制加工结果到剪贴板",
+                "✓ 已粘贴加工结果到目标窗口",
+            );
         } else {
             self.popup_state.status_banner = Some(("✓ 已复制加工结果到剪贴板".to_string(), false));
         }
@@ -774,19 +810,34 @@ impl eframe::App for EarthApp {
             self.hide_popup(ctx, true);
         }
 
-        // Track focus & hide cleanly on blur when clicking another app
+        // Track focus: hide on blur normally, or keep floating above other apps while pinned.
         if self.visible {
             let focused = ctx.input(|i| i.focused);
             if focused {
                 self.was_focused_since_shown = true;
-            } else if self.was_focused_since_shown
-                && self.view_mode == ViewMode::Launcher
-                && !self.popup_state.show_about_modal
-                && !self.dialog_open
-                && self.last_shown_at.elapsed() > Duration::from_millis(320)
-            {
+            } else if self.popup_state.window_pinned {
+                if self.last_known_focused {
+                    self.apply_window_pinned_state(ctx);
+                }
+                if self.last_frontmost_poll.elapsed() > Duration::from_millis(150) {
+                    self.last_frontmost_poll = Instant::now();
+                    if let Some(active) = platform::capture_frontmost_app_identity() {
+                        self.prev_app = Some(active);
+                    }
+                }
+            } else if should_auto_hide_on_blur(&FocusBlurCheck {
+                visible: self.visible,
+                focused,
+                was_focused_since_shown: self.was_focused_since_shown,
+                view_mode: self.view_mode,
+                show_about_modal: self.popup_state.show_about_modal,
+                dialog_open: self.dialog_open,
+                window_pinned: self.popup_state.window_pinned,
+                since_shown: self.last_shown_at.elapsed(),
+            }) {
                 self.hide_popup(ctx, false);
             }
+            self.last_known_focused = focused;
         }
     }
 
@@ -971,6 +1022,9 @@ impl eframe::App for EarthApp {
                                             self.settings.ignore_next_event =
                                                 !self.settings.ignore_next_event;
                                             self.persist_settings();
+                                        }
+                                        PopupAction::ToggleWindowPin => {
+                                            self.apply_window_pinned_state(&ctx);
                                         }
                                         PopupAction::SettingsChanged => {
                                             self.persist_settings();
@@ -1297,6 +1351,28 @@ impl eframe::App for EarthApp {
             platform::invalidate_window_shadow();
         }
     }
+}
+
+pub(crate) struct FocusBlurCheck {
+    pub visible: bool,
+    pub focused: bool,
+    pub was_focused_since_shown: bool,
+    pub view_mode: ViewMode,
+    pub show_about_modal: bool,
+    pub dialog_open: bool,
+    pub window_pinned: bool,
+    pub since_shown: Duration,
+}
+
+pub(crate) fn should_auto_hide_on_blur(s: &FocusBlurCheck) -> bool {
+    s.visible
+        && !s.focused
+        && s.was_focused_since_shown
+        && s.view_mode == ViewMode::Launcher
+        && !s.show_about_modal
+        && !s.dialog_open
+        && !s.window_pinned
+        && s.since_shown > Duration::from_millis(320)
 }
 
 pub(crate) fn compute_animated_card_rect(
@@ -1634,5 +1710,35 @@ mod tests {
             compute_animated_card_rect(panel_760, WorkbenchSide::Left, 0.0, Some((1480.0, Some(1480.0))));
         assert!((rect_after_move.min.x - 0.0).abs() < 0.5);
         assert!((rect_after_move.width() - 424.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn pinned_window_never_auto_hides_on_blur() {
+        use super::{should_auto_hide_on_blur, FocusBlurCheck, ViewMode};
+        use std::time::Duration;
+
+        // Unpinned: clicking another window hides Earth after grace period.
+        assert!(should_auto_hide_on_blur(&FocusBlurCheck {
+            visible: true,
+            focused: false,
+            was_focused_since_shown: true,
+            view_mode: ViewMode::Launcher,
+            show_about_modal: false,
+            dialog_open: false,
+            window_pinned: false,
+            since_shown: Duration::from_millis(500),
+        }));
+
+        // Pinned: clicking another window must keep Earth open.
+        assert!(!should_auto_hide_on_blur(&FocusBlurCheck {
+            visible: true,
+            focused: false,
+            was_focused_since_shown: true,
+            view_mode: ViewMode::Launcher,
+            show_about_modal: false,
+            dialog_open: false,
+            window_pinned: true,
+            since_shown: Duration::from_millis(5000),
+        }));
     }
 }

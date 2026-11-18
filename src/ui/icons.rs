@@ -195,6 +195,57 @@ pub fn draw_pin_badge(p: &egui::Painter, r: Rect, color: Color32) {
     );
 }
 
+/// Draws the header window-pin toggle glyph (outline when unpinned, filled pushpin head when pinned).
+pub fn draw_window_pin_glyph(p: &egui::Painter, r: Rect, color: Color32, pinned: bool) {
+    let cx = r.center().x;
+    let top = r.top() + 0.5;
+    let cap_bottom = top + r.height() * 0.18;
+    let collar_top = r.top() + r.height() * 0.44;
+    let collar_y = r.top() + r.height() * 0.58;
+    let head_half = r.width() * 0.25;
+    let body_half = r.width() * 0.17;
+    let collar_half = r.width() * 0.35;
+    if pinned {
+        // Decompose into convex parts so egui fill never bridges across the concave waist.
+        p.rect_filled(
+            Rect::from_min_max(pos2(cx - head_half, top), pos2(cx + head_half, cap_bottom)),
+            CornerRadius::same(1),
+            color,
+        );
+        p.rect_filled(
+            Rect::from_min_max(pos2(cx - body_half, cap_bottom - 0.5), pos2(cx + body_half, collar_top + 0.5)),
+            CornerRadius::ZERO,
+            color,
+        );
+        p.add(egui::Shape::convex_polygon(
+            vec![
+                pos2(cx - body_half, collar_top),
+                pos2(cx + body_half, collar_top),
+                pos2(cx + collar_half, collar_y),
+                pos2(cx - collar_half, collar_y),
+            ],
+            color,
+            Stroke::NONE,
+        ));
+    } else {
+        let pts = vec![
+            pos2(cx - head_half, top),
+            pos2(cx + head_half, top),
+            pos2(cx + body_half, cap_bottom),
+            pos2(cx + body_half, collar_top),
+            pos2(cx + collar_half, collar_y),
+            pos2(cx - collar_half, collar_y),
+            pos2(cx - body_half, collar_top),
+            pos2(cx - body_half, cap_bottom),
+        ];
+        p.add(egui::Shape::closed_line(pts, Stroke::new(1.35, color)));
+    }
+    p.line_segment(
+        [pos2(cx, collar_y), pos2(cx, r.bottom() - 0.5)],
+        Stroke::new(1.45, color),
+    );
+}
+
 pub fn draw_file_badge(p: &egui::Painter, r: Rect, color: Color32) {
     let fold = r.width() * 0.3;
     let pts = vec![

@@ -16,6 +16,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SetForegroundWindow,
 };
 
+pub fn capture_frontmost_app_identity() -> Option<ActiveAppInfo> {
+    capture_frontmost_app()
+}
+
 pub fn capture_frontmost_app() -> Option<ActiveAppInfo> {
     unsafe {
         let hwnd = GetForegroundWindow();
@@ -190,6 +194,8 @@ pub fn monitor_bounds_for_point(x: f32, y: f32, dpi_scale: f32) -> ScreenRect {
 pub fn invalidate_window_shadow() {}
 
 pub fn set_window_resize_anchor_right(_anchor_right: bool) {}
+
+pub fn set_window_pinned(_pinned: bool) {}
 
 pub fn reveal_in_file_manager(path: &Path) {
     let arg = format!("/select,{}", path.display());

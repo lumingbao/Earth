@@ -39,6 +39,10 @@ pub fn capture_frontmost_app() -> Option<ActiveAppInfo> {
     imp::capture_frontmost_app()
 }
 
+pub fn capture_frontmost_app_identity() -> Option<ActiveAppInfo> {
+    imp::capture_frontmost_app_identity()
+}
+
 pub fn restore_frontmost_app(app: &ActiveAppInfo) -> bool {
     imp::restore_frontmost_app(app)
 }
@@ -81,6 +85,10 @@ pub fn invalidate_window_shadow() {
 
 pub fn set_window_resize_anchor_right(anchor_right: bool) {
     imp::set_window_resize_anchor_right(anchor_right);
+}
+
+pub fn set_window_pinned(pinned: bool) {
+    imp::set_window_pinned(pinned);
 }
 
 pub fn reveal_in_file_manager(path: &Path) {

@@ -11,7 +11,7 @@ use crate::transforms::{
 use crate::ui::icons::{
     draw_earth_emblem, draw_file_badge, draw_gear_glyph, draw_link_badge, draw_pause_glyph,
     draw_pin_badge, draw_play_glyph, draw_search_glyph, draw_shield_glyph, draw_split_pane_glyph,
-    icon_button,
+    draw_window_pin_glyph, icon_button,
 };
 use crate::ui::theme::{
     build_highlighted_layout_job, card_shadow, compact_button, desktop_scroll_source,
@@ -52,6 +52,7 @@ pub enum PopupAction {
     OpenSettings,
     TogglePause,
     ToggleIgnoreNext,
+    ToggleWindowPin,
     SettingsChanged,
     SaveImageAs(String),
     CopyQrImage(Vec<u8>),
@@ -82,6 +83,7 @@ pub struct PopupState {
     pub selected_id: Option<i64>,
     pub preview_open: bool,
     pub preview_manually_toggled: bool,
+    pub window_pinned: bool,
     pub workbench_side: WorkbenchSide,
     pub preview_reveal: Option<f32>,
     pub request_search_focus: bool,
@@ -111,6 +113,7 @@ impl Default for PopupState {
             selected_id: None,
             preview_open: false,
             preview_manually_toggled: false,
+            window_pinned: false,
             workbench_side: WorkbenchSide::Right,
             preview_reveal: None,
             request_search_focus: true,
@@ -645,7 +648,7 @@ fn handle_popup_keyboard(
         } else if !state.search_query.is_empty() {
             state.search_query.clear();
             state.request_search_focus = true;
-        } else {
+        } else if !state.window_pinned {
             actions.push(PopupAction::HidePopup);
         }
         return;
@@ -848,7 +851,7 @@ fn render_header(
             || !state.search_query.is_empty()
             || state.ime_composing;
 
-        let right_controls_width = 136.0;
+        let right_controls_width = 166.0;
         let search_outer_w = (ui.available_width() - right_controls_width).max(90.0);
 
         let frame_fill = if show_search {
@@ -978,6 +981,7 @@ fn render_header(
         }
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
             if icon_button(ui, 28.0, false, "偏好设置 (⌘,)", palette, draw_gear_glyph).clicked() {
                 actions.push(PopupAction::OpenSettings);
             }
@@ -1034,6 +1038,21 @@ fn render_header(
             .clicked()
             {
                 actions.push(PopupAction::TogglePause);
+            }
+
+            let pin_tip = if state.window_pinned {
+                "已钉住窗口（失焦不关闭并始终置顶，点击取消）"
+            } else {
+                "钉住窗口（点击其他界面不自动关闭并始终置顶）"
+            };
+            let pinned_now = state.window_pinned;
+            if icon_button(ui, 28.0, pinned_now, pin_tip, palette, |p, r, c| {
+                draw_window_pin_glyph(p, r, c, pinned_now);
+            })
+            .clicked()
+            {
+                state.window_pinned = !state.window_pinned;
+                actions.push(PopupAction::ToggleWindowPin);
             }
         });
     });
@@ -4087,6 +4106,155 @@ mod tests {
             state.preview_reveal,
             Some(1.0),
             "closing toggle must keep reveal at 1.0 on frame 0 so the list does not jump full-width"
+        );
+    }
+
+    #[test]
+    fn window_pin_button_toggles_and_prevents_escape_hide() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        let mut settings = AppSettings::default();
+        let mut state = PopupState::default();
+        let collections = Vec::new();
+        let results = Vec::new();
+
+        // Render header once to discover the pin icon rect (5th icon from right edge -> leftmost of 5 icons)
+        let raw_init = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(424.0, 520.0))),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw_init, |ui| {
+            let ctx = ui.ctx().clone();
+            #[allow(deprecated)]
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show_inside(ui, |ui| {
+                    let content_rect = ui.max_rect().shrink(13.0);
+                    ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(content_rect)
+                            .layout(Layout::top_down(Align::Min)),
+                        |ui| {
+                            ui.set_min_size(content_rect.size());
+                            ui.set_max_size(content_rect.size());
+                            let mut actions = Vec::new();
+                            render_header(ui, &ctx, &mut settings, &mut state, &palette, &mut actions);
+                        },
+                    );
+                });
+        });
+        let mut squircles: Vec<egui::Rect> = out
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::epaint::Shape::Rect(r)
+                    if (r.rect.width() - 28.0).abs() < 0.5 && (r.rect.height() - 28.0).abs() < 0.5 =>
+                {
+                    Some(r.rect)
+                }
+                _ => None,
+            })
+            .collect();
+        squircles.sort_by(|a, b| a.min.x.total_cmp(&b.min.x));
+        squircles.dedup_by(|a, b| (a.min.x - b.min.x).abs() < 0.5);
+        out.textures_delta.clear();
+        assert_eq!(squircles.len(), 5, "expected 5 header icon buttons");
+        let pin_center = squircles[0].center();
+
+        // Click the pin button and verify ToggleWindowPin action & state flip
+        let mut captured_actions = Vec::new();
+        for (time, pressed) in [(0.1, true), (0.14, false)] {
+            let raw = egui::RawInput {
+                time: Some(time),
+                screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(424.0, 520.0))),
+                events: vec![
+                    egui::Event::PointerMoved(pin_center),
+                    egui::Event::PointerButton {
+                        pos: pin_center,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: Modifiers::NONE,
+                    },
+                ],
+                ..Default::default()
+            };
+            let mut click_out = ctx.run_ui(raw, |ui| {
+                let ctx = ui.ctx().clone();
+                #[allow(deprecated)]
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show_inside(ui, |ui| {
+                        let content_rect = ui.max_rect().shrink(13.0);
+                        ui.scope_builder(
+                            egui::UiBuilder::new()
+                                .max_rect(content_rect)
+                                .layout(Layout::top_down(Align::Min)),
+                            |ui| {
+                                ui.set_min_size(content_rect.size());
+                                ui.set_max_size(content_rect.size());
+                                captured_actions = render_popup_view(
+                                    ui,
+                                    &ctx,
+                                    PopupViewData {
+                                        settings: &mut settings,
+                                        results: &results,
+                                        collections: &collections,
+                                        palette: &palette,
+                                        storage_bytes: 0,
+                                        total_items: 0,
+                                        has_accessibility: true,
+                                    },
+                                    &mut state,
+                                );
+                            },
+                        );
+                    });
+            });
+            click_out.textures_delta.clear();
+        }
+        assert!(state.window_pinned, "clicking header pin button must pin the window");
+        assert!(
+            captured_actions.iter().any(|a| matches!(a, PopupAction::ToggleWindowPin)),
+            "clicking pin button should emit PopupAction::ToggleWindowPin"
+        );
+
+        // Pressing Esc while pinned with empty search should not emit HidePopup
+        let esc_raw = egui::RawInput {
+            time: Some(0.25),
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(424.0, 520.0))),
+            events: vec![egui::Event::Key {
+                key: Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut esc_actions = Vec::new();
+        let mut esc_out = ctx.run_ui(esc_raw, |ui| {
+            let ctx = ui.ctx().clone();
+            esc_actions = render_popup_view(
+                ui,
+                &ctx,
+                PopupViewData {
+                    settings: &mut settings,
+                    results: &results,
+                    collections: &collections,
+                    palette: &palette,
+                    storage_bytes: 0,
+                    total_items: 0,
+                    has_accessibility: true,
+                },
+                &mut state,
+            );
+        });
+        esc_out.textures_delta.clear();
+        assert!(
+            !esc_actions.iter().any(|a| matches!(a, PopupAction::HidePopup)),
+            "Esc should not dismiss window while pinned"
         );
     }
 }

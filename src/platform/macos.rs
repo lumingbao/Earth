@@ -5,7 +5,8 @@ use objc2::runtime::ProtocolObject;
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationOptions, NSApplicationActivationPolicy, NSEvent,
-    NSRunningApplication, NSScreen, NSViewLayerContentsPlacement, NSWindow, NSWorkspace,
+    NSFloatingWindowLevel, NSRunningApplication, NSScreen, NSViewLayerContentsPlacement, NSWindow,
+    NSWindowCollectionBehavior, NSWindowLevel, NSWorkspace,
 };
 use objc2_foundation::{ns_string, NSDictionary, NSNull};
 use objc2_quartz_core::{CAAction, CATransaction, kCAGravityLeft, kCAGravityRight};
@@ -99,7 +100,7 @@ impl Drop for CfOwned {
     }
 }
 
-pub fn capture_frontmost_app() -> Option<ActiveAppInfo> {
+pub fn capture_frontmost_app_identity() -> Option<ActiveAppInfo> {
     let self_pid = std::process::id() as i32;
     let workspace = NSWorkspace::sharedWorkspace();
     let app = workspace.frontmostApplication()?;
@@ -117,21 +118,25 @@ pub fn capture_frontmost_app() -> Option<ActiveAppInfo> {
         .map(|s| s.to_string())
         .unwrap_or_else(|| app_name.clone());
 
-    let window_rect = active_win_pos_rs::get_position().ok().and_then(|pos| {
+    Some(ActiveAppInfo {
+        app_name,
+        process_or_bundle: bundle_id,
+        pid: pid as u64,
+        window_rect: None,
+        window_handle: None,
+    })
+}
+
+pub fn capture_frontmost_app() -> Option<ActiveAppInfo> {
+    let mut info = capture_frontmost_app_identity()?;
+    info.window_rect = active_win_pos_rs::get_position().ok().and_then(|pos| {
         if pos.width > 10.0 && pos.height > 10.0 {
             Some((pos.x as f32, pos.y as f32, pos.width as f32, pos.height as f32))
         } else {
             None
         }
     });
-
-    Some(ActiveAppInfo {
-        app_name,
-        process_or_bundle: bundle_id,
-        pid: pid as u64,
-        window_rect,
-        window_handle: None,
-    })
+    Some(info)
 }
 
 pub fn restore_frontmost_app(app: &ActiveAppInfo) -> bool {
@@ -382,6 +387,30 @@ pub fn set_window_resize_anchor_right(anchor_right: bool) {
         }
     }
     CATransaction::commit();
+}
+
+/// Elevates the Earth NSWindow above normal, floating, and modal windows across Spaces while
+/// ensuring it never hides when clicking other applications.
+pub fn set_window_pinned(pinned: bool) {
+    const UTILITY_WINDOW_LEVEL: NSWindowLevel = 19;
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(window) = earth_ns_window(mtm) else {
+        return;
+    };
+    window.setHidesOnDeactivate(false);
+    if pinned {
+        window.setLevel(UTILITY_WINDOW_LEVEL);
+        window.setCollectionBehavior(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenAuxiliary,
+        );
+        window.orderFrontRegardless();
+    } else {
+        window.setLevel(NSFloatingWindowLevel);
+        window.setCollectionBehavior(NSWindowCollectionBehavior::MoveToActiveSpace);
+    }
 }
 
 pub fn reveal_in_file_manager(path: &Path) {

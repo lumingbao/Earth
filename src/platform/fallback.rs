@@ -2,6 +2,10 @@ use crate::model::ActiveAppInfo;
 use crate::platform::{PreferredSystemFonts, ScreenRect, SystemFontCandidate};
 use std::path::{Path, PathBuf};
 
+pub fn capture_frontmost_app_identity() -> Option<ActiveAppInfo> {
+    None
+}
+
 pub fn capture_frontmost_app() -> Option<ActiveAppInfo> {
     None
 }
@@ -50,6 +54,8 @@ pub fn monitor_bounds_for_point(_x: f32, _y: f32, _dpi_scale: f32) -> ScreenRect
 pub fn invalidate_window_shadow() {}
 
 pub fn set_window_resize_anchor_right(_anchor_right: bool) {}
+
+pub fn set_window_pinned(_pinned: bool) {}
 
 pub fn reveal_in_file_manager(path: &Path) {
     let target = path.parent().unwrap_or(path);
