@@ -675,8 +675,23 @@ mod tests {
         let pf = preferred.ui.first().expect("macOS should resolve primary CJK UI font");
         let bytes = std::fs::read(&pf.path).unwrap();
         let idx = find_ttc_face_index(&bytes, pf.postscript_name);
-        if pf.postscript_name == "PingFangSC-Regular" {
-            assert_ne!(idx, 0, "PingFangSC-Regular is not index 0 in PingFang.ttc (got {idx})");
+        if bytes.get(0..4) == Some(b"ttcf") {
+            let face_off = read_u32_be(&bytes, 12 + idx as usize * 4)
+                .expect("TTC face offset should exist") as usize;
+            assert!(
+                face_postscript_matches(&bytes, face_off, pf.postscript_name),
+                "TTC face {idx} in {} must match PostScript name {}",
+                pf.path.display(),
+                pf.postscript_name
+            );
+        } else {
+            assert_eq!(idx, 0, "single-face font must resolve to index 0");
+            assert!(
+                face_postscript_matches(&bytes, 0, pf.postscript_name),
+                "font {} must match PostScript name {}",
+                pf.path.display(),
+                pf.postscript_name
+            );
         }
 
         let ctx = egui::Context::default();

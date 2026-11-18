@@ -3607,21 +3607,14 @@ mod tests {
         let mut search_box_rect = None;
         let mut hint_text_rect = None;
         let mut mode_text_rect = None;
-        let mut mode_pill_rect = None;
+        let mut all_rects = Vec::new();
 
         for cs in &out.shapes {
             match &cs.shape {
                 egui::epaint::Shape::Rect(r) => {
+                    all_rects.push(r.rect);
                     if r.rect.width() > 180.0 && r.rect.height() >= 20.0 && r.rect.height() <= 40.0 {
                         search_box_rect = Some(r.rect);
-                    } else if r.rect.width() >= 28.0
-                        && r.rect.width() <= 60.0
-                        && r.rect.height() >= 14.0
-                        && r.rect.height() <= 26.0
-                        && r.rect.left() > 150.0
-                        && r.rect.left() < 280.0
-                    {
-                        mode_pill_rect = Some(r.rect);
                     }
                 }
                 egui::epaint::Shape::Text(t) => {
@@ -3640,7 +3633,11 @@ mod tests {
         let sb = search_box_rect.expect("search_box_rect found");
         let ht = hint_text_rect.expect("hint_text_rect found");
         let mt = mode_text_rect.expect("mode_text_rect found");
-        let mp = mode_pill_rect.expect("mode_pill_rect found");
+        let mp = all_rects
+            .into_iter()
+            .filter(|r| r.contains(mt.center()) && r.width() < sb.width() - 10.0 && r.height() >= 12.0)
+            .min_by(|a, b| a.area().total_cmp(&b.area()))
+            .expect("mode_pill_rect found");
 
         println!(
             "search_box={sb:?} center_y={:.2} | hint={ht:?} center_y={:.2} | mode_pill={mp:?} center_y={:.2} right_gap={:.2} | mode_text={mt:?} center_y={:.2}",
@@ -4595,9 +4592,14 @@ mod tests {
             .find(|(t, _)| t.contains("UNIQUE_LEFT_WORKBENCH_PAYLOAD"))
             .map(|(_, x)| *x)
             .expect("workbench body should render");
+        let expected_shortcut = if cfg!(target_os = "macos") {
+            "⌘ 1"
+        } else {
+            "Alt+1"
+        };
         let list_x = full_texts
             .iter()
-            .find(|(t, _)| t.contains("⌘ 1"))
+            .find(|(t, _)| t.contains(expected_shortcut))
             .map(|(_, x)| *x)
             .expect("list row shortcut pill should stay visible on right");
         assert!(
