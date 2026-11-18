@@ -36,8 +36,51 @@ const WORKBENCH_CLOSE_DURATION: Duration = Duration::from_millis(150);
 struct WorkbenchAnimation {
     from: f32,
     to: f32,
-    started_at: Instant,
-    duration: Duration,
+    elapsed: f32,
+    duration: f32,
+    waiting_for_viewport: bool,
+    last_tick: Option<Instant>,
+}
+
+impl WorkbenchAnimation {
+    fn new(from: f32, to: f32, duration: Duration, waiting_for_viewport: bool) -> Self {
+        Self {
+            from,
+            to,
+            elapsed: 0.0,
+            duration: duration.as_secs_f32().max(0.001),
+            waiting_for_viewport,
+            last_tick: None,
+        }
+    }
+
+    /// Advances the workbench animation using frame-paced clamped delta time so an OS
+    /// resize/swapchain reallocation hitch never skips the opening frames.
+    /// Returns `(reveal, finished)`.
+    fn step(&mut self, now: Instant, predicted_dt: f32, viewport_ready: bool) -> (f32, bool) {
+        if self.waiting_for_viewport {
+            if !viewport_ready {
+                self.last_tick = None;
+                return (self.from, false);
+            }
+            self.waiting_for_viewport = false;
+        }
+
+        let dt = match self.last_tick {
+            Some(prev) => now
+                .saturating_duration_since(prev)
+                .as_secs_f32()
+                .clamp(0.001, 1.0 / 40.0),
+            None => predicted_dt.clamp(1.0 / 120.0, 1.0 / 60.0),
+        };
+        self.last_tick = Some(now);
+        self.elapsed = (self.elapsed + dt).min(self.duration);
+
+        let raw_t = (self.elapsed / self.duration).clamp(0.0, 1.0);
+        let eased = 1.0 - (1.0 - raw_t).powi(3);
+        let reveal = (self.from + (self.to - self.from) * eased).clamp(0.0, 1.0);
+        (reveal, raw_t >= 1.0)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,34 +317,26 @@ impl EarthApp {
             return false;
         };
 
-        // Wait until the OS viewport actually grew to expanded width before starting the
-        // reveal timer so the first animation frames aren't consumed while Cocoa resizes.
-        if anim.to > 0.5 && panel_rect.width() < EXPANDED_WIDTH - 4.0 {
-            anim.started_at = Instant::now();
-            self.popup_state.preview_reveal = Some(anim.from);
-            ctx.request_repaint();
-            return true;
-        }
-
-        let dur = anim.duration.as_secs_f32().max(0.001);
-        let raw_t = (anim.started_at.elapsed().as_secs_f32() / dur).clamp(0.0, 1.0);
-        let eased = 1.0 - (1.0 - raw_t).powi(3);
-        let reveal = (anim.from + (anim.to - anim.from) * eased).clamp(0.0, 1.0);
+        let viewport_ready = anim.to <= 0.5 || panel_rect.width() >= EXPANDED_WIDTH - 4.0;
+        let predicted_dt = ctx.input(|i| i.predicted_dt);
+        let (reveal, finished) = anim.step(Instant::now(), predicted_dt, viewport_ready);
         self.popup_state.preview_reveal = Some(reveal);
 
-        if raw_t >= 1.0 {
+        if finished {
             let finished_to = anim.to;
             self.workbench_anim = None;
             if finished_to <= 0.01 {
                 self.popup_state.preview_reveal = Some(0.0);
                 self.collapse_workbench_os_viewport(ctx, panel_rect);
+                return !self.workbench_collapse_pending;
             } else {
                 self.popup_state.preview_reveal = None;
+                return true;
             }
-        } else {
-            ctx.request_repaint();
         }
-        true
+
+        ctx.request_repaint();
+        false
     }
 
     fn animated_card_rect(&self, panel_rect: egui::Rect, outer_min_x: Option<f32>) -> egui::Rect {
@@ -393,6 +428,8 @@ impl EarthApp {
                 .popup_state
                 .preview_reveal
                 .unwrap_or(if self.workbench_os_expanded { 1.0 } else { 0.0 });
+            let already_expanded =
+                self.workbench_os_expanded && panel_rect.width() >= EXPANDED_WIDTH - 4.0;
             if !self.workbench_os_expanded {
                 let (cur_x, cur_y) = self.last_window_pos;
                 let dpi = ctx.pixels_per_point();
@@ -423,12 +460,12 @@ impl EarthApp {
                 )));
             }
             let ratio = (1.0 - cur_reveal).clamp(0.2, 1.0);
-            self.workbench_anim = Some(WorkbenchAnimation {
-                from: cur_reveal,
-                to: 1.0,
-                started_at: Instant::now(),
-                duration: WORKBENCH_OPEN_DURATION.mul_f32(ratio),
-            });
+            self.workbench_anim = Some(WorkbenchAnimation::new(
+                cur_reveal,
+                1.0,
+                WORKBENCH_OPEN_DURATION.mul_f32(ratio),
+                !already_expanded,
+            ));
             self.popup_state.preview_reveal = Some(cur_reveal);
             ctx.request_repaint();
         } else if !want_open
@@ -440,12 +477,12 @@ impl EarthApp {
             );
             let cur_reveal = self.popup_state.preview_reveal.unwrap_or(1.0);
             let ratio = cur_reveal.clamp(0.2, 1.0);
-            self.workbench_anim = Some(WorkbenchAnimation {
-                from: cur_reveal,
-                to: 0.0,
-                started_at: Instant::now(),
-                duration: WORKBENCH_CLOSE_DURATION.mul_f32(ratio),
-            });
+            self.workbench_anim = Some(WorkbenchAnimation::new(
+                cur_reveal,
+                0.0,
+                WORKBENCH_CLOSE_DURATION.mul_f32(ratio),
+                false,
+            ));
             self.popup_state.preview_reveal = Some(cur_reveal);
             ctx.request_repaint();
         }
@@ -866,7 +903,9 @@ impl eframe::App for EarthApp {
         }
         let palette = self.cached_palette;
 
-        if self.last_accessibility_check.elapsed() > Duration::from_secs(2) {
+        if self.workbench_anim.is_none()
+            && self.last_accessibility_check.elapsed() > Duration::from_secs(2)
+        {
             self.cached_accessibility = platform::has_accessibility_permission();
             self.last_accessibility_check = Instant::now();
         }
@@ -1744,5 +1783,53 @@ mod tests {
             window_pinned: true,
             since_shown: Duration::from_millis(5000),
         }));
+    }
+
+    #[test]
+    fn workbench_animation_clamps_os_resize_stall_and_never_skips_opening_frames() {
+        use super::{WorkbenchAnimation, WORKBENCH_OPEN_DURATION};
+        use std::time::{Duration, Instant};
+
+        let t0 = Instant::now();
+        let mut anim = WorkbenchAnimation::new(0.0, 1.0, WORKBENCH_OPEN_DURATION, true);
+
+        // Before the OS viewport finishes growing to expanded width, reveal stays at 0.0
+        let (r_wait, done_wait) = anim.step(t0 + Duration::from_millis(30), 1.0 / 60.0, false);
+        assert_eq!(r_wait, 0.0);
+        assert!(!done_wait);
+
+        // Even if Cocoa took 85ms to reallocate the backing surface, the first ready frame
+        // starts cleanly with one vsync step instead of jumping past 70%+ of the slide.
+        let t_ready = t0 + Duration::from_millis(115);
+        let (r_first, done_first) = anim.step(t_ready, 1.0 / 60.0, true);
+        assert!(
+            r_first > 0.05 && r_first < 0.35,
+            "first visible frame should start smoothly, got reveal={r_first}"
+        );
+        assert!(!done_first);
+
+        // Even if a single background hiccup stalls a mid-animation frame by 90ms, clamped dt
+        // prevents teleporting straight to completion.
+        let (r_hitch, done_hitch) =
+            anim.step(t_ready + Duration::from_millis(90), 1.0 / 60.0, true);
+        assert!(r_hitch > r_first && r_hitch < 0.70, "hitch frame reveal={r_hitch}");
+        assert!(!done_hitch);
+
+        // Subsequent normal 60Hz frames glide smoothly to completion (1.0)
+        let mut t = t_ready + Duration::from_millis(90);
+        let mut finished = false;
+        let mut last_r = r_hitch;
+        for _ in 0..20 {
+            t += Duration::from_millis(16);
+            let (r, done) = anim.step(t, 1.0 / 60.0, true);
+            assert!(r >= last_r, "reveal must advance monotonically");
+            last_r = r;
+            if done {
+                finished = true;
+                break;
+            }
+        }
+        assert!(finished);
+        assert_eq!(last_r, 1.0);
     }
 }

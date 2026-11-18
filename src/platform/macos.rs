@@ -347,6 +347,13 @@ pub fn invalidate_window_shadow() {
 /// Anchors AppKit/Metal layer contents to the right or left edge during OS viewport resizes
 /// so collapsing or expanding from the left never squashes or shifts the card rightward.
 pub fn set_window_resize_anchor_right(anchor_right: bool) {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static LAST_ANCHOR: AtomicU8 = AtomicU8::new(0);
+    let desired = if anchor_right { 2 } else { 1 };
+    if LAST_ANCHOR.load(Ordering::Relaxed) == desired {
+        return;
+    }
+
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
@@ -356,6 +363,7 @@ pub fn set_window_resize_anchor_right(anchor_right: bool) {
     let Some(view) = window.contentView() else {
         return;
     };
+    LAST_ANCHOR.store(desired, Ordering::Relaxed);
     let (placement, gravity) = if anchor_right {
         unsafe { (NSViewLayerContentsPlacement::Right, kCAGravityRight) }
     } else {

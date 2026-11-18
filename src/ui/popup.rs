@@ -75,12 +75,15 @@ pub enum PopupAction {
     Quit,
 }
 
+const MAX_PREVIEW_FILES: usize = 64;
+
 pub struct CachedPreviewItem {
     pub item_id: i64,
     pub last_copied_at: i64,
     pub byte_size: u64,
     pub formatted_ts: String,
     pub display_text: String,
+    pub anim_display_text: String,
     pub text_stats: Option<(usize, usize, usize)>,
     pub quick_actions: Vec<QuickActionKind>,
     pub file_exists: Vec<bool>,
@@ -188,6 +191,7 @@ impl PopupState {
 
     pub fn ensure_preview_cache(&mut self, item: &ClipItem) -> &CachedPreviewItem {
         const MAX_PREVIEW_TEXT_CHARS: usize = 4000;
+        const MAX_ANIM_PREVIEW_CHARS: usize = 900;
         let needs_rebuild = self
             .preview_cache
             .as_ref()
@@ -199,26 +203,36 @@ impl PopupState {
             .unwrap_or(true);
         if needs_rebuild {
             let formatted_ts = format_epoch_millis(item.last_copied_at);
-            let (display_text, stats, quick_actions) = if item.kind == ClipKind::Text {
-                let raw = item.text_content.as_deref().unwrap_or("");
-                let display = match raw.char_indices().nth(MAX_PREVIEW_TEXT_CHARS) {
-                    Some((byte_idx, _)) => format!(
-                        "{}\n\n…（内容较长，速览仅展示前 {} 个字符；复制与粘贴仍保留完整内容）",
-                        &raw[..byte_idx],
-                        MAX_PREVIEW_TEXT_CHARS
-                    ),
-                    None => raw.to_string(),
+            let (display_text, anim_display_text, stats, quick_actions) =
+                if item.kind == ClipKind::Text {
+                    let raw = item.text_content.as_deref().unwrap_or("");
+                    let display = match raw.char_indices().nth(MAX_PREVIEW_TEXT_CHARS) {
+                        Some((byte_idx, _)) => format!(
+                            "{}\n\n…（内容较长，速览仅展示前 {} 个字符；复制与粘贴仍保留完整内容）",
+                            &raw[..byte_idx],
+                            MAX_PREVIEW_TEXT_CHARS
+                        ),
+                        None => raw.to_string(),
+                    };
+                    let anim_display = match display.char_indices().nth(MAX_ANIM_PREVIEW_CHARS) {
+                        Some((byte_idx, _)) => display[..byte_idx].to_string(),
+                        None => display.clone(),
+                    };
+                    (
+                        display,
+                        anim_display,
+                        Some(text_stats(raw)),
+                        available_quick_actions(raw),
+                    )
+                } else {
+                    (String::new(), String::new(), None, Vec::new())
                 };
-                (
-                    display,
-                    Some(text_stats(raw)),
-                    available_quick_actions(raw),
-                )
-            } else {
-                (String::new(), None, Vec::new())
-            };
             let file_exists = if item.kind == ClipKind::Files {
-                item.files.iter().map(|f| f.exists()).collect()
+                item.files
+                    .iter()
+                    .take(MAX_PREVIEW_FILES)
+                    .map(|f| f.exists())
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -228,6 +242,7 @@ impl PopupState {
                 byte_size: item.byte_size,
                 formatted_ts,
                 display_text,
+                anim_display_text,
                 text_stats: stats,
                 quick_actions,
                 file_exists,
@@ -592,17 +607,15 @@ pub fn render_popup_view(
          wb_clip: egui::Rect,
          wb_layout: egui::Rect,
          wb_opacity: f32| {
+            let clip = ui.clip_rect().intersect(wb_clip);
             ui.scope_builder(
                 egui::UiBuilder::new()
                     .max_rect(wb_layout)
                     .layout(Layout::top_down(Align::Min)),
                 |ui| {
-                    ui.set_clip_rect(ui.clip_rect().intersect(wb_clip));
+                    ui.set_clip_rect(clip);
                     ui.set_min_size(wb_layout.size());
                     ui.set_max_size(wb_layout.size());
-                    if wb_opacity < 0.999 {
-                        ui.multiply_opacity(wb_opacity);
-                    }
                     let selected_item = state
                         .selected_id
                         .and_then(|sid| results.iter().find(|r| r.item.id == sid))
@@ -617,6 +630,19 @@ pub fn render_popup_view(
                     );
                 },
             );
+            // Fade the sliding workbench with a single GPU veil quad instead of `multiply_opacity`
+            // so text colors remain constant and egui's galley cache stays warm across all frames.
+            if wb_opacity < 0.999 {
+                let veil_alpha = ((1.0 - wb_opacity) * 255.0).round().clamp(0.0, 255.0) as u8;
+                if veil_alpha > 0 {
+                    let bg = palette.window_bg;
+                    ui.painter().with_clip_rect(clip).rect_filled(
+                        wb_clip,
+                        CornerRadius::same(14),
+                        Color32::from_rgba_unmultiplied(bg.r(), bg.g(), bg.b(), veil_alpha),
+                    );
+                }
+            }
         };
 
     if target_open
@@ -1461,8 +1487,10 @@ fn render_items_list(
     let scroll_out = scroll_area.show_viewport(ui, |ui, viewport| {
         ui.set_max_width(list_avail_w);
         let origin_y = ui.cursor().min.y;
-        let vis_min_y = viewport.min.y - 240.0;
-        let vis_max_y = viewport.max.y + 240.0;
+        let animating_wb = state.preview_reveal.is_some_and(|r| r > 0.001 && r < 0.999);
+        let overscan = if animating_wb { 40.0 } else { 240.0 };
+        let vis_min_y = viewport.min.y - overscan;
+        let vis_max_y = viewport.max.y + overscan;
         let mut seen_pinned_sep = false;
         let mut prev_pinned: Option<bool> = None;
         let mut selected_row_rect: Option<egui::Rect> = None;
@@ -2413,10 +2441,17 @@ fn render_preview_pane(
                                     render_color_card(ui, rgba, palette, actions);
                                     ui.add_space(6.0);
                                 }
+                                let animating_wb = state.preview_reveal.is_some_and(|r| r < 0.999);
                                 let display = state
                                     .preview_cache
                                     .as_ref()
-                                    .map(|c| c.display_text.as_str())
+                                    .map(|c| {
+                                        if animating_wb {
+                                            c.anim_display_text.as_str()
+                                        } else {
+                                            c.display_text.as_str()
+                                        }
+                                    })
                                     .unwrap_or(raw);
                                 ui.add(
                                     egui::Label::new(
@@ -2451,12 +2486,12 @@ fn render_preview_pane(
                             }
                         }
                         ClipKind::Files => {
-                            for (idx, f) in item.files.iter().enumerate() {
+                            for (idx, f) in item.files.iter().take(MAX_PREVIEW_FILES).enumerate() {
                                 let exists = state
                                     .preview_cache
                                     .as_ref()
                                     .and_then(|c| c.file_exists.get(idx).copied())
-                                    .unwrap_or_else(|| f.exists());
+                                    .unwrap_or(true);
                                 egui::Frame::NONE
                                     .fill(palette.card_bg)
                                     .stroke(Stroke::new(1.0, palette.border_subtle))
@@ -2510,6 +2545,16 @@ fn render_preview_pane(
                                         });
                                     });
                                 ui.add_space(4.0);
+                            }
+                            if item.files.len() > MAX_PREVIEW_FILES {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "… 其余 {} 个文件（粘贴时保留完整列表）",
+                                        item.files.len() - MAX_PREVIEW_FILES
+                                    ))
+                                    .size(11.0)
+                                    .color(palette.text_muted),
+                                );
                             }
                         }
                     }

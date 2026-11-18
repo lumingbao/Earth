@@ -773,7 +773,7 @@ pub fn available_quick_actions(input: &str) -> Vec<QuickActionKind> {
     if trimmed.len() <= 131_072
         && ((trimmed.starts_with('{') && trimmed.ends_with('}'))
             || (trimmed.starts_with('[') && trimmed.ends_with(']')))
-        && serde_json::from_str::<serde_json::Value>(trimmed).is_ok()
+        && serde_json::from_str::<serde::de::IgnoredAny>(trimmed).is_ok()
     {
         actions.push(QuickActionKind::JsonPretty);
         actions.push(QuickActionKind::JsonMinify);
@@ -785,7 +785,9 @@ pub fn available_quick_actions(input: &str) -> Vec<QuickActionKind> {
     if trimmed.len() >= 4
         && trimmed.len() <= 65_536
         && trimmed.len().is_multiple_of(4)
-        && !trimmed.bytes().any(|b| b.is_ascii_whitespace())
+        && trimmed
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
         && general_purpose::STANDARD.decode(trimmed.as_bytes()).is_ok()
     {
         actions.push(QuickActionKind::Base64Decode);
