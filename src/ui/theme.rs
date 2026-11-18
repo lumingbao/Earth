@@ -88,41 +88,42 @@ impl EarthPalette {
                 on_accent: Color32::from_rgb(255, 255, 255),
             }
         } else {
+            // macOS Light Mode (Apple HIG): neutral warm-cool paper grays + System Blue (#007AFF)
             Self {
                 is_dark: false,
-                window_bg: Color32::from_rgb(248, 249, 253),    // #F8F9FD GOSTOCK cool off-white canvas
-                surface_bg: Color32::from_rgb(255, 255, 255),   // #FFFFFF pure white elevated cards
-                card_bg: Color32::from_rgb(241, 244, 249),      // #F1F4F9 soft grayish-blue pill/search fill
-                row_hover_bg: Color32::from_rgb(243, 245, 250), // #F3F5FA soft hover surface
-                row_selected_bg: Color32::from_rgb(239, 244, 255), // #EFF4FF GOSTOCK active cobalt tint
-                border: Color32::from_rgb(226, 232, 240),       // #E2E8F0 crisp light hairline
-                border_subtle: Color32::from_rgb(236, 239, 244), // #ECEFF4 ultra-light divider
-                border_strong: Color32::from_rgb(199, 213, 254), // #C7D5FE royal blue tint border
-                text_primary: Color32::from_rgb(5, 9, 20),      // #050914 GOSTOCK deep ink slate
-                text_secondary: Color32::from_rgb(100, 116, 139), // #64748B GOSTOCK cool slate
-                text_muted: Color32::from_rgb(113, 127, 148),   // #717F94 muted slate caption
-                accent: Color32::from_rgb(69, 110, 253),        // #456EFD GOSTOCK Electric Royal Blue
-                accent_hover: Color32::from_rgb(94, 131, 254),  // #5E83FE hover cobalt
-                accent_active: Color32::from_rgb(47, 85, 235),  // #2F55EB pressed cobalt
-                accent_soft: Color32::from_rgb(239, 246, 255),  // #EFF6FF GOSTOCK soft edit/info blue
-                accent_text: Color32::from_rgb(52, 87, 213),    // #3457D5 high-contrast cobalt label
-                accent_secondary: Color32::from_rgb(124, 155, 255), // #7C9BFF soft periwinkle ramp
-                pin_amber: Color32::from_rgb(245, 158, 11),     // #F59E0B GOSTOCK golden amber crown
-                success: Color32::from_rgb(34, 197, 94),        // #22C55E GOSTOCK emerald green
-                success_bg: Color32::from_rgb(220, 252, 231),   // #DCFCE7 pastel emerald
-                success_border: Color32::from_rgb(187, 247, 208), // #BBF7D0
-                success_text: Color32::from_rgb(22, 163, 74),   // #16A34A
-                warning_bg: Color32::from_rgb(254, 243, 199),   // #FEF3C7 pastel amber
-                warning_border: Color32::from_rgb(253, 230, 138), // #FDE68A
-                warning_text: Color32::from_rgb(180, 83, 9),    // #B45309
-                danger: Color32::from_rgb(239, 68, 68),         // #EF4444 GOSTOCK coral red
-                danger_bg: Color32::from_rgb(254, 226, 226),    // #FEE2E2 GOSTOCK pastel delete surface
-                danger_border: Color32::from_rgb(254, 202, 202), // #FECACA
-                danger_text: Color32::from_rgb(220, 38, 38),    // #DC2626
-                info_bg: Color32::from_rgb(239, 246, 255),      // #EFF6FF
-                info_border: Color32::from_rgb(199, 213, 254),  // #C7D5FE
-                keycap_bg: Color32::from_rgb(241, 244, 249),    // #F1F4F9
-                keycap_text: Color32::from_rgb(100, 116, 139),  // #64748B
+                window_bg: Color32::from_rgb(245, 245, 247),      // #F5F5F7 macOS windowBackgroundColor
+                surface_bg: Color32::from_rgb(255, 255, 255),     // #FFFFFF elevated card / control surface
+                card_bg: Color32::from_rgb(235, 235, 238),        // #EBEBEE search pill / capsules / icon wells
+                row_hover_bg: Color32::from_rgb(242, 242, 245),   // #F2F2F5 neutral light hover
+                row_selected_bg: Color32::from_rgb(232, 242, 255), // #E8F2FF subtle System Blue selection tint
+                border: Color32::from_rgb(209, 209, 214),         // #D1D1D6 Apple systemGray4 bezel
+                border_subtle: Color32::from_rgb(229, 229, 234),  // #E5E5EA Apple systemGray5 separator
+                border_strong: Color32::from_rgb(153, 200, 255),  // #99C8FF focused System Blue ring
+                text_primary: Color32::from_rgb(29, 29, 31),      // #1D1D1F Apple primary labelColor
+                text_secondary: Color32::from_rgb(110, 110, 115), // #6E6E73 Apple secondaryLabelColor
+                text_muted: Color32::from_rgb(142, 142, 147),     // #8E8E93 Apple tertiaryLabelColor
+                accent: Color32::from_rgb(0, 122, 255),           // #007AFF Apple Light Mode systemBlue
+                accent_hover: Color32::from_rgb(30, 140, 255),    // #1E8CFF lighter systemBlue hover
+                accent_active: Color32::from_rgb(0, 102, 214),    // #0066D6 pressed systemBlue
+                accent_soft: Color32::from_rgb(232, 242, 255),    // #E8F2FF soft translucent blue pill fill
+                accent_text: Color32::from_rgb(0, 102, 214),      // #0066D6 accessible blue label
+                accent_secondary: Color32::from_rgb(50, 173, 230), // #32ADE6 Apple Light Mode systemCyan
+                pin_amber: Color32::from_rgb(255, 149, 0),        // #FF9500 Apple Light Mode systemOrange
+                success: Color32::from_rgb(52, 199, 89),          // #34C759 Apple Light Mode systemGreen
+                success_bg: Color32::from_rgb(232, 249, 236),     // #E8F9EC tinted systemGreen surface
+                success_border: Color32::from_rgb(179, 234, 193), // #B3EAC1
+                success_text: Color32::from_rgb(36, 138, 61),     // #248A3D accessible systemGreen text
+                warning_bg: Color32::from_rgb(255, 244, 224),     // #FFF4E0 tinted systemOrange surface
+                warning_border: Color32::from_rgb(255, 216, 153), // #FFD899
+                warning_text: Color32::from_rgb(178, 80, 0),      // #B25000 accessible systemOrange text
+                danger: Color32::from_rgb(255, 59, 48),           // #FF3B30 Apple Light Mode systemRed
+                danger_bg: Color32::from_rgb(255, 236, 235),      // #FFECEB tinted systemRed surface
+                danger_border: Color32::from_rgb(255, 194, 190),  // #FFC2BE
+                danger_text: Color32::from_rgb(215, 0, 21),       // #D70015 accessible systemRed text
+                info_bg: Color32::from_rgb(232, 242, 255),        // #E8F2FF
+                info_border: Color32::from_rgb(179, 215, 255),    // #B3D7FF
+                keycap_bg: Color32::from_rgb(235, 235, 238),      // #EBEBEE neutral light keycap
+                keycap_text: Color32::from_rgb(110, 110, 115),    // #6E6E73 Apple secondary gray
                 on_accent: Color32::from_rgb(255, 255, 255),
             }
         }
@@ -217,16 +218,16 @@ impl EarthPalette {
     }
 }
 
-/// Subtle ambient elevation shadow inspired by Behance GOSTOCK cards.
+/// Subtle neutral ambient shadow matching macOS light cards.
 pub fn card_shadow(palette: &EarthPalette) -> egui::Shadow {
     if palette.is_dark {
         egui::Shadow::NONE
     } else {
         egui::Shadow {
-            offset: [0, 3],
-            blur: 14,
+            offset: [0, 2],
+            blur: 10,
             spread: 0,
-            color: Color32::from_rgba_unmultiplied(5, 9, 20, 10),
+            color: Color32::from_rgba_unmultiplied(0, 0, 0, 10),
         }
     }
 }
@@ -578,6 +579,14 @@ mod tests {
             "dark surfaces should step cleanly upward in elevation"
         );
         assert_eq!(dark.accent, Color32::from_rgb(10, 132, 255));
+
+        let light = EarthPalette::resolve(ThemeMode::Light, false);
+        assert!(!light.is_dark);
+        assert!(is_neutral(light.window_bg), "light window_bg should be neutral macOS off-white");
+        assert!(is_neutral(light.card_bg), "light card_bg should be neutral macOS control fill");
+        assert!(is_neutral(light.border), "light border should be neutral macOS bezel");
+        assert!(is_neutral(light.text_primary), "light text_primary should be neutral labelColor");
+        assert_eq!(light.accent, Color32::from_rgb(0, 122, 255));
     }
 
     #[cfg(target_os = "macos")]

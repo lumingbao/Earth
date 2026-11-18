@@ -2708,9 +2708,9 @@ fn antd_kind_tag_colors(
                     )
                 } else {
                     (
-                        Color32::from_rgb(249, 240, 255),
-                        Color32::from_rgb(211, 173, 247),
-                        Color32::from_rgb(83, 29, 171),
+                        Color32::from_rgb(245, 236, 252),
+                        Color32::from_rgb(218, 184, 242),
+                        Color32::from_rgb(137, 68, 171),
                     )
                 }
             } else if item.is_url {
@@ -2722,9 +2722,9 @@ fn antd_kind_tag_colors(
                     )
                 } else {
                     (
-                        Color32::from_rgb(240, 245, 255),
-                        Color32::from_rgb(173, 198, 255),
-                        Color32::from_rgb(29, 57, 196),
+                        Color32::from_rgb(232, 242, 255),
+                        Color32::from_rgb(179, 215, 255),
+                        Color32::from_rgb(0, 102, 214),
                     )
                 }
             } else {
@@ -2740,9 +2740,9 @@ fn antd_kind_tag_colors(
                 )
             } else {
                 (
-                    Color32::from_rgb(230, 255, 251),
-                    Color32::from_rgb(135, 232, 222),
-                    Color32::from_rgb(8, 151, 156),
+                    Color32::from_rgb(230, 247, 250),
+                    Color32::from_rgb(174, 224, 235),
+                    Color32::from_rgb(0, 130, 153),
                 )
             }
         }
