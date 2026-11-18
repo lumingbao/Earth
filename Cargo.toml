@@ -48,6 +48,8 @@ objc2-app-kit = { version = "0.3", features = [
 objc2-quartz-core = { version = "0.3", features = ["CALayer", "CATransaction"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+eframe = { version = "0.37", features = ["glow"] }
+winit = "0.30"
 enigo = "0.6"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

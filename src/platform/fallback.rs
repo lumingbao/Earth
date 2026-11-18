@@ -26,6 +26,8 @@ pub fn open_accessibility_settings() {}
 
 pub fn configure_macos_accessory_mode() {}
 
+pub fn configure_main_window(_cc: &eframe::CreationContext<'_>) {}
+
 pub fn activate_self_window() {}
 
 pub fn hide_self_app() {}

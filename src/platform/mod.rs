@@ -63,6 +63,10 @@ pub fn configure_macos_accessory_mode() {
     imp::configure_macos_accessory_mode();
 }
 
+pub fn configure_main_window(cc: &eframe::CreationContext<'_>) {
+    imp::configure_main_window(cc);
+}
+
 pub fn activate_self_window() {
     imp::activate_self_window();
 }

@@ -191,6 +191,17 @@ pub fn monitor_bounds_for_point(x: f32, y: f32, dpi_scale: f32) -> ScreenRect {
     monitor_bounds_at_physical_point(pt, scale)
 }
 
+pub fn configure_main_window(cc: &eframe::CreationContext<'_>) {
+    if let Some(window) = cc.winit_window() {
+        use winit::platform::windows::{CornerPreference, WindowExtWindows as _};
+        // `egui-winit` enables undecorated drop shadows whenever `decorations` is false, which
+        // adds a 1px dark top border and a rectangular DWM frame shadow outside our 18px rounded
+        // corners and around empty space during workbench animations.
+        window.set_undecorated_shadow(false);
+        window.set_corner_preference(CornerPreference::DoNotRound);
+    }
+}
+
 pub fn invalidate_window_shadow() {}
 
 pub fn set_window_resize_anchor_right(_anchor_right: bool) {}

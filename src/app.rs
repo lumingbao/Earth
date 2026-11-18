@@ -135,6 +135,7 @@ impl EarthApp {
         egui_extras::install_image_loaders(&cc.egui_ctx);
         install_crisp_fonts(&cc.egui_ctx);
         platform::configure_macos_accessory_mode();
+        platform::configure_main_window(cc);
 
         let storage = Storage::open_default().expect("无法初始化 Earth 本地数据库");
         let settings = storage.load_settings();

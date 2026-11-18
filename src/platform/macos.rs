@@ -336,6 +336,8 @@ fn earth_ns_window(mtm: MainThreadMarker) -> Option<Retained<NSWindow>> {
     })
 }
 
+pub fn configure_main_window(_cc: &eframe::CreationContext<'_>) {}
+
 pub fn invalidate_window_shadow() {
     if let Some(mtm) = MainThreadMarker::new()
         && let Some(window) = earth_ns_window(mtm)

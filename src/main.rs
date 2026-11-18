@@ -35,11 +35,26 @@ fn main() -> eframe::Result<()> {
         .with_min_inner_size([380.0, 380.0])
         .with_icon(icon);
 
+    #[cfg(target_os = "windows")]
+    let viewport = viewport.with_transparent(false);
+
     #[allow(unused_mut)]
     let mut native_options = eframe::NativeOptions {
         viewport,
         ..Default::default()
     };
+
+    #[cfg(target_os = "windows")]
+    {
+        // On Windows, wgpu DX12 HWND swapchains only support CompositeAlphaMode::Opaque, which
+        // fills transparent corners and empty workbench animation areas with solid black.
+        // Switch to Glow (WGL + DwmEnableBlurBehindWindow), keeping `viewport.transparent` false
+        // for GL pixel-format matching (avoiding driver-strict WGL_TRANSPARENT_ARB rejections while
+        // still requesting 8 alpha bits) and enabling `transparent` in `window_builder` for HWND creation.
+        native_options.renderer = eframe::Renderer::Glow;
+        native_options.window_builder =
+            Some(Box::new(|builder| builder.with_transparent(true)));
+    }
 
     #[cfg(target_os = "macos")]
     {
