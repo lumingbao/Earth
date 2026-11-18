@@ -934,6 +934,7 @@ impl eframe::App for EarthApp {
                                     || self.popup_state.filter != prev_filter
                                 {
                                     self.search_dirty = true;
+                                    ctx.request_repaint();
                                 }
 
                                 for action in actions {

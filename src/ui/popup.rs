@@ -102,7 +102,9 @@ pub struct PopupState {
     pub dismissed_update_version: Option<String>,
     pub dismissed_accessibility_banner: bool,
     pub ime_composing: bool,
+    pub search_focused: bool,
     pub scroll_to_selection: bool,
+    pub scroll_to_filter: bool,
 }
 
 impl Default for PopupState {
@@ -132,7 +134,9 @@ impl Default for PopupState {
             dismissed_update_version: None,
             dismissed_accessibility_banner: false,
             ime_composing: false,
+            search_focused: false,
             scroll_to_selection: false,
+            scroll_to_filter: false,
         }
     }
 }
@@ -659,34 +663,22 @@ fn handle_popup_keyboard(
         return;
     }
 
-    // Tab / Shift+Tab cycles through category & collection filter capsules
+    // Tab / Shift+Tab and Left / Right arrows cycle through category & collection filter capsules
+    // with wrap-around from rightmost to leftmost and vice versa.
+    let allow_arrow_filter_switch = state.search_query.is_empty() || !state.search_focused;
     let shift_tab = ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab));
     let plain_tab = !shift_tab && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab));
-    if shift_tab || plain_tab {
-        let mut filters = vec![
-            CategoryFilter::All,
-            CategoryFilter::Text,
-            CategoryFilter::Image,
-            CategoryFilter::Files,
-            CategoryFilter::Pinned,
-        ];
-        for col in collections {
-            filters.push(CategoryFilter::Collection(col.id));
-        }
-        let cur = filters
-            .iter()
-            .position(|&f| f == state.filter)
-            .unwrap_or(0);
-        let next = if shift_tab {
-            if cur == 0 {
-                filters.len() - 1
-            } else {
-                cur - 1
-            }
-        } else {
-            (cur + 1) % filters.len()
-        };
-        state.filter = filters[next];
+    let arrow_left = allow_arrow_filter_switch
+        && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowLeft));
+    let arrow_right = allow_arrow_filter_switch
+        && !arrow_left
+        && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowRight));
+    if shift_tab || plain_tab || arrow_left || arrow_right {
+        let backward = shift_tab || arrow_left;
+        state.filter = cycle_category_filter(state.filter, collections, backward);
+        state.scroll_to_filter = true;
+        state.active_transform = None;
+        ctx.request_repaint();
         return;
     }
 
@@ -809,6 +801,38 @@ fn handle_popup_keyboard(
     if quit_hit {
         actions.push(PopupAction::Quit);
     }
+}
+
+fn cycle_category_filter(
+    current: CategoryFilter,
+    collections: &[Collection],
+    backward: bool,
+) -> CategoryFilter {
+    let mut filters = Vec::with_capacity(5 + collections.len());
+    filters.extend_from_slice(&[
+        CategoryFilter::All,
+        CategoryFilter::Text,
+        CategoryFilter::Image,
+        CategoryFilter::Files,
+        CategoryFilter::Pinned,
+    ]);
+    for col in collections {
+        filters.push(CategoryFilter::Collection(col.id));
+    }
+    let cur = filters
+        .iter()
+        .position(|&f| f == current)
+        .unwrap_or(0);
+    let next = if backward {
+        if cur == 0 {
+            filters.len() - 1
+        } else {
+            cur - 1
+        }
+    } else {
+        (cur + 1) % filters.len()
+    };
+    filters[next]
 }
 
 fn behavior_from_modifiers(mods: Modifiers) -> PasteBehavior {
@@ -955,6 +979,8 @@ fn render_header(
                 });
             });
 
+        state.search_focused = search_focused;
+
         if show_search {
             let sr = search_frame.response.rect;
             let border_color = if search_focused {
@@ -1083,17 +1109,27 @@ fn render_filter_strip(
                 ];
 
                 for (filter, label) in pills {
-                    capsule_button(ui, state.filter == filter, label, None, palette, || {
+                    let active = state.filter == filter;
+                    let resp = capsule_button(ui, active, label, None, palette, || {
                         state.filter = filter;
                     });
+                    if active && state.scroll_to_filter {
+                        resp.scroll_to_me(None);
+                        state.scroll_to_filter = false;
+                    }
                 }
 
                 for col in collections {
                     let dot = parse_hex_color32(&col.color_hex);
                     let f = CategoryFilter::Collection(col.id);
-                    capsule_button(ui, state.filter == f, &col.name, dot, palette, || {
+                    let active = state.filter == f;
+                    let resp = capsule_button(ui, active, &col.name, dot, palette, || {
                         state.filter = f;
                     });
+                    if active && state.scroll_to_filter {
+                        resp.scroll_to_me(None);
+                        state.scroll_to_filter = false;
+                    }
                 }
             });
         });
@@ -1106,7 +1142,7 @@ fn capsule_button(
     dot_color: Option<Color32>,
     palette: &EarthPalette,
     on_click: impl FnOnce(),
-) {
+) -> egui::Response {
     let fill = if active {
         palette.accent
     } else {
@@ -1147,9 +1183,11 @@ fn capsule_button(
         .stroke(stroke)
         .corner_radius(CornerRadius::same(255))
         .min_size(vec2(0.0, 23.0));
-    if padded_button(ui, btn, vec2(9.0, 4.5)).clicked() {
+    let resp = padded_button(ui, btn, vec2(9.0, 4.5));
+    if resp.clicked() {
         on_click();
     }
+    resp
 }
 
 fn render_items_list(
@@ -4256,5 +4294,97 @@ mod tests {
             !esc_actions.iter().any(|a| matches!(a, PopupAction::HidePopup)),
             "Esc should not dismiss window while pinned"
         );
+    }
+
+    #[test]
+    fn left_and_right_arrows_cycle_categories_with_wraparound() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        let mut settings = AppSettings::default();
+        let results = Vec::new();
+        let collections = vec![
+            Collection {
+                id: 10,
+                name: "常用指令".into(),
+                color_hex: "#456EFD".into(),
+                created_at: 0,
+            },
+            Collection {
+                id: 20,
+                name: "代码片段".into(),
+                color_hex: "#22C55E".into(),
+                created_at: 0,
+            },
+        ];
+
+        let mut state = PopupState::default();
+        let mut press_key = |state: &mut PopupState, key: Key, time: f64| {
+            let raw = egui::RawInput {
+                time: Some(time),
+                screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(424.0, 520.0))),
+                events: vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Modifiers::NONE,
+                }],
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let ctx = ui.ctx().clone();
+                let _ = render_popup_view(
+                    ui,
+                    &ctx,
+                    PopupViewData {
+                        settings: &mut settings,
+                        results: &results,
+                        collections: &collections,
+                        palette: &palette,
+                        storage_bytes: 0,
+                        total_items: 0,
+                        has_accessibility: true,
+                    },
+                    state,
+                );
+            });
+            out.textures_delta.clear();
+        };
+
+        // Right arrow cycles across all built-in + collection filters and wraps back to All.
+        let expected_right = [
+            CategoryFilter::Text,
+            CategoryFilter::Image,
+            CategoryFilter::Files,
+            CategoryFilter::Pinned,
+            CategoryFilter::Collection(10),
+            CategoryFilter::Collection(20),
+            CategoryFilter::All,
+        ];
+        for (idx, expected) in expected_right.into_iter().enumerate() {
+            press_key(&mut state, Key::ArrowRight, 0.1 + idx as f64 * 0.05);
+            assert_eq!(state.filter, expected, "step {idx} on ArrowRight");
+        }
+
+        // Left arrow from All wraps directly to the rightmost category (Collection(20)), then steps left.
+        press_key(&mut state, Key::ArrowLeft, 1.0);
+        assert_eq!(state.filter, CategoryFilter::Collection(20));
+        press_key(&mut state, Key::ArrowLeft, 1.05);
+        assert_eq!(state.filter, CategoryFilter::Collection(10));
+        press_key(&mut state, Key::ArrowLeft, 1.10);
+        assert_eq!(state.filter, CategoryFilter::Pinned);
+
+        // When typing non-empty search text in the focused search box, arrows edit text instead of switching tabs.
+        state.search_query = "docker".into();
+        state.search_focused = true;
+        press_key(&mut state, Key::ArrowLeft, 1.20);
+        assert_eq!(state.filter, CategoryFilter::Pinned);
+
+        // Once search box loses focus, arrows still switch categories even with non-empty search text.
+        state.search_focused = false;
+        press_key(&mut state, Key::ArrowRight, 1.30);
+        assert_eq!(state.filter, CategoryFilter::Collection(10));
     }
 }
