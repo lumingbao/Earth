@@ -1,5 +1,5 @@
 use crate::model::{AppSettings, ClipItem, ClipKind, Collection, FileEntry};
-use crate::transforms::{detect_hex_color, detect_sensitive_label, detect_url};
+use crate::transforms::{detect_color, detect_sensitive_label, detect_url};
 use chrono::Utc;
 use directories::ProjectDirs;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -323,17 +323,26 @@ impl Storage {
         let rows = stmt
             .query_map([], |row| {
                 let kind_str: String = row.get(2)?;
+                let kind = ClipKind::from_db_str(&kind_str);
+                let text_content: Option<String> = row.get(3)?;
                 let files_json: String = row.get(10)?;
                 let files: Vec<FileEntry> =
                     serde_json::from_str(&files_json).unwrap_or_default();
                 let color_str: Option<String> = row.get(20)?;
-                let detected_color = color_str.as_deref().and_then(parse_rgba_csv);
+                let detected_color = color_str
+                    .as_deref()
+                    .and_then(parse_rgba_csv)
+                    .or_else(|| {
+                        (kind == ClipKind::Text)
+                            .then(|| text_content.as_deref().and_then(detect_color))
+                            .flatten()
+                    });
 
                 Ok(ClipItem {
                     id: row.get(0)?,
                     content_hash: row.get(1)?,
-                    kind: ClipKind::from_db_str(&kind_str),
-                    text_content: row.get(3)?,
+                    kind,
+                    text_content,
                     html_content: row.get(4)?,
                     rtf_content: row.get(5)?,
                     image_path: row.get(6)?,
@@ -462,7 +471,7 @@ impl Storage {
         let new_hash = sha256_hex(new_text.as_bytes());
         let byte_size = new_text.len() as i64;
         let sensitive_label = detect_sensitive_label(new_text);
-        let detected_color = detect_hex_color(new_text);
+        let detected_color = detect_color(new_text);
         let color_str = detected_color.map(|c| format!("{},{},{},{}", c[0], c[1], c[2], c[3]));
         let is_url = detect_url(new_text) as i64;
 
@@ -513,9 +522,12 @@ impl Storage {
 
             let files_json =
                 serde_json::to_string(&item.files).unwrap_or_else(|_| "[]".to_string());
-            let color_str = item
-                .detected_color
-                .map(|c| format!("{},{},{},{}", c[0], c[1], c[2], c[3]));
+            let resolved_color = item.detected_color.or_else(|| {
+                (item.kind == ClipKind::Text)
+                    .then(|| item.text_content.as_deref().and_then(detect_color))
+                    .flatten()
+            });
+            let color_str = resolved_color.map(|c| format!("{},{},{},{}", c[0], c[1], c[2], c[3]));
 
             let changed = self
                 .conn
@@ -850,5 +862,49 @@ mod tests {
 
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&dir2);
+    }
+
+    #[test]
+    fn list_items_and_edit_text_detect_rgb_and_hex_colors() {
+        let dir = temp_dir("color_backfill");
+        let storage = Storage::open_in_dir(&dir).unwrap();
+
+        // Simulate a legacy row stored before RGB detection existed (detected_color = None)
+        let id = storage
+            .upsert_item(
+                NewClipPayload {
+                    content_hash: sha256_hex(b"rgb(10, 132, 255)"),
+                    kind: ClipKind::Text,
+                    text_content: Some("rgb(10, 132, 255)".into()),
+                    html_content: None,
+                    rtf_content: None,
+                    image_png: None,
+                    thumb_png: None,
+                    image_width: None,
+                    image_height: None,
+                    files: vec![],
+                    byte_size: 17,
+                    source_app: Some("Figma".into()),
+                    source_bundle_id: None,
+                    sensitive_label: None,
+                    detected_color: None,
+                    is_url: false,
+                },
+                50,
+            )
+            .unwrap();
+
+        let items = storage.list_items().unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].detected_color, Some([10, 132, 255, 255]));
+
+        // Editing text to RGBA updates persisted color cleanly
+        storage
+            .update_item_text(id, "rgba(255, 128, 0, 0.5)")
+            .unwrap();
+        let items2 = storage.list_items().unwrap();
+        assert_eq!(items2[0].detected_color, Some([255, 128, 0, 128]));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

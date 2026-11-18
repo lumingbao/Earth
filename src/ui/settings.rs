@@ -845,7 +845,7 @@ fn render_appearance_tab(
             .checkbox(&mut settings.show_source_app_badge, "显示来源应用程序标签")
             .changed();
         changed |= ui
-            .checkbox(&mut settings.show_hex_color_swatch, "显示十六进制颜色色块")
+            .checkbox(&mut settings.show_hex_color_swatch, "显示颜色色块（HEX / RGB）")
             .changed();
         changed |= ui
             .checkbox(&mut settings.show_footer_menu, "显示底部操作栏")

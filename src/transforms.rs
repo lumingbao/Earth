@@ -5,26 +5,43 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
-/// Parses hex color strings like `#055745`, `#fff`, `#11223344`, or bare 6-hex tokens `055745`.
+/// Parses hex color strings such as `#055745`, `#fff`, `#f0a8`, `#11223344`,
+/// `0xFF5733`, `0xFF573380`, or bare 6-hex tokens `055745`.
 pub fn detect_hex_color(input: &str) -> Option<[u8; 4]> {
     let trimmed = input.trim();
     if trimmed.is_empty() || trimmed.len() > 16 {
         return None;
     }
-    let has_hash = trimmed.starts_with('#');
-    let hex = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    let (has_prefix, hex) = if let Some(rest) = trimmed.strip_prefix('#') {
+        (true, rest)
+    } else if let Some(rest) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        (true, rest)
+    } else {
+        (false, trimmed)
+    };
 
     if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
 
     match hex.len() {
-        3 if has_hash => {
+        3 if trimmed.starts_with('#') => {
             let mut bytes = hex.bytes();
             let r = hex_nibble(bytes.next()?)?;
             let g = hex_nibble(bytes.next()?)?;
             let b = hex_nibble(bytes.next()?)?;
             Some([r * 17, g * 17, b * 17, 255])
+        }
+        4 if trimmed.starts_with('#') => {
+            let mut bytes = hex.bytes();
+            let r = hex_nibble(bytes.next()?)?;
+            let g = hex_nibble(bytes.next()?)?;
+            let b = hex_nibble(bytes.next()?)?;
+            let a = hex_nibble(bytes.next()?)?;
+            Some([r * 17, g * 17, b * 17, a * 17])
         }
         6 => {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
@@ -32,7 +49,7 @@ pub fn detect_hex_color(input: &str) -> Option<[u8; 4]> {
             let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
             Some([r, g, b, 255])
         }
-        8 if has_hash => {
+        8 if has_prefix => {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
             let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
             let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
@@ -40,6 +57,356 @@ pub fn detect_hex_color(input: &str) -> Option<[u8; 4]> {
             Some([r, g, b, a])
         }
         _ => None,
+    }
+}
+
+/// Parses RGB / RGBA color strings:
+/// - Functional CSS syntax: `rgb(255, 128, 0)`, `rgba(255, 128, 0, 0.5)`, `rgb(100%, 50%, 0%)`,
+///   CSS Color 4 space/slash syntax `rgb(255 128 0 / 50%)`, and full-width punctuation variants.
+/// - Bare RGB tuples commonly copied from design tools: `255, 128, 0`, `(255, 128, 0)`,
+///   `255, 128, 0, 0.5`, `(255, 128, 0, 50%)`.
+pub fn detect_rgb_color(input: &str) -> Option<[u8; 4]> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() || trimmed.len() > 64 || trimmed.contains('\n') || trimmed.contains('\r') {
+        return None;
+    }
+
+    if let Some(rgba) = parse_functional_rgb(trimmed) {
+        return Some(rgba);
+    }
+    parse_bare_rgb_tuple(trimmed)
+}
+
+/// Unified color detector supporting HEX (`#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, `0xRRGGBB`,
+/// bare `RRGGBB`), RGB / RGBA (CSS functional + CSS Color 4 space/slash + bare tuples), optional
+/// trailing CSS semicolons, quoted explicit colors, and single-value CSS color declarations
+/// (e.g. `color: #0A84FF;` or `--accent: rgb(10, 132, 255);`).
+pub fn detect_color(input: &str) -> Option<[u8; 4]> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() || trimmed.len() > 96 || trimmed.contains('\n') || trimmed.contains('\r') {
+        return None;
+    }
+
+    let cleaned = trimmed.strip_suffix(';').unwrap_or(trimmed).trim();
+    if let Some(rgba) = detect_hex_color(cleaned).or_else(|| detect_rgb_color(cleaned)) {
+        return Some(rgba);
+    }
+
+    // Quoted explicit color literal, e.g. `"#0A84FF"` or `'rgb(10, 132, 255)'`
+    if let Some(inner) = strip_matching_quotes(cleaned)
+        && has_explicit_color_prefix(inner)
+        && let Some(rgba) = detect_hex_color(inner).or_else(|| detect_rgb_color(inner))
+    {
+        return Some(rgba);
+    }
+
+    // Single CSS declaration like `color: #0A84FF;` or `--primary: rgba(10, 132, 255, 0.8);`
+    if let Some((prop, raw_val)) = cleaned.split_once(':') {
+        let prop = prop.trim();
+        let val = raw_val.trim().strip_suffix(';').unwrap_or(raw_val.trim()).trim();
+        let val = strip_matching_quotes(val).unwrap_or(val);
+        let valid_prop = !prop.is_empty()
+            && prop.len() <= 32
+            && prop
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+        if valid_prop && has_explicit_color_prefix(val) {
+            return detect_hex_color(val).or_else(|| detect_rgb_color(val));
+        }
+    }
+
+    None
+}
+
+fn strip_matching_quotes(s: &str) -> Option<&str> {
+    if s.len() >= 2
+        && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')))
+    {
+        Some(s[1..s.len() - 1].trim())
+    } else {
+        None
+    }
+}
+
+fn has_explicit_color_prefix(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if s.starts_with('#') || s.starts_with("0x") || s.starts_with("0X") {
+        return true;
+    }
+    bytes.len() >= 4 && bytes[..3].eq_ignore_ascii_case(b"rgb")
+}
+
+fn parse_functional_rgb(s: &str) -> Option<[u8; 4]> {
+    let bytes = s.as_bytes();
+    let (is_rgba, rest) = if bytes.len() >= 6 && bytes[..4].eq_ignore_ascii_case(b"rgba") {
+        (true, &s[4..])
+    } else if bytes.len() >= 5 && bytes[..3].eq_ignore_ascii_case(b"rgb") {
+        (false, &s[3..])
+    } else {
+        return None;
+    };
+
+    let rest = rest.trim_start();
+    let inner = rest
+        .strip_prefix('(')
+        .and_then(|v| v.strip_suffix(')'))
+        .or_else(|| rest.strip_prefix('（').and_then(|v| v.strip_suffix('）')))?
+        .trim();
+
+    if inner.is_empty() {
+        return None;
+    }
+
+    let has_comma = inner.contains(',') || inner.contains('，');
+    let has_slash = inner.contains('/');
+
+    if has_comma && has_slash {
+        return None;
+    }
+
+    if has_comma {
+        let parts: Vec<&str> = inner
+            .split([',', '，'])
+            .map(str::trim)
+            .collect();
+        match parts.as_slice() {
+            [r, g, b] => Some([
+                parse_rgb_channel(r)?,
+                parse_rgb_channel(g)?,
+                parse_rgb_channel(b)?,
+                255,
+            ]),
+            [r, g, b, a] => Some([
+                parse_rgb_channel(r)?,
+                parse_rgb_channel(g)?,
+                parse_rgb_channel(b)?,
+                parse_alpha_channel(a, true)?,
+            ]),
+            _ => None,
+        }
+    } else if has_slash {
+        let mut slash_parts = inner.split('/');
+        let rgb_part = slash_parts.next()?.trim();
+        let alpha_part = slash_parts.next()?.trim();
+        if slash_parts.next().is_some() {
+            return None;
+        }
+        let channels: Vec<&str> = rgb_part.split_whitespace().collect();
+        if channels.len() != 3 {
+            return None;
+        }
+        Some([
+            parse_rgb_channel(channels[0])?,
+            parse_rgb_channel(channels[1])?,
+            parse_rgb_channel(channels[2])?,
+            parse_alpha_channel(alpha_part, true)?,
+        ])
+    } else {
+        let channels: Vec<&str> = inner.split_whitespace().collect();
+        match channels.as_slice() {
+            [r, g, b] => Some([
+                parse_rgb_channel(r)?,
+                parse_rgb_channel(g)?,
+                parse_rgb_channel(b)?,
+                255,
+            ]),
+            [r, g, b, a] if is_rgba => Some([
+                parse_rgb_channel(r)?,
+                parse_rgb_channel(g)?,
+                parse_rgb_channel(b)?,
+                parse_alpha_channel(a, true)?,
+            ]),
+            _ => None,
+        }
+    }
+}
+
+fn parse_bare_rgb_tuple(s: &str) -> Option<[u8; 4]> {
+    let inner = s
+        .strip_prefix('(')
+        .and_then(|v| v.strip_suffix(')'))
+        .or_else(|| s.strip_prefix('（').and_then(|v| v.strip_suffix('）')))
+        .unwrap_or(s)
+        .trim();
+
+    if !inner.contains(',') && !inner.contains('，') {
+        return None;
+    }
+    let parts: Vec<&str> = inner.split([',', '，']).map(str::trim).collect();
+    match parts.as_slice() {
+        [r, g, b] => Some([
+            parse_strict_u8_channel(r)?,
+            parse_strict_u8_channel(g)?,
+            parse_strict_u8_channel(b)?,
+            255,
+        ]),
+        // For bare 4-tuples require explicit fractional/percentage alpha (e.g. `0.5`, `.5`, `50%`)
+        // so ordinary 4-column integer CSV rows (`1, 2, 3, 4`) are never misidentified.
+        [r, g, b, a] => Some([
+            parse_strict_u8_channel(r)?,
+            parse_strict_u8_channel(g)?,
+            parse_strict_u8_channel(b)?,
+            parse_alpha_channel(a, false)?,
+        ]),
+        _ => None,
+    }
+}
+
+fn parse_strict_u8_channel(s: &str) -> Option<u8> {
+    if s.is_empty() || s.len() > 3 || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse::<u8>().ok()
+}
+
+fn parse_unsigned_decimal(s: &str) -> Option<f32> {
+    if s.is_empty() || s.len() > 10 {
+        return None;
+    }
+    let mut seen_dot = false;
+    let mut seen_digit = false;
+    for b in s.bytes() {
+        if b.is_ascii_digit() {
+            seen_digit = true;
+        } else if b == b'.' && !seen_dot {
+            seen_dot = true;
+        } else {
+            return None;
+        }
+    }
+    if !seen_digit {
+        return None;
+    }
+    s.parse::<f32>().ok().filter(|v| v.is_finite())
+}
+
+fn parse_rgb_channel(s: &str) -> Option<u8> {
+    let s = s.trim();
+    if let Some(pct_str) = s.strip_suffix('%') {
+        let pct = parse_unsigned_decimal(pct_str)?;
+        if (0.0..=100.0).contains(&pct) {
+            Some((pct * 2.55).round().clamp(0.0, 255.0) as u8)
+        } else {
+            None
+        }
+    } else {
+        let val = parse_unsigned_decimal(s)?;
+        if (0.0..=255.0).contains(&val) {
+            Some(val.round().clamp(0.0, 255.0) as u8)
+        } else {
+            None
+        }
+    }
+}
+
+fn parse_alpha_channel(s: &str, allow_integer: bool) -> Option<u8> {
+    let s = s.trim();
+    if let Some(pct_str) = s.strip_suffix('%') {
+        let pct = parse_unsigned_decimal(pct_str)?;
+        if (0.0..=100.0).contains(&pct) {
+            return Some((pct * 2.55).round().clamp(0.0, 255.0) as u8);
+        }
+        return None;
+    }
+    if s.contains('.') {
+        let val = parse_unsigned_decimal(s)?;
+        if (0.0..=1.0).contains(&val) {
+            return Some((val * 255.0).round().clamp(0.0, 255.0) as u8);
+        }
+        return None;
+    }
+    if !allow_integer {
+        return None;
+    }
+    let int_val = parse_strict_u8_channel(s)?;
+    match int_val {
+        0 => Some(0),
+        1 => Some(255),
+        v => Some(v),
+    }
+}
+
+pub fn format_color_hex(rgba: [u8; 4]) -> String {
+    if rgba[3] == 255 {
+        format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2])
+    } else {
+        format!(
+            "#{:02X}{:02X}{:02X}{:02X}",
+            rgba[0], rgba[1], rgba[2], rgba[3]
+        )
+    }
+}
+
+pub fn format_alpha_decimal(alpha: u8) -> String {
+    if alpha == 0 {
+        return "0".to_string();
+    }
+    if alpha == 255 {
+        return "1".to_string();
+    }
+    let formatted = format!("{:.2}", alpha as f32 / 255.0);
+    formatted
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+pub fn format_color_rgb(rgba: [u8; 4]) -> String {
+    if rgba[3] == 255 {
+        format!("rgb({}, {}, {})", rgba[0], rgba[1], rgba[2])
+    } else {
+        format!(
+            "rgba({}, {}, {}, {})",
+            rgba[0],
+            rgba[1],
+            rgba[2],
+            format_alpha_decimal(rgba[3])
+        )
+    }
+}
+
+pub fn rgba_to_hsl(r: u8, g: u8, b: u8) -> (u16, u8, u8) {
+    let rf = r as f32 / 255.0;
+    let gf = g as f32 / 255.0;
+    let bf = b as f32 / 255.0;
+    let max = rf.max(gf).max(bf);
+    let min = rf.min(gf).min(bf);
+    let delta = max - min;
+    let l = (max + min) * 0.5;
+
+    let (h, s) = if delta.abs() < 1e-6 {
+        (0.0, 0.0)
+    } else {
+        let s = delta / (1.0 - (2.0 * l - 1.0).abs());
+        let mut h = if (max - rf).abs() < 1e-6 {
+            ((gf - bf) / delta) % 6.0
+        } else if (max - gf).abs() < 1e-6 {
+            (bf - rf) / delta + 2.0
+        } else {
+            (rf - gf) / delta + 4.0
+        };
+        h *= 60.0;
+        if h < 0.0 {
+            h += 360.0;
+        }
+        (h, s)
+    };
+
+    let h_deg = (h.round() as i32).rem_euclid(360) as u16;
+    let s_pct = (s * 100.0).round().clamp(0.0, 100.0) as u8;
+    let l_pct = (l * 100.0).round().clamp(0.0, 100.0) as u8;
+    (h_deg, s_pct, l_pct)
+}
+
+pub fn format_color_hsl(rgba: [u8; 4]) -> String {
+    let (h, s, l) = rgba_to_hsl(rgba[0], rgba[1], rgba[2]);
+    if rgba[3] == 255 {
+        format!("hsl({h}, {s}%, {l}%)")
+    } else {
+        format!(
+            "hsla({h}, {s}%, {l}%, {})",
+            format_alpha_decimal(rgba[3])
+        )
     }
 }
 
@@ -462,6 +829,92 @@ mod tests {
         assert_eq!(detect_hex_color("624765"), Some([0x62, 0x47, 0x65, 255]));
         assert_eq!(detect_hex_color("#f0a"), Some([0xff, 0x00, 0xaa, 255]));
         assert_eq!(detect_hex_color("hello!"), None);
+    }
+
+    #[test]
+    fn detect_color_supports_hex_and_rgb_variants_without_false_positives() {
+        // Hex formats
+        assert_eq!(detect_color("#f0a"), Some([0xff, 0x00, 0xaa, 255]));
+        assert_eq!(detect_color("#f0a8"), Some([0xff, 0x00, 0xaa, 0x88]));
+        assert_eq!(detect_color("#0A84FF"), Some([10, 132, 255, 255]));
+        assert_eq!(detect_color("#0A84FF80"), Some([10, 132, 255, 128]));
+        assert_eq!(detect_color("0x0A84FF"), Some([10, 132, 255, 255]));
+        assert_eq!(detect_color("0X0A84FF80"), Some([10, 132, 255, 128]));
+        assert_eq!(detect_color("055745"), Some([0x05, 0x57, 0x45, 255]));
+        assert_eq!(detect_color("#0A84FF;"), Some([10, 132, 255, 255]));
+        assert_eq!(detect_color("\"#0A84FF\""), Some([10, 132, 255, 255]));
+        assert_eq!(detect_color("color: #0A84FF;"), Some([10, 132, 255, 255]));
+
+        // RGB / RGBA functional formats (CSS 3 & CSS Color 4)
+        assert_eq!(detect_color("rgb(10, 132, 255)"), Some([10, 132, 255, 255]));
+        assert_eq!(detect_color("RGB(255,128,0);"), Some([255, 128, 0, 255]));
+        assert_eq!(
+            detect_color("rgba(10, 132, 255, 0.5)"),
+            Some([10, 132, 255, 128])
+        );
+        assert_eq!(
+            detect_color("rgba(10, 132, 255, .25)"),
+            Some([10, 132, 255, 64])
+        );
+        assert_eq!(
+            detect_color("rgba(10, 132, 255, 50%)"),
+            Some([10, 132, 255, 128])
+        );
+        assert_eq!(
+            detect_color("rgba(10, 132, 255, 128)"),
+            Some([10, 132, 255, 128])
+        );
+        assert_eq!(
+            detect_color("rgb(255 128 0)"),
+            Some([255, 128, 0, 255])
+        );
+        assert_eq!(
+            detect_color("rgb(255 128 0 / 50%)"),
+            Some([255, 128, 0, 128])
+        );
+        assert_eq!(
+            detect_color("rgb(100%, 50%, 0%)"),
+            Some([255, 128, 0, 255])
+        );
+        assert_eq!(
+            detect_color("rgb（10，132，255）"),
+            Some([10, 132, 255, 255])
+        );
+        assert_eq!(
+            detect_color("--accent: rgb(10, 132, 255);"),
+            Some([10, 132, 255, 255])
+        );
+
+        // Bare RGB tuples from design tools / Digital Color Meter
+        assert_eq!(detect_color("255, 128, 0"), Some([255, 128, 0, 255]));
+        assert_eq!(detect_color("(10, 132, 255)"), Some([10, 132, 255, 255]));
+        assert_eq!(detect_color("10, 132, 255, 0.5"), Some([10, 132, 255, 128]));
+        assert_eq!(detect_color("(10, 132, 255, 50%)"), Some([10, 132, 255, 128]));
+
+        // Non-colors must NOT match
+        assert_eq!(detect_color("hello!"), None);
+        assert_eq!(detect_color("192.168.1.1"), None);
+        assert_eq!(detect_color("2026-11-18"), None);
+        assert_eq!(detect_color("\"123456\""), None);
+        assert_eq!(detect_color("port: 123456"), None);
+        assert_eq!(detect_color("1, 2, 3, 4"), None);
+        assert_eq!(detect_color("rgb(300, 0, 0)"), None);
+        assert_eq!(detect_color("rgba(10, 20, 30, 1.5)"), None);
+        assert_eq!(detect_color("rgb(-10, 20, 30)"), None);
+        assert_eq!(detect_color("10 20 30"), None);
+    }
+
+    #[test]
+    fn color_format_helpers_emit_valid_hex_rgb_and_hsl() {
+        let blue = [10, 132, 255, 255];
+        assert_eq!(format_color_hex(blue), "#0A84FF");
+        assert_eq!(format_color_rgb(blue), "rgb(10, 132, 255)");
+        assert_eq!(format_color_hsl(blue), "hsl(210, 100%, 52%)");
+
+        let translucent = [255, 128, 0, 128];
+        assert_eq!(format_color_hex(translucent), "#FF800080");
+        assert_eq!(format_color_rgb(translucent), "rgba(255, 128, 0, 0.5)");
+        assert_eq!(format_color_hsl(translucent), "hsla(30, 100%, 50%, 0.5)");
     }
 
     #[test]

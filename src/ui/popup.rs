@@ -5,8 +5,8 @@ use crate::model::{
 };
 use crate::search::SearchResultItem;
 use crate::transforms::{
-    apply_quick_action, available_quick_actions, format_display_line, mask_sensitive_preview,
-    text_stats, QuickActionKind,
+    apply_quick_action, available_quick_actions, format_color_hex, format_color_hsl,
+    format_color_rgb, format_display_line, mask_sensitive_preview, text_stats, QuickActionKind,
 };
 use crate::ui::icons::{
     draw_earth_emblem, draw_file_badge, draw_gear_glyph, draw_link_badge, draw_pause_glyph,
@@ -1685,18 +1685,19 @@ fn render_item_row(
                 ClipKind::Text => {
                     if settings.show_hex_color_swatch
                         && let Some(rgba) = item.detected_color {
-                            let (swatch, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
-                            ui.painter().rect_filled(
+                            let (swatch, swatch_resp) =
+                                ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                            paint_color_swatch(
+                                ui.painter(),
                                 swatch,
-                                CornerRadius::same(4),
-                                Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]),
+                                4,
+                                rgba,
+                                palette.border_strong,
                             );
-                            ui.painter().rect_stroke(
-                                swatch,
-                                CornerRadius::same(4),
-                                Stroke::new(1.0, palette.border),
-                                egui::StrokeKind::Inside,
-                            );
+                            let hex_tip = format_color_hex(rgba);
+                            let rgb_tip = format_color_rgb(rgba);
+                            let hsl_tip = format_color_hsl(rgba);
+                            swatch_resp.on_hover_text(format!("{hex_tip}\n{rgb_tip}\n{hsl_tip}"));
                         }
                     if item.is_url {
                         let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::hover());
@@ -2420,7 +2421,7 @@ fn render_preview_pane(
                                 }
                             } else {
                                 if let Some(rgba) = item.detected_color {
-                                    render_color_card(ui, raw.trim(), rgba, palette, actions);
+                                    render_color_card(ui, rgba, palette, actions);
                                     ui.add_space(6.0);
                                 }
                                 let display = state
@@ -2908,50 +2909,125 @@ fn render_qr_card(
         });
 }
 
+fn paint_color_swatch(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    radius: u8,
+    rgba: [u8; 4],
+    border_color: Color32,
+) {
+    let rounding = CornerRadius::same(radius);
+    if rgba[3] < 255 {
+        painter.rect_filled(rect, rounding, Color32::from_rgb(235, 235, 240));
+        let inset = (radius as f32 * 0.30).max(1.0);
+        let inner = rect.shrink(inset);
+        if inner.width() >= 4.0 && inner.height() >= 4.0 {
+            let cells: usize = if inner.width() >= 28.0 { 6 } else { 3 };
+            let cell_w = inner.width() / cells as f32;
+            let cell_h = inner.height() / cells as f32;
+            let dark_tile = Color32::from_rgb(196, 196, 204);
+            for row in 0..cells {
+                for col in 0..cells {
+                    if (row + col) % 2 == 1 {
+                        let min = pos2(
+                            inner.min.x + col as f32 * cell_w,
+                            inner.min.y + row as f32 * cell_h,
+                        );
+                        let tile = egui::Rect::from_min_size(min, vec2(cell_w, cell_h));
+                        painter.rect_filled(tile, CornerRadius::ZERO, dark_tile);
+                    }
+                }
+            }
+        }
+    }
+    painter.rect_filled(
+        rect,
+        rounding,
+        Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]),
+    );
+    painter.rect_stroke(
+        rect,
+        rounding,
+        Stroke::new(1.0, border_color),
+        egui::StrokeKind::Inside,
+    );
+}
+
 fn render_color_card(
     ui: &mut Ui,
-    raw_hex: &str,
     rgba: [u8; 4],
     palette: &EarthPalette,
     actions: &mut Vec<PopupAction>,
 ) {
-    let hex_norm = if raw_hex.starts_with('#') {
-        raw_hex.to_uppercase()
+    let hex_str = format_color_hex(rgba);
+    let rgb_str = format_color_rgb(rgba);
+    let hsl_str = format_color_hsl(rgba);
+    let rgb_btn = if rgba[3] == 255 {
+        "复制 RGB"
     } else {
-        format!("#{}", raw_hex.to_uppercase())
+        "复制 RGBA"
     };
-    let rgb_str = format!("rgb({}, {}, {})", rgba[0], rgba[1], rgba[2]);
+    let hsl_btn = if rgba[3] == 255 {
+        "复制 HSL"
+    } else {
+        "复制 HSLA"
+    };
 
     egui::Frame::NONE
         .fill(palette.card_bg)
         .stroke(Stroke::new(1.0, palette.border_subtle))
         .corner_radius(CornerRadius::same(14))
-        .inner_margin(egui::Margin::same(8))
+        .inner_margin(egui::Margin::same(10))
         .show(ui, |ui| {
+            ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                let (r, _) = ui.allocate_exact_size(vec2(38.0, 38.0), Sense::hover());
-                ui.painter().rect_filled(
-                    r,
-                    CornerRadius::same(10),
-                    Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]),
-                );
                 ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&hex_norm).strong().size(13.0));
-                        if compact_button(ui, "复制 HEX").clicked() {
-                            actions.push(PopupAction::CopyTransformedText(hex_norm.clone()));
-                        }
-                    });
-                    ui.horizontal(|ui| {
+                    let swatch_size = if rgba[3] < 255 { 48.0 } else { 54.0 };
+                    let (r, _) = ui.allocate_exact_size(vec2(swatch_size, swatch_size), Sense::hover());
+                    paint_color_swatch(ui.painter(), r, 10, rgba, palette.border_strong);
+                    if rgba[3] < 255 {
+                        let alpha_pct = ((rgba[3] as f32 / 255.0) * 100.0).round() as u8;
+                        ui.add_space(2.0);
                         ui.label(
-                            RichText::new(&rgb_str)
-                                .size(11.5)
-                                .color(palette.text_secondary),
+                            RichText::new(format!("透明 {alpha_pct}%"))
+                                .size(10.0)
+                                .color(palette.text_muted),
                         );
-                        if compact_button(ui, "复制 RGB").clicked() {
-                            actions.push(PopupAction::CopyTransformedText(rgb_str));
-                        }
-                    });
+                    }
+                });
+                ui.add_space(8.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    let rows: [(&str, &str, bool); 3] = [
+                        (&hex_str, "复制 HEX", true),
+                        (&rgb_str, rgb_btn, false),
+                        (&hsl_str, hsl_btn, false),
+                    ];
+                    let col_w = ui.available_width().max(120.0);
+                    for (val, btn_lbl, primary) in rows {
+                        ui.allocate_ui_with_layout(
+                            vec2(col_w, 22.0),
+                            Layout::right_to_left(Align::Center),
+                            |ui| {
+                                if compact_button(ui, btn_lbl).clicked() {
+                                    actions.push(PopupAction::CopyTransformedText(val.to_string()));
+                                }
+                                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                                    let label = if primary {
+                                        RichText::new(val)
+                                            .font(FontId::monospace(12.6))
+                                            .strong()
+                                            .color(palette.text_primary)
+                                    } else {
+                                        RichText::new(val)
+                                            .font(FontId::monospace(11.4))
+                                            .color(palette.text_secondary)
+                                    };
+                                    ui.add(egui::Label::new(label).truncate());
+                                });
+                            },
+                        );
+                    }
                 });
             });
         });
@@ -4937,5 +5013,103 @@ mod tests {
         let stopped_id = state.selected_id;
         step_frame(&mut state, 1.60, Vec::new());
         assert_eq!(state.selected_id, stopped_id);
+    }
+
+    #[test]
+    fn rgb_color_record_renders_normalized_hex_rgb_hsl_in_workbench_card() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Dark, true);
+        palette.apply_to_ctx(&ctx);
+
+        let mut settings = AppSettings::default();
+        let collections = Vec::new();
+        let rgba = crate::transforms::detect_color("rgba(10, 132, 255, 0.5)").unwrap();
+        let results = vec![SearchResultItem {
+            item: ClipItem {
+                id: 1,
+                content_hash: "rgb-1".into(),
+                kind: ClipKind::Text,
+                text_content: Some("rgba(10, 132, 255, 0.5)".into()),
+                html_content: None,
+                rtf_content: None,
+                image_path: None,
+                thumb_path: None,
+                image_width: None,
+                image_height: None,
+                files: Vec::new(),
+                byte_size: 23,
+                source_app: Some("Figma".into()),
+                source_bundle_id: None,
+                pinned: false,
+                collection_id: None,
+                first_copied_at: 0,
+                last_copied_at: 0,
+                copy_count: 1,
+                sensitive_label: None,
+                detected_color: Some(rgba),
+                is_url: false,
+                note: None,
+            },
+            score: 100,
+            matched_indices: HashSet::new(),
+        }];
+
+        let mut state = PopupState {
+            selected_id: Some(1),
+            preview_open: true,
+            preview_reveal: Some(1.0),
+            ..Default::default()
+        };
+
+        let raw = egui::RawInput {
+            time: Some(0.1),
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                vec2(760.0, 520.0),
+            )),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| {
+            let ctx = ui.ctx().clone();
+            let _ = render_popup_view(
+                ui,
+                &ctx,
+                PopupViewData {
+                    settings: &mut settings,
+                    results: &results,
+                    collections: &collections,
+                    palette: &palette,
+                    storage_bytes: 23,
+                    total_items: 1,
+                    has_accessibility: true,
+                },
+                &mut state,
+            );
+        });
+
+        let mut texts = Vec::new();
+        for clipped in &out.shapes {
+            if let egui::epaint::Shape::Text(t) = &clipped.shape {
+                texts.push(t.galley.job.text.clone());
+            }
+        }
+        out.textures_delta.clear();
+
+        assert!(
+            texts.iter().any(|t| t == "#0A84FF80"),
+            "workbench color card should normalize RGBA input to #0A84FF80, got texts={texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "rgba(10, 132, 255, 0.5)"),
+            "workbench color card should display RGBA value"
+        );
+        assert!(
+            texts.iter().any(|t| t == "hsla(210, 100%, 52%, 0.5)"),
+            "workbench color card should display HSLA value"
+        );
+        assert!(
+            !texts.iter().any(|t| t.starts_with("#RGBA")),
+            "workbench color card must never prefix # onto rgb()/rgba() strings"
+        );
     }
 }

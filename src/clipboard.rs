@@ -1,7 +1,7 @@
 use crate::model::{AppSettings, ClipItem, ClipKind, FileEntry};
 use crate::platform;
 use crate::storage::{sha256_hex, NewClipPayload};
-use crate::transforms::{detect_hex_color, detect_sensitive_label, detect_url};
+use crate::transforms::{detect_color, detect_sensitive_label, detect_url};
 use clipboard_rs::common::RustImage;
 use clipboard_rs::{
     Clipboard, ClipboardContent, ClipboardContext, ClipboardHandler, ClipboardWatcher,
@@ -320,7 +320,7 @@ fn capture_clipboard_payload(
         hash_buf.extend_from_slice(text.as_bytes());
         let content_hash = sha256_hex(&hash_buf);
 
-        let detected_color = detect_hex_color(&text);
+        let detected_color = detect_color(&text);
         let is_url = detect_url(&text);
         let sensitive_label = if settings.enable_privacy_masking {
             detect_sensitive_label(&text)
