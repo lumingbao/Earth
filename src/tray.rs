@@ -307,19 +307,26 @@ fn build_tray_icon(paused: bool) -> Result<Icon, String> {
     #[cfg(not(target_os = "macos"))]
     const TRAY_ICON_SIZE: u32 = 32;
 
+    #[cfg(target_os = "macos")]
     let rgba = build_earth_tray_monochrome_rgba(TRAY_ICON_SIZE, paused);
+    #[cfg(not(target_os = "macos"))]
+    let rgba = build_earth_tray_rgba(TRAY_ICON_SIZE, paused);
+
     Icon::from_rgba(rgba, TRAY_ICON_SIZE, TRAY_ICON_SIZE)
         .map_err(|e| format!("创建托盘图标失败: {e}"))
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn aa_fill(dist: f32, radius: f32) -> f32 {
     (radius + 0.5 - dist).clamp(0.0, 1.0)
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn aa_stroke(dist: f32, half_width: f32) -> f32 {
     (half_width + 0.5 - dist).clamp(0.0, 1.0)
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn ellipse_dist(x: f32, y: f32, rx: f32, ry: f32) -> f32 {
     let nx = x / rx;
     let ny = y / ry;
@@ -336,6 +343,7 @@ fn ellipse_dist(x: f32, y: f32, rx: f32, ry: f32) -> f32 {
 
 /// Generates an anti-aliased monochrome white Earth globe + orbital ring silhouette
 /// suitable for macOS menu bar template rendering (`isTemplate = true`).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn build_earth_tray_monochrome_rgba(size: u32, paused: bool) -> Vec<u8> {
     let mut data = vec![0u8; (size * size * 4) as usize];
     let s = size as f32;

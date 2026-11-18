@@ -1,0 +1,143 @@
+name: Build & Release (Windows + macOS)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "选择构建平台"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - windows
+          - macos
+      publish_release:
+        description: "是否发布到 GitHub Releases（仅手动触发时生效；推送 v* 标签会自动发布）"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows (x64)
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: clippy
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Ensure NSIS is available
+        shell: pwsh
+        run: |
+          if (-not (Get-Command makensis -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) {
+            choco install nsis -y
+          }
+
+      - name: Run Clippy & Unit Tests
+        shell: pwsh
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+      - name: Build & Package Windows (.exe installer + portable .zip)
+        shell: pwsh
+        run: ./scripts/package-windows.ps1
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: earth-windows-x64
+          path: |
+            dist/Earth-*-Windows-x64-Setup.exe
+            dist/Earth-*-Windows-x64-Portable.zip
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS (Universal)
+    if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos'
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable (arm64 + x86_64)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          components: clippy
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Clippy & Unit Tests
+        run: |
+          cargo clippy --all-targets -- -D warnings
+          cargo test
+
+      - name: Build & Package macOS Universal (.dmg + .pkg)
+        run: ./scripts/package-macos.sh universal
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: earth-macos-universal
+          path: |
+            dist/Earth-*-macOS-universal.dmg
+            dist/Earth-*-macOS-universal.pkg
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos]
+    if: |
+      always() &&
+      (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) &&
+      needs.build-windows.result != 'failure' && needs.build-windows.result != 'cancelled' &&
+      needs.build-macos.result != 'failure' && needs.build-macos.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Determine release tag & checksums
+        id: meta
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            VER="$(python3 -c 'import re, pathlib; m = re.search(r"^version\s*=\s*\"([^\"]+)\"", pathlib.Path("Cargo.toml").read_text(), re.M); print(m.group(1))')"
+            TAG="v${VER}"
+          fi
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          (cd release-artifacts && sha256sum * > SHA256SUMS.txt)
+          ls -lh release-artifacts
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Earth ${{ steps.meta.outputs.tag }}
+          generate_release_notes: true
+          files: release-artifacts/*

@@ -491,7 +491,7 @@ impl EarthApp {
     fn apply_window_pinned_state(&self, ctx: &egui::Context) {
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = ctx.send_viewport_cmd(ViewportCommand::WindowLevel(
+            ctx.send_viewport_cmd(ViewportCommand::WindowLevel(
                 egui::viewport::WindowLevel::AlwaysOnTop,
             ));
         }

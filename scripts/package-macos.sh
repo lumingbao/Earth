@@ -106,7 +106,7 @@ cp "${ICNS_PATH}" "${APP_BUNDLE}/Contents/Resources/Earth.icns"
 sed "s/__VERSION__/${VERSION}/g" "${ROOT_DIR}/packaging/macos/Info.plist" > "${APP_BUNDLE}/Contents/Info.plist"
 printf 'APPL????' > "${APP_BUNDLE}/Contents/PkgInfo"
 
-SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}')"
+SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}' || true)"
 if [[ -n "${SIGN_IDENTITY}" ]]; then
     echo "==> 使用开发者证书签名: ${SIGN_IDENTITY}"
     codesign --force --deep --sign "${SIGN_IDENTITY}" "${APP_BUNDLE}"

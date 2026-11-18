@@ -284,6 +284,7 @@ pub fn apply_staged_update_and_restart(staged_path: &Path) -> Result<(), String>
     }
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn find_bundle_from_exe_path(exe_path: &Path) -> Option<PathBuf> {
     for ancestor in exe_path.ancestors() {
         if ancestor.extension().and_then(|e| e.to_str()) == Some("app") {
@@ -293,6 +294,7 @@ pub fn find_bundle_from_exe_path(exe_path: &Path) -> Option<PathBuf> {
     None
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn build_macos_restart_script() -> &'static str {
     "#!/bin/sh
 OLD_PID=\"$1\"
