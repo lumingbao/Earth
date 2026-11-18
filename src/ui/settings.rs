@@ -5,7 +5,7 @@ use crate::model::{
 };
 use crate::ui::theme::{
     card_shadow, compact_button, desktop_scroll_source, dismiss_button, padded_button,
-    parse_hex_color32, EarthPalette,
+    parse_hex_color32, EarthPalette, StatusToast,
 };
 use crate::updater::{ReleaseInfo, UpdateDownloadState};
 use egui::{vec2, Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
@@ -64,7 +64,7 @@ pub struct SettingsState {
     pub new_collection_color: String,
     pub editing_collection_id: Option<i64>,
     pub editing_collection_name: String,
-    pub status_message: Option<(String, bool)>,
+    pub status_message: Option<StatusToast>,
     pub checking_updates: bool,
     pub available_update: Option<ReleaseInfo>,
     pub update_download: UpdateDownloadState,
@@ -88,6 +88,13 @@ impl Default for SettingsState {
             available_update: None,
             update_download: UpdateDownloadState::Idle,
         }
+    }
+}
+
+impl SettingsState {
+    /// Displays a transient settings toast banner that auto-dismisses after 3 seconds.
+    pub fn set_status_message(&mut self, message: impl Into<String>, is_err: bool) {
+        self.status_message = Some(StatusToast::new(message, is_err));
     }
 }
 
@@ -252,33 +259,50 @@ pub fn render_settings_view(
     ui.separator();
     ui.add_space(6.0);
 
-    let mut clear_status = false;
-    if let Some((msg, is_err)) = state.status_message.clone() {
+    let now_secs = ctx.input(|i| i.time);
+    let active_status = state.status_message.as_mut().and_then(|toast| {
+        toast
+            .tick(now_secs)
+            .map(|rem| (toast.message.clone(), toast.is_alert, rem))
+    });
+    if state.status_message.is_some() && active_status.is_none() {
+        state.status_message = None;
+        ctx.request_repaint();
+    }
+    if let Some((msg, is_err, remaining)) = active_status {
+        StatusToast::schedule_repaint(ctx, remaining);
+        let opacity = StatusToast::opacity_for_remaining(remaining);
+        let mut clear_status = false;
         let (bg, border) = if is_err {
             (palette.danger_bg, palette.danger_border)
         } else {
             (palette.success_bg, palette.success_border)
         };
-        egui::Frame::NONE
-            .fill(bg)
-            .stroke(Stroke::new(1.0, border))
-            .corner_radius(CornerRadius::same(14))
-            .shadow(card_shadow(palette))
-            .inner_margin(egui::Margin::symmetric(10, 6))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(msg).size(12.0).color(palette.text_primary));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if dismiss_button(ui).clicked() {
-                            clear_status = true;
-                        }
+        ui.scope(|ui| {
+            if opacity < 0.999 {
+                ui.multiply_opacity(opacity);
+            }
+            egui::Frame::NONE
+                .fill(bg)
+                .stroke(Stroke::new(1.0, border))
+                .corner_radius(CornerRadius::same(14))
+                .shadow(card_shadow(palette))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(msg).size(12.0).color(palette.text_primary));
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            if dismiss_button(ui).clicked() {
+                                clear_status = true;
+                            }
+                        });
                     });
                 });
-            });
+        });
         ui.add_space(6.0);
-    }
-    if clear_status {
-        state.status_message = None;
+        if clear_status {
+            state.status_message = None;
+        }
     }
 
     ScrollArea::vertical()

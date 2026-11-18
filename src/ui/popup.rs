@@ -15,7 +15,7 @@ use crate::ui::icons::{
 };
 use crate::ui::theme::{
     build_highlighted_layout_job, card_shadow, compact_button, desktop_scroll_source,
-    dismiss_button, padded_button, parse_hex_color32, EarthPalette,
+    dismiss_button, padded_button, parse_hex_color32, EarthPalette, StatusToast,
 };
 use crate::updater::{ReleaseInfo, UpdateDownloadState, CURRENT_VERSION};
 use chrono::{DateTime, Local};
@@ -109,7 +109,7 @@ pub struct PopupState {
     pub qr_preview_id: Option<i64>,
     pub preview_cache: Option<CachedPreviewItem>,
     pub show_about_modal: bool,
-    pub status_banner: Option<(String, bool)>,
+    pub status_banner: Option<StatusToast>,
     pub available_update: Option<ReleaseInfo>,
     pub update_download: UpdateDownloadState,
     pub dismissed_update_version: Option<String>,
@@ -167,6 +167,11 @@ impl Default for PopupState {
 }
 
 impl PopupState {
+    /// Displays a transient status toast banner that auto-dismisses after 3 seconds.
+    pub fn set_status_banner(&mut self, message: impl Into<String>, is_warn: bool) {
+        self.status_banner = Some(StatusToast::new(message, is_warn));
+    }
+
     /// Clears transient vertical key-hold and list scroll/indicator glide animation state.
     pub fn reset_list_navigation(&mut self) {
         self.nav_hold = None;
@@ -353,12 +358,29 @@ pub fn render_popup_view(
     render_filter_strip(ui, collections, state, palette);
     ui.add_space(5.0);
 
-    // Optional macOS accessibility / status banner
-    let mut clear_banner = false;
-    if let Some((msg, is_warn)) = state.status_banner.clone() {
-        if render_banner(ui, &msg, is_warn, !has_accessibility, palette, &mut actions) {
-            clear_banner = true;
-        }
+    // Optional macOS accessibility / status banner (auto-dismisses after 3s; also closable manually)
+    let now_secs = ctx.input(|i| i.time);
+    let active_toast = state.status_banner.as_mut().and_then(|toast| {
+        toast
+            .tick(now_secs)
+            .map(|rem| (toast.message.clone(), toast.is_alert, rem))
+    });
+    if state.status_banner.is_some() && active_toast.is_none() {
+        state.status_banner = None;
+        ctx.request_repaint();
+    }
+    if let Some((msg, is_warn, remaining)) = active_toast {
+        StatusToast::schedule_repaint(ctx, remaining);
+        let opacity = StatusToast::opacity_for_remaining(remaining);
+        let mut clear_banner = false;
+        ui.scope(|ui| {
+            if opacity < 0.999 {
+                ui.multiply_opacity(opacity);
+            }
+            if render_banner(ui, &msg, is_warn, !has_accessibility, palette, &mut actions) {
+                clear_banner = true;
+            }
+        });
         if ui.input(|i| i.key_pressed(Key::Escape)) {
             clear_banner = true;
         }
@@ -5148,5 +5170,71 @@ mod tests {
             !texts.iter().any(|t| t.starts_with("#RGBA")),
             "workbench color card must never prefix # onto rgb()/rgba() strings"
         );
+    }
+
+    #[test]
+    fn popup_status_banner_auto_dismisses_after_three_seconds() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        let mut settings = AppSettings::default();
+        let collections = Vec::new();
+        let results = Vec::new();
+        let mut state = PopupState::default();
+        state.set_status_banner("✓ 已粘贴到当前目标窗口", false);
+
+        let mut render_at = |state: &mut PopupState, time: f64| -> Vec<String> {
+            let raw = egui::RawInput {
+                time: Some(time),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    vec2(424.0, 520.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let ctx = ui.ctx().clone();
+                let _ = render_popup_view(
+                    ui,
+                    &ctx,
+                    PopupViewData {
+                        settings: &mut settings,
+                        results: &results,
+                        collections: &collections,
+                        palette: &palette,
+                        storage_bytes: 0,
+                        total_items: 0,
+                        has_accessibility: true,
+                    },
+                    state,
+                );
+            });
+            let texts = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::epaint::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect();
+            out.textures_delta.clear();
+            texts
+        };
+
+        // Frame 1 (t = 1.0s): banner appears and starts its 3s timer
+        let t1 = render_at(&mut state, 1.0);
+        assert!(t1.iter().any(|s| s.contains("已粘贴到当前目标窗口")));
+        assert!(state.status_banner.is_some());
+
+        // At t = 3.5s (2.5s elapsed): banner is still visible
+        let t2 = render_at(&mut state, 3.5);
+        assert!(t2.iter().any(|s| s.contains("已粘贴到当前目标窗口")));
+        assert!(state.status_banner.is_some());
+
+        // At t = 4.05s (3.05s elapsed): banner auto-dismisses cleanly
+        let t3 = render_at(&mut state, 4.05);
+        assert!(!t3.iter().any(|s| s.contains("已粘贴到当前目标窗口")));
+        assert!(state.status_banner.is_none());
     }
 }

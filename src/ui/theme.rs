@@ -5,6 +5,60 @@ use egui::{Color32, CornerRadius, FontId, Stroke, Style, TextFormat, Ui, Visuals
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
+
+pub const STATUS_TOAST_DURATION_SECS: f64 = 3.0;
+const STATUS_TOAST_FADE_SECS: f64 = 0.22;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StatusToast {
+    pub message: String,
+    pub is_alert: bool,
+    pub shown_at: Option<f64>,
+}
+
+impl StatusToast {
+    pub fn new(message: impl Into<String>, is_alert: bool) -> Self {
+        Self {
+            message: message.into(),
+            is_alert,
+            shown_at: None,
+        }
+    }
+
+    /// Starts the 3-second auto-dismiss timer on the first frame the toast is displayed
+    /// and returns the remaining seconds, or `None` once 3 seconds have elapsed.
+    pub fn tick(&mut self, now_secs: f64) -> Option<f64> {
+        let started = match self.shown_at {
+            Some(prev) if now_secs >= prev => prev,
+            _ => {
+                self.shown_at = Some(now_secs);
+                now_secs
+            }
+        };
+        let remaining = STATUS_TOAST_DURATION_SECS - (now_secs - started);
+        (remaining > 0.0).then_some(remaining)
+    }
+
+    /// Returns smooth fade-out opacity during the final 220ms before auto-dismiss.
+    pub fn opacity_for_remaining(remaining_secs: f64) -> f32 {
+        if remaining_secs >= STATUS_TOAST_FADE_SECS {
+            1.0
+        } else {
+            (remaining_secs / STATUS_TOAST_FADE_SECS).clamp(0.0, 1.0) as f32
+        }
+    }
+
+    /// Schedules reactive repaint so egui wakes cleanly for fade-out and expiry.
+    pub fn schedule_repaint(ctx: &egui::Context, remaining_secs: f64) {
+        if remaining_secs > STATUS_TOAST_FADE_SECS {
+            let wait = (remaining_secs - STATUS_TOAST_FADE_SECS).max(0.01);
+            ctx.request_repaint_after(Duration::from_secs_f64(wait));
+        } else {
+            ctx.request_repaint();
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct EarthPalette {
@@ -252,13 +306,38 @@ pub fn compact_button(ui: &mut Ui, text: impl Into<egui::WidgetText>) -> egui::R
     )
 }
 
-/// Compact dismiss `"×"` button with balanced circular pill padding around the glyph.
+/// Compact circular dismiss button with a geometrically centered vector `×` glyph
+/// (avoids font baseline/ascent vertical drift inside small circular pills).
 pub fn dismiss_button(ui: &mut Ui) -> egui::Response {
-    padded_button(
-        ui,
-        egui::Button::new("×").corner_radius(CornerRadius::same(255)),
-        egui::vec2(7.0, 3.0),
-    )
+    let size = 20.0;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.style().interact(&response);
+        let painter = ui.painter();
+        let rounding = CornerRadius::same(255);
+        painter.rect_filled(rect, rounding, visuals.weak_bg_fill);
+        painter.rect_stroke(rect, rounding, visuals.bg_stroke, egui::StrokeKind::Inside);
+
+        let center = rect.center();
+        let half = 3.4;
+        let stroke = Stroke::new(1.4, visuals.fg_stroke.color);
+        painter.line_segment(
+            [
+                egui::pos2(center.x - half, center.y - half),
+                egui::pos2(center.x + half, center.y + half),
+            ],
+            stroke,
+        );
+        painter.line_segment(
+            [
+                egui::pos2(center.x + half, center.y - half),
+                egui::pos2(center.x - half, center.y + half),
+            ],
+            stroke,
+        );
+    }
+    response
 }
 
 /// Keeps mouse-wheel/trackpad and scrollbar-handle scrolling active while letting
@@ -627,5 +706,58 @@ mod tests {
                 .cloned();
             assert_eq!(mono_primary.as_deref(), Some("earth_mono_Menlo-Regular"));
         });
+    }
+
+    #[test]
+    fn status_toast_auto_dismisses_after_three_seconds_with_smooth_fade() {
+        let mut toast = StatusToast::new("✓ 已粘贴到当前目标窗口", false);
+        assert!(toast.shown_at.is_none());
+
+        let rem0 = toast.tick(10.0).expect("toast visible on first render");
+        assert!((rem0 - 3.0).abs() < 1e-6);
+        assert_eq!(StatusToast::opacity_for_remaining(rem0), 1.0);
+
+        let rem_mid = toast.tick(12.5).expect("toast still visible at 2.5s");
+        assert!((rem_mid - 0.5).abs() < 1e-6);
+        assert_eq!(StatusToast::opacity_for_remaining(rem_mid), 1.0);
+
+        let rem_fade = toast.tick(12.89).expect("toast fading during final 220ms");
+        let opacity = StatusToast::opacity_for_remaining(rem_fade);
+        assert!(opacity > 0.0 && opacity < 1.0, "expected fade opacity, got {opacity}");
+
+        assert!(toast.tick(13.0).is_none(), "toast must expire cleanly at 3.0s");
+        assert!(toast.tick(14.0).is_none(), "toast stays expired past 3.0s");
+    }
+
+    #[test]
+    fn dismiss_button_vector_cross_is_geometrically_centered() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        let mut btn_rect = egui::Rect::NOTHING;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            btn_rect = dismiss_button(ui).rect;
+        });
+
+        let segments: Vec<[egui::Pos2; 2]> = out
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::epaint::Shape::LineSegment { points, .. } => Some(*points),
+                _ => None,
+            })
+            .collect();
+        out.textures_delta.clear();
+
+        assert_eq!(segments.len(), 2, "dismiss button should paint two crossed vector strokes");
+        let c = btn_rect.center();
+        for [a, b] in segments {
+            let mid = egui::pos2((a.x + b.x) * 0.5, (a.y + b.y) * 0.5);
+            assert!(
+                (mid.x - c.x).abs() < 0.01 && (mid.y - c.y).abs() < 0.01,
+                "cross stroke midpoint {mid:?} must equal button center {c:?}"
+            );
+        }
     }
 }

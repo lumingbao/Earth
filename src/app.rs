@@ -178,7 +178,7 @@ impl EarthApp {
 
         let mut popup_state = PopupState::default();
         if let Some(warn) = hotkey_warn {
-            popup_state.status_banner = Some((warn, true));
+            popup_state.set_status_banner(warn, true);
         }
 
         let initial_size = (COMPACT_WIDTH, WINDOW_HEIGHT);
@@ -509,11 +509,11 @@ impl EarthApp {
     ) {
         if do_paste {
             if !platform::has_accessibility_permission() {
-                self.popup_state.status_banner = Some((
-                    "已复制到剪贴板，但自动粘贴需要 macOS「辅助功能」权限（请按 ⌘V 粘贴）"
-                        .to_string(),
+                self.popup_state.set_status_banner(
+                    "已复制到剪贴板，但自动粘贴需要 macOS「辅助功能」权限（请按 ⌘V 粘贴）",
                     true,
-                ));
+                );
+                ctx.request_repaint();
                 return;
             }
             if self.popup_state.window_pinned {
@@ -521,7 +521,8 @@ impl EarthApp {
                     platform::restore_frontmost_app(prev);
                 }
                 self.apply_window_pinned_state(ctx);
-                self.popup_state.status_banner = Some((pinned_paste_msg.to_string(), false));
+                self.popup_state.set_status_banner(pinned_paste_msg, false);
+                ctx.request_repaint();
             } else {
                 self.hide_popup(ctx, true);
             }
@@ -531,7 +532,8 @@ impl EarthApp {
                 }
             });
         } else if self.popup_state.window_pinned {
-            self.popup_state.status_banner = Some((pinned_copy_msg.to_string(), false));
+            self.popup_state.set_status_banner(pinned_copy_msg, false);
+            ctx.request_repaint();
         } else {
             self.hide_popup(ctx, true);
         }
@@ -603,6 +605,7 @@ impl EarthApp {
         self.popup_state.preview_open = false;
         self.popup_state.preview_reveal = None;
         self.popup_state.workbench_side = WorkbenchSide::Right;
+        self.popup_state.status_banner = None;
         self.popup_state.reset_list_navigation();
         ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         if restore_focus {
@@ -638,7 +641,8 @@ impl EarthApp {
         };
 
         if let Err(err) = write_item_to_clipboard(&item, plain_only, &self.suppression) {
-            self.popup_state.status_banner = Some((err, true));
+            self.popup_state.set_status_banner(err, true);
+            ctx.request_repaint();
             return;
         }
 
@@ -650,7 +654,8 @@ impl EarthApp {
 
     fn handle_paste_transformed(&mut self, ctx: &egui::Context, text: String, paste_now: bool) {
         if let Err(err) = write_custom_text_to_clipboard(&text, &self.suppression) {
-            self.popup_state.status_banner = Some((err, true));
+            self.popup_state.set_status_banner(err, true);
+            ctx.request_repaint();
             return;
         }
         if paste_now {
@@ -661,7 +666,9 @@ impl EarthApp {
                 "✓ 已粘贴加工结果到目标窗口",
             );
         } else {
-            self.popup_state.status_banner = Some(("✓ 已复制加工结果到剪贴板".to_string(), false));
+            self.popup_state
+                .set_status_banner("✓ 已复制加工结果到剪贴板", false);
+            ctx.request_repaint();
         }
     }
 
@@ -725,22 +732,22 @@ impl EarthApp {
                                     ctx.clone(),
                                 );
                                 if manual {
-                                    self.settings_state.status_message = Some((
+                                    self.settings_state.set_status_message(
                                         format!(
                                             "🎉 发现新版本 v{}，正在后台自动下载更新…",
                                             info.version
                                         ),
                                         false,
-                                    ));
+                                    );
                                 }
                             } else if manual {
-                                self.settings_state.status_message = Some((
+                                self.settings_state.set_status_message(
                                     format!(
                                         "🎉 发现新版本 v{}，可点击「重启完成更新」或「前往下载」",
                                         info.version
                                     ),
                                     false,
-                                ));
+                                );
                             }
                             self.popup_state.available_update = Some(info.clone());
                             self.settings_state.available_update = Some(info);
@@ -751,13 +758,15 @@ impl EarthApp {
                             self.popup_state.update_download = UpdateDownloadState::Idle;
                             self.settings_state.update_download = UpdateDownloadState::Idle;
                             if manual {
-                                self.settings_state.status_message =
-                                    Some((format!("✓ 当前已是最新版本 (v{ver})"), false));
+                                self.settings_state.set_status_message(
+                                    format!("✓ 当前已是最新版本 (v{ver})"),
+                                    false,
+                                );
                             }
                         }
                         UpdateCheckOutcome::Error(err) => {
                             if manual {
-                                self.settings_state.status_message = Some((err, true));
+                                self.settings_state.set_status_message(err, true);
                             }
                         }
                     }
@@ -770,10 +779,10 @@ impl EarthApp {
                         };
                         self.popup_state.update_download = ready.clone();
                         self.settings_state.update_download = ready;
-                        self.settings_state.status_message = Some((
+                        self.settings_state.set_status_message(
                             format!("✓ 新版本 v{version} 已下载就绪，点击「重启完成更新」即可生效"),
                             false,
-                        ));
+                        );
                     }
                     Err(err) => {
                         let failed = UpdateDownloadState::Failed {
@@ -782,7 +791,7 @@ impl EarthApp {
                         };
                         self.popup_state.update_download = failed.clone();
                         self.settings_state.update_download = failed;
-                        self.settings_state.status_message = Some((err, true));
+                        self.settings_state.set_status_message(err, true);
                     }
                 },
             }
@@ -1030,15 +1039,16 @@ impl eframe::App for EarthApp {
                                                             PasteBehavior::Default,
                                                         );
                                                     } else {
-                                                        self.popup_state.status_banner = Some((
-                                                            "✓ 已保存对记录内容的修改".to_string(),
+                                                        self.popup_state.set_status_banner(
+                                                            "✓ 已保存对记录内容的修改",
                                                             false,
-                                                        ));
+                                                        );
+                                                        ctx.request_repaint();
                                                     }
                                                 }
                                                 Err(err) => {
-                                                    self.popup_state.status_banner =
-                                                        Some((err, true));
+                                                    self.popup_state.set_status_banner(err, true);
+                                                    ctx.request_repaint();
                                                 }
                                             }
                                         }
@@ -1080,29 +1090,33 @@ impl eframe::App for EarthApp {
                                                 .save_file()
                                             {
                                                 if let Err(e) = std::fs::copy(&src_path, &dest) {
-                                                    self.popup_state.status_banner =
-                                                        Some((format!("保存图片失败: {e}"), true));
+                                                    self.popup_state.set_status_banner(
+                                                        format!("保存图片失败: {e}"),
+                                                        true,
+                                                    );
                                                 } else {
-                                                    self.popup_state.status_banner = Some((
+                                                    self.popup_state.set_status_banner(
                                                         format!("✓ 已保存到 {}", dest.display()),
                                                         false,
-                                                    ));
+                                                    );
                                                 }
+                                                ctx.request_repaint();
                                             }
                                             self.dialog_open = false;
                                         }
                                         PopupAction::CopyQrImage(png_bytes) => {
                                             match write_custom_png_to_clipboard(&png_bytes) {
                                                 Ok(()) => {
-                                                    self.popup_state.status_banner = Some((
-                                                        "✓ 已复制二维码图片到剪贴板".to_string(),
+                                                    self.popup_state.set_status_banner(
+                                                        "✓ 已复制二维码图片到剪贴板",
                                                         false,
-                                                    ));
+                                                    );
                                                 }
                                                 Err(e) => {
-                                                    self.popup_state.status_banner = Some((e, true));
+                                                    self.popup_state.set_status_banner(e, true);
                                                 }
                                             }
+                                            ctx.request_repaint();
                                         }
                                         PopupAction::SaveQrImageAs(png_bytes) => {
                                             self.dialog_open = true;
@@ -1112,14 +1126,17 @@ impl eframe::App for EarthApp {
                                                 .save_file()
                                             {
                                                 if let Err(e) = std::fs::write(&dest, &png_bytes) {
-                                                    self.popup_state.status_banner =
-                                                        Some((format!("保存二维码失败: {e}"), true));
+                                                    self.popup_state.set_status_banner(
+                                                        format!("保存二维码失败: {e}"),
+                                                        true,
+                                                    );
                                                 } else {
-                                                    self.popup_state.status_banner = Some((
+                                                    self.popup_state.set_status_banner(
                                                         format!("✓ 二维码已保存到 {}", dest.display()),
                                                         false,
-                                                    ));
+                                                    );
                                                 }
+                                                ctx.request_repaint();
                                             }
                                             self.dialog_open = false;
                                         }
@@ -1147,8 +1164,8 @@ impl eframe::App for EarthApp {
                                                     self.request_quit(&ctx);
                                                 }
                                                 Err(err) => {
-                                                    self.popup_state.status_banner =
-                                                        Some((err, true));
+                                                    self.popup_state.set_status_banner(err, true);
+                                                    ctx.request_repaint();
                                                 }
                                             }
                                         }
@@ -1191,14 +1208,14 @@ impl eframe::App for EarthApp {
                                             if let Some(ctrl) = &mut self.hotkey_ctrl {
                                                 match ctrl.set_open_shortcut(&new_combo) {
                                                     Ok(()) => {
-                                                        self.settings_state.status_message = Some((
-                                                            "✓ 全局唤醒快捷键已生效".to_string(),
+                                                        self.settings_state.set_status_message(
+                                                            "✓ 全局唤醒快捷键已生效",
                                                             false,
-                                                        ));
+                                                        );
                                                     }
                                                     Err(e) => {
-                                                        self.settings_state.status_message =
-                                                            Some((e, true));
+                                                        self.settings_state
+                                                            .set_status_message(e, true);
                                                     }
                                                 }
                                             }
@@ -1207,20 +1224,19 @@ impl eframe::App for EarthApp {
                                         SettingsAction::ToggleAutostart(enabled) => {
                                             match platform::sync_autostart(enabled) {
                                                 Ok(()) => {
-                                                    self.settings_state.status_message = Some((
+                                                    self.settings_state.set_status_message(
                                                         if enabled {
                                                             "✓ 已开启登录自启"
                                                         } else {
                                                             "✓ 已关闭登录自启"
-                                                        }
-                                                        .to_string(),
+                                                        },
                                                         false,
-                                                    ));
+                                                    );
                                                 }
                                                 Err(e) => {
                                                     self.settings.launch_at_login = !enabled;
-                                                    self.settings_state.status_message =
-                                                        Some((e, true));
+                                                    self.settings_state
+                                                        .set_status_message(e, true);
                                                 }
                                             }
                                             self.persist_settings();
@@ -1231,10 +1247,8 @@ impl eframe::App for EarthApp {
                                                 let _ = clear_system_clipboard();
                                             }
                                             self.reload_items();
-                                            self.settings_state.status_message = Some((
-                                                "✓ 历史记录已清理".to_string(),
-                                                false,
-                                            ));
+                                            self.settings_state
+                                                .set_status_message("✓ 历史记录已清理", false);
                                         }
                                         SettingsAction::ExportJson => {
                                             self.dialog_open = true;
@@ -1251,17 +1265,19 @@ impl eframe::App for EarthApp {
                                                     });
                                                 match res {
                                                     Ok(()) => {
-                                                        self.settings_state.status_message = Some((
+                                                        self.settings_state.set_status_message(
                                                             format!(
                                                                 "✓ 已导出至 {}",
                                                                 PathBuf::from(&dest).display()
                                                             ),
                                                             false,
-                                                        ));
+                                                        );
                                                     }
                                                     Err(e) => {
-                                                        self.settings_state.status_message =
-                                                            Some((format!("导出失败: {e}"), true));
+                                                        self.settings_state.set_status_message(
+                                                            format!("导出失败: {e}"),
+                                                            true,
+                                                        );
                                                     }
                                                 }
                                             }
@@ -1290,16 +1306,16 @@ impl eframe::App for EarthApp {
                                                 match res {
                                                     Ok(count) => {
                                                         self.reload_items();
-                                                        self.settings_state.status_message = Some((
+                                                        self.settings_state.set_status_message(
                                                             format!(
                                                                 "✓ 导入完成，新增 {count} 条记录（重复记录已自动跳过）"
                                                             ),
                                                             false,
-                                                        ));
+                                                        );
                                                     }
                                                     Err(e) => {
-                                                        self.settings_state.status_message =
-                                                            Some((e, true));
+                                                        self.settings_state
+                                                            .set_status_message(e, true);
                                                     }
                                                 }
                                             }
@@ -1310,14 +1326,14 @@ impl eframe::App for EarthApp {
                                             {
                                                 Ok(_) => {
                                                     self.reload_items();
-                                                    self.settings_state.status_message = Some((
+                                                    self.settings_state.set_status_message(
                                                         format!("✓ 已创建收藏分组「{name}」"),
                                                         false,
-                                                    ));
+                                                    );
                                                 }
                                                 Err(e) => {
-                                                    self.settings_state.status_message =
-                                                        Some((e, true));
+                                                    self.settings_state
+                                                        .set_status_message(e, true);
                                                 }
                                             }
                                         }
@@ -1325,14 +1341,14 @@ impl eframe::App for EarthApp {
                                             match self.storage.rename_collection(id, &name) {
                                                 Ok(()) => {
                                                     self.reload_items();
-                                                    self.settings_state.status_message = Some((
+                                                    self.settings_state.set_status_message(
                                                         format!("✓ 已重命名分组为「{name}」"),
                                                         false,
-                                                    ));
+                                                    );
                                                 }
                                                 Err(e) => {
-                                                    self.settings_state.status_message =
-                                                        Some((e, true));
+                                                    self.settings_state
+                                                        .set_status_message(e, true);
                                                 }
                                             }
                                         }
@@ -1374,8 +1390,8 @@ impl eframe::App for EarthApp {
                                                     self.request_quit(&ctx);
                                                 }
                                                 Err(err) => {
-                                                    self.settings_state.status_message =
-                                                        Some((err, true));
+                                                    self.settings_state
+                                                        .set_status_message(err, true);
                                                 }
                                             }
                                         }
@@ -1383,6 +1399,14 @@ impl eframe::App for EarthApp {
                                             platform::open_url(&url);
                                         }
                                     }
+                                }
+                                if self
+                                    .settings_state
+                                    .status_message
+                                    .as_ref()
+                                    .is_some_and(|t| t.shown_at.is_none())
+                                {
+                                    ctx.request_repaint();
                                 }
                             }
                         }
