@@ -331,7 +331,7 @@ pub fn render_popup_view(
     }
 
     // Top Header Bar
-    render_header(ui, ctx, settings, state, palette, &mut actions);
+    render_header(ui, settings, state, palette, &mut actions);
     ui.add_space(5.0);
 
     // Filter Capsules + Collections
@@ -1020,23 +1020,12 @@ fn behavior_from_modifiers(mods: Modifiers) -> PasteBehavior {
 
 fn render_header(
     ui: &mut Ui,
-    ctx: &egui::Context,
     settings: &mut AppSettings,
     state: &mut PopupState,
     palette: &EarthPalette,
     actions: &mut Vec<PopupAction>,
 ) {
     ui.horizontal(|ui| {
-        // Draggable Earth brand badge
-        let emblem_resp = draw_earth_emblem(ui, 24.0, palette, settings.paused);
-        if emblem_resp.drag_started() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-            ctx.stop_dragging();
-        }
-        if emblem_resp.hovered() {
-            emblem_resp.on_hover_text("拖动移动窗口（界面任意位置均可拖动）");
-        }
-
         let show_search = settings.search_box_visibility == SearchBoxVisibility::Always
             || !state.search_query.is_empty()
             || state.ime_composing;
@@ -3529,7 +3518,6 @@ mod tests {
         };
 
         let mut out = ctx.run_ui(raw.clone(), |ui| {
-            let ctx = ui.ctx().clone();
             #[allow(deprecated)]
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
@@ -3542,7 +3530,7 @@ mod tests {
                         |ui| {
                             ui.set_min_size(content_rect.size());
                             ui.set_max_size(content_rect.size());
-                            render_header(ui, &ctx, &mut settings, &mut state, &palette, &mut actions);
+                            render_header(ui, &mut settings, &mut state, &palette, &mut actions);
                         },
                     );
                 });
@@ -3596,6 +3584,11 @@ mod tests {
             mt.center().y
         );
 
+        assert!(
+            sb.left() <= 16.0,
+            "search box should start flush at left edge without top-left emblem: sb.left()={}",
+            sb.left()
+        );
         assert!(
             (sb.center().y - ht.center().y).abs() <= 1.5,
             "hint text not vertically centered: box_cy={} hint_cy={}",
@@ -4591,7 +4584,6 @@ mod tests {
             ..Default::default()
         };
         let mut out = ctx.run_ui(raw_init, |ui| {
-            let ctx = ui.ctx().clone();
             #[allow(deprecated)]
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
@@ -4605,7 +4597,7 @@ mod tests {
                             ui.set_min_size(content_rect.size());
                             ui.set_max_size(content_rect.size());
                             let mut actions = Vec::new();
-                            render_header(ui, &ctx, &mut settings, &mut state, &palette, &mut actions);
+                            render_header(ui, &mut settings, &mut state, &palette, &mut actions);
                         },
                     );
                 });
