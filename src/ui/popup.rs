@@ -25,7 +25,17 @@ use egui::{
 };
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VerticalNavHold {
+    /// `+1` for ArrowDown, `-1` for ArrowUp.
+    pub dir: i32,
+    /// `egui` input clock (seconds) when the key was initially pressed.
+    pub pressed_at: f64,
+    /// `egui` input clock (seconds) when the next accelerated repeat step should fire.
+    pub next_step_at: f64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WorkbenchSide {
@@ -105,6 +115,12 @@ pub struct PopupState {
     pub search_focused: bool,
     pub scroll_to_selection: bool,
     pub scroll_to_filter: bool,
+    pub nav_hold: Option<VerticalNavHold>,
+    pub list_scroll_y: f32,
+    pub scroll_anim_target: Option<f32>,
+    pub selection_visual_y: Option<f32>,
+    pub external_selection_bar: bool,
+    pub selection_glide_blend: f32,
 }
 
 impl Default for PopupState {
@@ -137,11 +153,25 @@ impl Default for PopupState {
             search_focused: false,
             scroll_to_selection: false,
             scroll_to_filter: false,
+            nav_hold: None,
+            list_scroll_y: 0.0,
+            scroll_anim_target: None,
+            selection_visual_y: None,
+            external_selection_bar: false,
+            selection_glide_blend: 1.0,
         }
     }
 }
 
 impl PopupState {
+    /// Clears transient vertical key-hold and list scroll/indicator glide animation state.
+    pub fn reset_list_navigation(&mut self) {
+        self.nav_hold = None;
+        self.scroll_anim_target = None;
+        self.selection_visual_y = None;
+        self.selection_glide_blend = 1.0;
+    }
+
     /// Updates workbench open state while seeding `preview_reveal` so the toggle frame never snaps before animating.
     pub fn set_preview_open(&mut self, open: bool) {
         if self.preview_open != open {
@@ -269,9 +299,11 @@ pub fn render_popup_view(
         if !valid {
             state.selected_id = Some(results[0].item.id);
             state.selection_changed_at = Instant::now();
+            state.reset_list_navigation();
         }
     } else {
         state.selected_id = None;
+        state.reset_list_navigation();
     }
 
     // Track macOS / Windows IME composition state so Chinese Pinyin works from the 1st keystroke
@@ -294,6 +326,8 @@ pub fn render_popup_view(
     // Handle keyboard shortcuts BEFORE TextEdit steals Up/Down/Enter/Esc (unless IME is composing)
     if !state.ime_composing {
         handle_popup_keyboard(ctx, settings, results, collections, state, &mut actions);
+    } else {
+        state.nav_hold = None;
     }
 
     // Top Header Bar
@@ -618,6 +652,26 @@ pub fn render_popup_view(
     actions
 }
 
+const NAV_HOLD_INITIAL_DELAY_SECS: f64 = 0.20;
+const NAV_HOLD_RAMP_SECS: f32 = 0.90;
+const NAV_HOLD_START_INTERVAL_MS: f32 = 76.0;
+const NAV_HOLD_MIN_INTERVAL_MS: f32 = 16.0;
+
+/// Returns the repeat interval while holding Up/Down.
+/// Returns `None` during the initial tap window so slow taps step strictly 1 item at a time,
+/// then smoothly accelerates from ~13 items/sec up to ~62 items/sec as the key stays held.
+fn nav_repeat_interval(hold_elapsed: Duration) -> Option<Duration> {
+    let elapsed_secs = hold_elapsed.as_secs_f64();
+    if elapsed_secs + 1e-6 < NAV_HOLD_INITIAL_DELAY_SECS {
+        return None;
+    }
+    let t = (((elapsed_secs - NAV_HOLD_INITIAL_DELAY_SECS) as f32) / NAV_HOLD_RAMP_SECS)
+        .clamp(0.0, 1.0);
+    let ratio = NAV_HOLD_MIN_INTERVAL_MS / NAV_HOLD_START_INTERVAL_MS;
+    let interval_ms = NAV_HOLD_START_INTERVAL_MS * ratio.powf(t);
+    Some(Duration::from_secs_f32(interval_ms / 1000.0))
+}
+
 fn handle_popup_keyboard(
     ctx: &egui::Context,
     settings: &mut AppSettings,
@@ -627,6 +681,7 @@ fn handle_popup_keyboard(
     actions: &mut Vec<PopupAction>,
 ) {
     if state.show_about_modal {
+        state.nav_hold = None;
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
             state.show_about_modal = false;
         }
@@ -646,12 +701,14 @@ fn handle_popup_keyboard(
 
     // Esc cancels workbench inline editing first, then clears search, or closes popup
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        state.nav_hold = None;
         if editing_workbench {
             state.inline_edit_text = None;
             state.inline_edit_note = None;
         } else if !state.search_query.is_empty() {
             state.search_query.clear();
             state.request_search_focus = true;
+            state.reset_list_navigation();
         } else if !state.window_pinned {
             actions.push(PopupAction::HidePopup);
         }
@@ -660,6 +717,7 @@ fn handle_popup_keyboard(
 
     // While editing text/note inside the workbench, let the editor handle arrows/Enter/Tab
     if editing_workbench {
+        state.nav_hold = None;
         return;
     }
 
@@ -678,39 +736,147 @@ fn handle_popup_keyboard(
         state.filter = cycle_category_filter(state.filter, collections, backward);
         state.scroll_to_filter = true;
         state.active_transform = None;
+        state.reset_list_navigation();
         ctx.request_repaint();
         return;
     }
 
-    // Navigation: Up / Down
-    if !results.is_empty() {
-        let cur_idx = state
+    // Navigation: Up / Down (slow taps step 1-by-1; holding accelerates smoothly)
+    if results.is_empty() {
+        state.nav_hold = None;
+    } else {
+        let mut cur_idx = state
             .selected_id
             .and_then(|id| results.iter().position(|r| r.item.id == id))
             .unwrap_or(0);
 
-        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowDown)) {
-            let next = (cur_idx + 1).min(results.len() - 1);
-            state.selected_id = Some(results[next].item.id);
-            state.selection_changed_at = Instant::now();
-            state.scroll_to_selection = true;
-            state.active_transform = None;
-        } else if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowUp)) {
-            let prev = cur_idx.saturating_sub(1);
-            state.selected_id = Some(results[prev].item.id);
-            state.selection_changed_at = Instant::now();
-            state.scroll_to_selection = true;
-            state.active_transform = None;
-        } else if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::PageDown)) {
+        let (now_secs, focused, mods_none, down_held, up_held, fresh_dir) = ctx.input_mut(|i| {
+            let focused = i.focused;
+            let mods_none = i.modifiers.is_none();
+            let mut fresh_dir: i32 = 0;
+
+            // Consume both initial and OS-repeat plain ArrowUp / ArrowDown press events so
+            // TextEdit never steals them and slow OS repeat ticks never fight our hold curve.
+            i.events.retain(|ev| {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    repeat,
+                    modifiers,
+                    ..
+                } = ev
+                    && modifiers.is_none()
+                    && matches!(key, Key::ArrowDown | Key::ArrowUp)
+                {
+                    if !*repeat {
+                        fresh_dir = if *key == Key::ArrowDown { 1 } else { -1 };
+                    }
+                    return false;
+                }
+                true
+            });
+
+            (
+                i.time,
+                focused,
+                mods_none,
+                i.key_down(Key::ArrowDown),
+                i.key_down(Key::ArrowUp),
+                fresh_dir,
+            )
+        });
+
+        let mut step_delta: i32 = 0;
+        let mut keep_hold_repaint = false;
+
+        if fresh_dir != 0 {
+            step_delta += fresh_dir;
+            let still_held = focused
+                && mods_none
+                && ((fresh_dir > 0 && down_held) || (fresh_dir < 0 && up_held));
+            if still_held {
+                state.nav_hold = Some(VerticalNavHold {
+                    dir: fresh_dir,
+                    pressed_at: now_secs,
+                    next_step_at: now_secs + NAV_HOLD_INITIAL_DELAY_SECS,
+                });
+                keep_hold_repaint = true;
+            } else {
+                state.nav_hold = None;
+            }
+        } else if let Some(mut hold) = state.nav_hold {
+            let active_held = focused
+                && mods_none
+                && ((hold.dir > 0 && down_held) || (hold.dir < 0 && up_held));
+            if !active_held {
+                state.nav_hold = None;
+            } else {
+                if now_secs < hold.pressed_at {
+                    hold.pressed_at = now_secs;
+                    hold.next_step_at = now_secs + NAV_HOLD_INITIAL_DELAY_SECS;
+                }
+                let mut steps_this_frame = 0;
+                while now_secs + 1e-6 >= hold.next_step_at && steps_this_frame < 3 {
+                    let hold_elapsed =
+                        Duration::from_secs_f64((now_secs - hold.pressed_at).max(0.0));
+                    let Some(interval) = nav_repeat_interval(hold_elapsed) else {
+                        break;
+                    };
+                    step_delta += hold.dir;
+                    hold.next_step_at += interval.as_secs_f64();
+                    steps_this_frame += 1;
+                }
+                if hold.next_step_at < now_secs {
+                    hold.next_step_at = now_secs;
+                }
+                state.nav_hold = Some(hold);
+                keep_hold_repaint = true;
+            }
+        }
+
+        if step_delta != 0 {
+            let target_idx = if step_delta > 0 {
+                cur_idx
+                    .saturating_add(step_delta as usize)
+                    .min(results.len() - 1)
+            } else {
+                cur_idx.saturating_sub(step_delta.unsigned_abs() as usize)
+            };
+            if target_idx != cur_idx {
+                cur_idx = target_idx;
+                state.selected_id = Some(results[cur_idx].item.id);
+                state.selection_changed_at = Instant::now();
+                state.scroll_to_selection = true;
+                state.active_transform = None;
+                ctx.request_repaint();
+            }
+        }
+
+        if keep_hold_repaint {
+            let at_boundary = state.nav_hold.is_some_and(|h| {
+                (h.dir > 0 && cur_idx + 1 >= results.len()) || (h.dir < 0 && cur_idx == 0)
+            });
+            if !at_boundary {
+                ctx.request_repaint();
+            }
+        }
+
+        if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::PageDown)) {
+            state.nav_hold = None;
             let next = (cur_idx + 8).min(results.len() - 1);
             state.selected_id = Some(results[next].item.id);
             state.selection_changed_at = Instant::now();
             state.scroll_to_selection = true;
+            state.active_transform = None;
+            ctx.request_repaint();
         } else if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::PageUp)) {
+            state.nav_hold = None;
             let prev = cur_idx.saturating_sub(8);
             state.selected_id = Some(results[prev].item.id);
             state.selection_changed_at = Instant::now();
             state.scroll_to_selection = true;
+            state.active_transform = None;
+            ctx.request_repaint();
         }
     }
 
@@ -1111,7 +1277,10 @@ fn render_filter_strip(
                 for (filter, label) in pills {
                     let active = state.filter == filter;
                     let resp = capsule_button(ui, active, label, None, palette, || {
-                        state.filter = filter;
+                        if state.filter != filter {
+                            state.filter = filter;
+                            state.reset_list_navigation();
+                        }
                     });
                     if active && state.scroll_to_filter {
                         resp.scroll_to_me(None);
@@ -1124,7 +1293,10 @@ fn render_filter_strip(
                     let f = CategoryFilter::Collection(col.id);
                     let active = state.filter == f;
                     let resp = capsule_button(ui, active, &col.name, dot, palette, || {
-                        state.filter = f;
+                        if state.filter != f {
+                            state.filter = f;
+                            state.reset_list_navigation();
+                        }
                     });
                     if active && state.scroll_to_filter {
                         resp.scroll_to_me(None);
@@ -1190,6 +1362,33 @@ fn capsule_button(
     resp
 }
 
+/// Computes the smooth scroll offset needed to keep the selected row inside the viewport
+/// with ~1.25 rows of lookahead breathing margin so users can see upcoming items while holding Up/Down.
+fn compute_smooth_scroll_target(
+    cur_scroll: f32,
+    row_top: f32,
+    row_h: f32,
+    viewport_h: f32,
+    max_scroll: f32,
+) -> f32 {
+    if max_scroll <= 0.0 || viewport_h <= 0.0 {
+        return 0.0;
+    }
+    let cur = cur_scroll.clamp(0.0, max_scroll);
+    let max_margin = ((viewport_h - row_h) * 0.5).max(0.0);
+    let margin = ((row_h + 5.0) * 1.25)
+        .min(viewport_h * 0.35)
+        .min(max_margin);
+    let row_bottom = row_top + row_h;
+    if row_top < cur + margin {
+        (row_top - margin).clamp(0.0, max_scroll)
+    } else if row_bottom > cur + viewport_h - margin {
+        (row_bottom + margin - viewport_h).clamp(0.0, max_scroll)
+    } else {
+        cur
+    }
+}
+
 fn render_items_list(
     ui: &mut Ui,
     settings: &AppSettings,
@@ -1200,6 +1399,9 @@ fn render_items_list(
     actions: &mut Vec<PopupAction>,
 ) {
     if results.is_empty() {
+        state.selection_visual_y = None;
+        state.scroll_anim_target = None;
+        state.scroll_to_selection = false;
         egui::Frame::NONE
             .fill(palette.surface_bg)
             .stroke(Stroke::new(1.0, palette.border_subtle))
@@ -1231,63 +1433,202 @@ fn render_items_list(
         return;
     }
 
+    let dt = ui.input(|i| i.stable_dt).clamp(1.0 / 240.0, 0.05);
+    let manual_scroll = ui.input(|i| i.is_scrolling() || i.smooth_scroll_delta.y.abs() > 0.1)
+        || ui.ctx().egui_is_using_pointer();
+    if manual_scroll {
+        state.scroll_anim_target = None;
+    }
+
+    let mut applied_scroll_y: Option<f32> = None;
+    if let Some(target) = state.scroll_anim_target {
+        let cur = state.list_scroll_y;
+        let diff = target - cur;
+        if diff.abs() <= 0.5 {
+            state.list_scroll_y = target;
+            state.scroll_anim_target = None;
+            applied_scroll_y = Some(target);
+        } else {
+            let rate = if state.nav_hold.is_some() { 24.0 } else { 18.0 };
+            let alpha = 1.0 - (-rate * dt).exp();
+            let next = cur + diff * alpha;
+            state.list_scroll_y = next;
+            applied_scroll_y = Some(next);
+            ui.ctx().request_repaint();
+        }
+    }
+
     let list_avail_w = ui.available_width();
-    ScrollArea::vertical()
+    let mut scroll_area = ScrollArea::vertical()
         .id_salt("earth_history_scroll")
         .auto_shrink([false, false])
         .scroll_source(desktop_scroll_source())
-        .max_width(list_avail_w)
-        .show_viewport(ui, |ui, viewport| {
-            ui.set_max_width(list_avail_w);
-            let origin_y = ui.cursor().min.y;
-            let vis_min_y = viewport.min.y - 240.0;
-            let vis_max_y = viewport.max.y + 240.0;
-            let mut seen_pinned_sep = false;
-            let mut prev_pinned: Option<bool> = None;
+        .max_width(list_avail_w);
+    if let Some(y) = applied_scroll_y {
+        scroll_area = scroll_area.vertical_scroll_offset(y);
+    }
 
-            for (idx, res) in results.iter().enumerate() {
-                let item = &res.item;
-                if let Some(prev) = prev_pinned
-                    && prev != item.pinned
-                    && !seen_pinned_sep
-                {
-                    seen_pinned_sep = true;
-                    ui.add_space(2.0);
-                    ui.separator();
-                    ui.add_space(2.0);
-                }
-                prev_pinned = Some(item.pinned);
+    let mut selected_row_span: Option<(f32, f32)> = None;
+    let scroll_out = scroll_area.show_viewport(ui, |ui, viewport| {
+        ui.set_max_width(list_avail_w);
+        let origin_y = ui.cursor().min.y;
+        let vis_min_y = viewport.min.y - 240.0;
+        let vis_max_y = viewport.max.y + 240.0;
+        let mut seen_pinned_sep = false;
+        let mut prev_pinned: Option<bool> = None;
+        let mut selected_row_rect: Option<egui::Rect> = None;
 
-                let selected = state.selected_id == Some(item.id);
-                let row_height = LIST_ROW_HEIGHT;
-                let rel_y = ui.cursor().min.y - origin_y;
-                let in_viewport =
-                    (rel_y + row_height >= vis_min_y && rel_y <= vis_max_y) || selected;
-
-                let resp = if in_viewport {
-                    let shortcut_num = if idx < 9 { Some(idx + 1) } else { None };
-                    render_item_row(
-                        ui,
-                        res,
-                        shortcut_num,
-                        selected,
-                        settings,
-                        collections,
-                        state,
-                        palette,
-                        actions,
-                    )
-                } else {
-                    ui.allocate_exact_size(vec2(list_avail_w, row_height), Sense::hover())
-                        .1
-                };
-
-                if selected && state.scroll_to_selection {
-                    resp.scroll_to_me(Some(Align::Center));
-                    state.scroll_to_selection = false;
-                }
+        state.external_selection_bar = true;
+        for (idx, res) in results.iter().enumerate() {
+            let item = &res.item;
+            if let Some(prev) = prev_pinned
+                && prev != item.pinned
+                && !seen_pinned_sep
+            {
+                seen_pinned_sep = true;
+                ui.add_space(2.0);
+                ui.separator();
+                ui.add_space(2.0);
             }
-        });
+            prev_pinned = Some(item.pinned);
+
+            let selected = state.selected_id == Some(item.id);
+            let row_height = LIST_ROW_HEIGHT;
+            let rel_y = ui.cursor().min.y - origin_y;
+            let in_viewport =
+                (rel_y + row_height >= vis_min_y && rel_y <= vis_max_y) || selected;
+
+            if selected {
+                let est_target_cy = rel_y + row_height * 0.5;
+                let est_dist = state
+                    .selection_visual_y
+                    .map(|vy| (est_target_cy - vy).abs())
+                    .unwrap_or(0.0);
+                state.selection_glide_blend = 1.0 - (est_dist / 16.0).clamp(0.0, 1.0);
+            }
+
+            let resp = if in_viewport {
+                let shortcut_num = if idx < 9 { Some(idx + 1) } else { None };
+                render_item_row(
+                    ui,
+                    res,
+                    shortcut_num,
+                    selected,
+                    settings,
+                    collections,
+                    state,
+                    palette,
+                    actions,
+                )
+            } else {
+                ui.allocate_exact_size(vec2(list_avail_w, row_height), Sense::hover())
+                    .1
+            };
+
+            if selected {
+                selected_row_rect = Some(resp.rect);
+                selected_row_span = Some((resp.rect.min.y - origin_y, resp.rect.height()));
+            }
+        }
+        state.external_selection_bar = false;
+        state.selection_glide_blend = 1.0;
+
+        // Paint silky content-space gliding selection bar + subtle focus capsule
+        if let Some(sel_rect) = selected_row_rect {
+            let target_rel_cy = sel_rect.center().y - origin_y;
+            let visual_rel_cy = match state.selection_visual_y {
+                Some(mut prev_cy) => {
+                    let jump_limit = (viewport.height() * 1.1).max(LIST_ROW_HEIGHT * 6.0);
+                    if (target_rel_cy - prev_cy).abs() > jump_limit {
+                        let sign = (target_rel_cy - prev_cy).signum();
+                        prev_cy = target_rel_cy - sign * (jump_limit * 0.55);
+                    }
+                    let diff = target_rel_cy - prev_cy;
+                    if diff.abs() <= 0.35 {
+                        target_rel_cy
+                    } else {
+                        let rate = if state.nav_hold.is_some() { 24.0 } else { 28.0 };
+                        let alpha = 1.0 - (-rate * dt).exp();
+                        ui.ctx().request_repaint();
+                        prev_cy + diff * alpha
+                    }
+                }
+                None => target_rel_cy,
+            };
+            state.selection_visual_y = Some(visual_rel_cy);
+
+            let dist = (target_rel_cy - visual_rel_cy).abs();
+            let screen_cy = origin_y + visual_rel_cy;
+            let painter = ui.painter();
+
+            if dist > 0.6 {
+                let activity = (dist / 10.0).clamp(0.0, 1.0);
+                let capsule_rect = egui::Rect::from_center_size(
+                    pos2(sel_rect.center().x, screen_cy),
+                    sel_rect.size(),
+                );
+                let accent = palette.accent;
+                let fill_alpha =
+                    (activity * if palette.is_dark { 26.0 } else { 16.0 }).round() as u8;
+                let stroke_alpha = (activity * 195.0).round() as u8;
+                painter.rect_filled(
+                    capsule_rect,
+                    CornerRadius::same(12),
+                    Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), fill_alpha),
+                );
+                painter.rect_stroke(
+                    capsule_rect,
+                    CornerRadius::same(12),
+                    Stroke::new(
+                        1.2,
+                        Color32::from_rgba_unmultiplied(
+                            accent.r(),
+                            accent.g(),
+                            accent.b(),
+                            stroke_alpha,
+                        ),
+                    ),
+                    egui::StrokeKind::Inside,
+                );
+            }
+
+            let base_bar_h = (LIST_ROW_HEIGHT - 16.0).max(16.0);
+            let stretch = (dist * 0.28).min(16.0);
+            let bar_h = base_bar_h + stretch;
+            let bar_center_x = sel_rect.min.x + 8.0 + 3.5 * 0.5;
+            let bar_rect =
+                egui::Rect::from_center_size(pos2(bar_center_x, screen_cy), vec2(3.5, bar_h));
+            painter.rect_filled(bar_rect, CornerRadius::same(2), palette.accent);
+        } else {
+            state.selection_visual_y = None;
+        }
+    });
+
+    let actual_scroll_y = scroll_out.state.clamped_offset().y;
+    state.list_scroll_y = actual_scroll_y;
+    let max_scroll = (scroll_out.content_size.y - scroll_out.inner_rect.height()).max(0.0);
+    if let Some(target) = state.scroll_anim_target {
+        state.scroll_anim_target = Some(target.clamp(0.0, max_scroll));
+    }
+
+    if state.scroll_to_selection {
+        state.scroll_to_selection = false;
+        if let Some((sel_top, sel_h)) = selected_row_span {
+            let target = compute_smooth_scroll_target(
+                actual_scroll_y,
+                sel_top,
+                sel_h,
+                scroll_out.inner_rect.height(),
+                max_scroll,
+            );
+            if (target - actual_scroll_y).abs() > 0.5 {
+                state.scroll_anim_target = Some(target);
+                ui.ctx().request_repaint();
+            } else {
+                state.scroll_anim_target = None;
+            }
+        }
+    }
 }
 
 const LIST_ROW_HEIGHT: f32 = 34.0;
@@ -1333,7 +1674,7 @@ fn render_item_row(
             ui.set_max_width(row_inner_w);
             // Left selection bar slot (always allocated so text X-alignment and widget IDs stay stable)
             let (slot, _) = ui.allocate_exact_size(vec2(3.5, row_inner_h), Sense::hover());
-            if selected {
+            if selected && !state.external_selection_bar {
                 let bar_h = (row_height - 16.0).max(16.0);
                 let bar = egui::Rect::from_center_size(slot.center(), vec2(3.5, bar_h));
                 ui.painter().rect_filled(bar, CornerRadius::same(2), palette.accent);
@@ -1555,7 +1896,17 @@ fn render_item_row(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let border_stroke = if selected {
-        Stroke::new(1.2, palette.accent)
+        let blend = if state.external_selection_bar {
+            state.selection_glide_blend.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let accent = palette.accent;
+        let alpha = (75.0 + 180.0 * blend).round() as u8;
+        Stroke::new(
+            1.2,
+            Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), alpha),
+        )
     } else if pointer_in_row && state.selected_id != Some(item.id) {
         Stroke::new(1.0, palette.border_strong)
     } else {
@@ -4386,5 +4737,205 @@ mod tests {
         state.search_focused = false;
         press_key(&mut state, Key::ArrowRight, 1.30);
         assert_eq!(state.filter, CategoryFilter::Collection(10));
+    }
+
+    #[test]
+    fn nav_repeat_interval_waits_for_hold_then_accelerates_smoothly() {
+        assert!(nav_repeat_interval(Duration::from_millis(0)).is_none());
+        assert!(nav_repeat_interval(Duration::from_millis(120)).is_none());
+        assert!(nav_repeat_interval(Duration::from_millis(195)).is_none());
+
+        let start = nav_repeat_interval(Duration::from_millis(200)).expect("repeat starts at 200ms");
+        let mid = nav_repeat_interval(Duration::from_millis(550)).expect("repeat active at 550ms");
+        let fast = nav_repeat_interval(Duration::from_millis(900)).expect("repeat active at 900ms");
+        let max_speed =
+            nav_repeat_interval(Duration::from_millis(1200)).expect("repeat active at 1200ms");
+        let sustained =
+            nav_repeat_interval(Duration::from_millis(2500)).expect("repeat active at 2500ms");
+
+        assert!((start.as_secs_f32() * 1000.0 - NAV_HOLD_START_INTERVAL_MS).abs() < 0.5);
+        assert!(mid < start, "mid ({mid:?}) should accelerate past start ({start:?})");
+        assert!(fast < mid, "fast ({fast:?}) should accelerate past mid ({mid:?})");
+        assert!(max_speed < fast, "max_speed ({max_speed:?}) should accelerate past fast ({fast:?})");
+        assert!((max_speed.as_secs_f32() * 1000.0 - NAV_HOLD_MIN_INTERVAL_MS).abs() < 0.5);
+        assert_eq!(max_speed, sustained);
+    }
+
+    #[test]
+    fn smooth_scroll_target_uses_lookahead_margin_and_clamps_bounds() {
+        // Middle of viewport stays steady without unnecessary scrolling
+        assert_eq!(compute_smooth_scroll_target(0.0, 120.0, 34.0, 360.0, 1000.0), 0.0);
+
+        // Approaching the bottom edge starts scrolling early with ~1.25-row lookahead margin
+        let down_target = compute_smooth_scroll_target(0.0, 312.0, 34.0, 360.0, 1000.0);
+        assert!(down_target > 30.0 && down_target < 40.0, "down_target={down_target}");
+
+        // Approaching the top edge scrolls upward early while clamping cleanly at 0
+        let up_target = compute_smooth_scroll_target(200.0, 210.0, 34.0, 360.0, 1000.0);
+        assert!(up_target < 200.0 && up_target > 150.0, "up_target={up_target}");
+        assert_eq!(compute_smooth_scroll_target(20.0, 0.0, 34.0, 360.0, 1000.0), 0.0);
+
+        // Bottom-most row clamps cleanly at max_scroll
+        assert_eq!(
+            compute_smooth_scroll_target(800.0, 1326.0, 34.0, 360.0, 1000.0),
+            1000.0
+        );
+
+        // Degenerate tiny viewport never produces NaN or out-of-bounds target
+        let tiny = compute_smooth_scroll_target(0.0, 40.0, 34.0, 60.0, 300.0);
+        assert!((0.0..=300.0).contains(&tiny));
+    }
+
+    #[test]
+    fn holding_down_arrow_accelerates_past_single_step_and_stops_on_release() {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Dark, true);
+        palette.apply_to_ctx(&ctx);
+
+        let mut settings = AppSettings::default();
+        let collections = Vec::new();
+        let results: Vec<SearchResultItem> = (1..=30)
+            .map(|id| SearchResultItem {
+                item: ClipItem {
+                    id,
+                    content_hash: format!("nav-{id}"),
+                    kind: ClipKind::Text,
+                    text_content: Some(format!("剪贴板记录 #{id}")),
+                    html_content: None,
+                    rtf_content: None,
+                    image_path: None,
+                    thumb_path: None,
+                    image_width: None,
+                    image_height: None,
+                    files: Vec::new(),
+                    byte_size: 32,
+                    source_app: Some("Safari".into()),
+                    source_bundle_id: None,
+                    pinned: false,
+                    collection_id: None,
+                    first_copied_at: 0,
+                    last_copied_at: 0,
+                    copy_count: 1,
+                    sensitive_label: None,
+                    detected_color: None,
+                    is_url: false,
+                    note: None,
+                },
+                score: 100,
+                matched_indices: HashSet::new(),
+            })
+            .collect();
+
+        let mut state = PopupState::default();
+        let mut step_frame = |state: &mut PopupState, time: f64, events: Vec<egui::Event>| {
+            let raw = egui::RawInput {
+                time: Some(time),
+                screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(424.0, 520.0))),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let ctx = ui.ctx().clone();
+                let _ = render_popup_view(
+                    ui,
+                    &ctx,
+                    PopupViewData {
+                        settings: &mut settings,
+                        results: &results,
+                        collections: &collections,
+                        palette: &palette,
+                        storage_bytes: 0,
+                        total_items: results.len(),
+                        has_accessibility: true,
+                    },
+                    state,
+                );
+            });
+            out.textures_delta.clear();
+        };
+
+        // Initial render selects first item (id = 1)
+        step_frame(&mut state, 0.00, Vec::new());
+        assert_eq!(state.selected_id, Some(1));
+
+        // Slow tap (press at 0.10, release at 0.18) moves strictly 1 row
+        step_frame(
+            &mut state,
+            0.10,
+            vec![egui::Event::Key {
+                key: Key::ArrowDown,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert_eq!(state.selected_id, Some(2));
+        step_frame(
+            &mut state,
+            0.18,
+            vec![egui::Event::Key {
+                key: Key::ArrowDown,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert_eq!(state.selected_id, Some(2));
+        assert!(state.nav_hold.is_none());
+
+        // Press and hold ArrowDown starting at t = 0.50: immediate +1 to id = 3
+        step_frame(
+            &mut state,
+            0.50,
+            vec![egui::Event::Key {
+                key: Key::ArrowDown,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert_eq!(state.selected_id, Some(3));
+        assert!(state.nav_hold.is_some());
+
+        // Still inside the 200ms hold threshold (t = 0.62) -> no accidental extra step
+        step_frame(&mut state, 0.62, Vec::new());
+        assert_eq!(state.selected_id, Some(3));
+
+        // Hold across 60Hz frames until t = 1.40 -> smoothly accelerates through many rows
+        let mut t = 0.64;
+        while t <= 1.40 {
+            step_frame(&mut state, t, Vec::new());
+            t += 1.0 / 60.0;
+        }
+        let after_hold_id = state.selected_id.expect("selected id after hold");
+        assert!(
+            after_hold_id >= 15,
+            "holding ArrowDown for ~0.9s should accelerate smoothly past 15+ rows, got id={after_hold_id}"
+        );
+        assert!(
+            state.list_scroll_y > 0.0 || state.scroll_anim_target.is_some_and(|y| y > 0.0),
+            "holding ArrowDown down a long list should trigger smooth vertical scrolling"
+        );
+        assert!(state.selection_visual_y.is_some());
+
+        // Releasing ArrowDown immediately stops hold progression
+        step_frame(
+            &mut state,
+            1.42,
+            vec![egui::Event::Key {
+                key: Key::ArrowDown,
+                physical_key: None,
+                pressed: false,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            }],
+        );
+        assert!(state.nav_hold.is_none());
+        let stopped_id = state.selected_id;
+        step_frame(&mut state, 1.60, Vec::new());
+        assert_eq!(state.selected_id, stopped_id);
     }
 }

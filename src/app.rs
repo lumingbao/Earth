@@ -524,6 +524,7 @@ impl EarthApp {
             self.popup_state.inline_edit_text = None;
             self.popup_state.inline_edit_note = None;
             self.popup_state.qr_preview_id = None;
+            self.popup_state.reset_list_navigation();
         }
 
         let target_size = (COMPACT_WIDTH, WINDOW_HEIGHT);
@@ -565,6 +566,7 @@ impl EarthApp {
         self.popup_state.preview_open = false;
         self.popup_state.preview_reveal = None;
         self.popup_state.workbench_side = WorkbenchSide::Right;
+        self.popup_state.reset_list_navigation();
         ctx.send_viewport_cmd(ViewportCommand::Visible(false));
         if restore_focus {
             platform::hide_self_app();
@@ -933,6 +935,7 @@ impl eframe::App for EarthApp {
                                 if self.popup_state.search_query != prev_query
                                     || self.popup_state.filter != prev_filter
                                 {
+                                    self.popup_state.reset_list_navigation();
                                     self.search_dirty = true;
                                     ctx.request_repaint();
                                 }
