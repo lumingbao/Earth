@@ -50,6 +50,7 @@ pub enum SettingsAction {
     CreateCollection { name: String, color_hex: String },
     RenameCollection { id: i64, name: String },
     DeleteCollection(i64),
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     OpenAccessibilitySettings,
 }
 

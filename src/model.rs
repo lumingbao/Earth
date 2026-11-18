@@ -442,6 +442,7 @@ impl Default for AppSettings {
 pub struct ActiveAppInfo {
     pub app_name: String,
     pub process_or_bundle: String,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub pid: u64,
     pub window_rect: Option<(f32, f32, f32, f32)>,
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
