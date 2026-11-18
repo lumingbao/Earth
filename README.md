@@ -70,7 +70,7 @@ cargo build --release
 ```
 
 ### 平台说明
-- **macOS**：Earth 以无 Dock 图标的 Accessory 菜单栏应用运行（已在 `Info.plist` 设置 `LSUIElement=true`）。可执行 `./scripts/package-macos.sh` 生成通用二进制（`arm64` + `x86_64`）的 `dist/Earth.app`、`dist/Earth-0.3.0-macOS-universal.dmg` 及 `dist/Earth-0.3.0-macOS-universal.pkg`。
+- **macOS**：Earth 以无 Dock 图标的 Accessory 菜单栏应用运行（已在 `Info.plist` 设置 `LSUIElement=true`）。可执行 `./scripts/package-macos.sh` 生成通用二进制（`arm64` + `x86_64`）的 `dist/Earth.app`、`dist/Earth-0.4.0-macOS-universal.dmg` 及 `dist/Earth-0.4.0-macOS-universal.pkg`。
   - 打包脚本会自动检测本机可用的开发者签名证书（`Apple Development` / `Developer ID Application`），未检测到时回退为 Ad-hoc 签名；若需跨机器免弹窗公证分发，可在签名与公证环节接入 `Developer ID` 证书并提交 `notarytool` 公证。
   - 若启用「选择后自动粘贴」，首次触发需在「系统设置 -> 隐私与安全性 -> 辅助功能」中授予权限；若版本重签名后已勾选仍提示未授权，请在「辅助功能」列表中选中 Earth 点击 `-` 移除后重新添加一次。
 - **Windows**：`src/platform/windows.rs` 已基于 `windows-sys` 实现高 DPI 自动缩放定位、系统托盘右键菜单、`SendInput` 自动模拟 `Ctrl+V` 粘贴及开机自启（Windows 可执行文件需在 Windows 本机环境或配置对应交叉编译目标后构建测试）。

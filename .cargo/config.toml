@@ -1,0 +1,7 @@
+# Statically link the MSVC C runtime on Windows so Earth.exe runs on clean
+# Windows 10/11 machines without requiring the VC++ Redistributable (VCRUNTIME140.dll).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

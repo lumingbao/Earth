@@ -4,10 +4,10 @@
 !include "FileFunc.nsh"
 
 !ifndef VERSION
-  !define VERSION "0.3.0"
+  !define VERSION "0.4.0"
 !endif
 !ifndef VI_VERSION
-  !define VI_VERSION "0.3.0.0"
+  !define VI_VERSION "0.4.0.0"
 !endif
 !ifndef EXE_PATH
   !define EXE_PATH "..\..\dist\Earth.exe"

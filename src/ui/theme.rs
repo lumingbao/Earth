@@ -449,28 +449,21 @@ pub fn install_crisp_fonts(ctx: &egui::Context) {
 
     // Insert UI/CJK fonts in reverse priority order with `FontPriority::Highest` so index 0
     // becomes the first candidate in Proportional and sits cleanly as CJK fallback in Monospace.
-    for (idx, candidate) in preferred.ui.iter().enumerate().rev() {
+    for candidate in preferred.ui.iter().rev() {
         let Some(font_data) = load_mmap_font_data(&candidate.path, candidate.postscript_name)
         else {
             continue;
         };
-        let families = if idx == 0 {
-            vec![
-                InsertFontFamily {
-                    family: FontFamily::Proportional,
-                    priority: FontPriority::Highest,
-                },
-                InsertFontFamily {
-                    family: FontFamily::Monospace,
-                    priority: FontPriority::Highest,
-                },
-            ]
-        } else {
-            vec![InsertFontFamily {
+        let families = vec![
+            InsertFontFamily {
                 family: FontFamily::Proportional,
                 priority: FontPriority::Highest,
-            }]
-        };
+            },
+            InsertFontFamily {
+                family: FontFamily::Monospace,
+                priority: FontPriority::Highest,
+            },
+        ];
         ctx.add_font(FontInsert::new(
             &format!("earth_ui_{}", candidate.postscript_name),
             font_data,
