@@ -131,7 +131,7 @@ pub struct EarthApp {
 }
 
 impl EarthApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, start_hidden: bool) -> Self {
         egui_extras::install_image_loaders(&cc.egui_ctx);
         install_crisp_fonts(&cc.egui_ctx);
         platform::configure_macos_accessory_mode();
@@ -139,6 +139,9 @@ impl EarthApp {
 
         let storage = Storage::open_default().expect("无法初始化 Earth 本地数据库");
         let settings = storage.load_settings();
+        if settings.launch_at_login {
+            let _ = platform::refresh_autostart_if_enabled();
+        }
         let items = storage.list_items().unwrap_or_default();
         let collections = storage.list_collections().unwrap_or_default();
         let storage_bytes = storage.total_storage_bytes();
@@ -183,7 +186,11 @@ impl EarthApp {
         }
 
         let initial_size = (COMPACT_WIDTH, WINDOW_HEIGHT);
-        let prev_app = platform::capture_frontmost_app();
+        let prev_app = if start_hidden {
+            None
+        } else {
+            platform::capture_frontmost_app()
+        };
         let (x, y) = platform::compute_popup_origin(
             settings.popup_position,
             initial_size,
@@ -195,8 +202,13 @@ impl EarthApp {
             .send_viewport_cmd(ViewportCommand::OuterPosition(pos2(x, y)));
         cc.egui_ctx
             .send_viewport_cmd(ViewportCommand::InnerSize(vec2(initial_size.0, initial_size.1)));
-        cc.egui_ctx.send_viewport_cmd(ViewportCommand::Focus);
-        platform::activate_self_window();
+        if start_hidden {
+            cc.egui_ctx
+                .send_viewport_cmd(ViewportCommand::Visible(false));
+        } else {
+            cc.egui_ctx.send_viewport_cmd(ViewportCommand::Focus);
+            platform::activate_self_window();
+        }
 
         let cached_palette = EarthPalette::resolve(settings.theme_mode, false);
         let cached_accessibility = platform::has_accessibility_permission();
@@ -219,7 +231,7 @@ impl EarthApp {
             view_mode: ViewMode::Launcher,
             popup_state,
             settings_state: SettingsState::default(),
-            visible: true,
+            visible: !start_hidden,
             last_shown_at: Instant::now(),
             was_focused_since_shown: false,
             last_known_focused: false,

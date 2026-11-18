@@ -248,3 +248,69 @@ pub fn preferred_system_fonts() -> PreferredSystemFonts {
 
     PreferredSystemFonts { ui, monospace }
 }
+
+pub fn autostart_entry_needs_refresh(expected_app_path: &str, autostart_arg: &str) -> bool {
+    let expected_cmd = format!("{expected_app_path} {autostart_arg}");
+    let subkey: Vec<u16> = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let value_name: Vec<u16> = "Earth"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    for root in [
+        windows_sys::Win32::System::Registry::HKEY_CURRENT_USER,
+        windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE,
+    ] {
+        if let Some(current) = read_reg_sz(root, &subkey, &value_name) {
+            return current.trim() != expected_cmd;
+        }
+    }
+    false
+}
+
+fn read_reg_sz(
+    root: windows_sys::Win32::System::Registry::HKEY,
+    subkey: &[u16],
+    value_name: &[u16],
+) -> Option<String> {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
+
+    let mut byte_len: u32 = 0;
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            subkey.as_ptr(),
+            value_name.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut byte_len,
+        )
+    };
+    if status != ERROR_SUCCESS || byte_len < 2 {
+        return None;
+    }
+
+    let mut buf = vec![0u16; (byte_len as usize).div_ceil(2)];
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            subkey.as_ptr(),
+            value_name.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut byte_len,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return None;
+    }
+
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    Some(String::from_utf16_lossy(&buf[..len]))
+}

@@ -89,3 +89,14 @@ pub fn preferred_system_fonts() -> PreferredSystemFonts {
         monospace: Vec::new(),
     }
 }
+
+pub fn autostart_entry_needs_refresh(expected_app_path: &str, autostart_arg: &str) -> bool {
+    let Some(base_dirs) = directories::BaseDirs::new() else {
+        return false;
+    };
+    let desktop_path = base_dirs.home_dir().join(".config/autostart/Earth.desktop");
+    let Ok(contents) = std::fs::read_to_string(&desktop_path) else {
+        return false;
+    };
+    !contents.contains(expected_app_path) || !contents.contains(autostart_arg)
+}

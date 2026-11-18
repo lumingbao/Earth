@@ -555,6 +555,17 @@ pub fn preferred_system_fonts() -> PreferredSystemFonts {
     PreferredSystemFonts { ui, monospace }
 }
 
+pub fn autostart_entry_needs_refresh(expected_app_path: &str, autostart_arg: &str) -> bool {
+    let Some(base_dirs) = directories::BaseDirs::new() else {
+        return false;
+    };
+    let plist_path = base_dirs.home_dir().join("Library/LaunchAgents/Earth.plist");
+    let Ok(contents) = std::fs::read_to_string(&plist_path) else {
+        return false;
+    };
+    !contents.contains(expected_app_path) || !contents.contains(autostart_arg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

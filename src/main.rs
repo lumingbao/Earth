@@ -16,6 +16,7 @@ use app::EarthApp;
 use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
+    let start_hidden = platform::should_start_hidden_from_args();
     let icon_rgba = tray::build_earth_tray_rgba(64, false);
     let icon = Arc::new(egui::IconData {
         rgba: icon_rgba,
@@ -31,6 +32,8 @@ fn main() -> eframe::Result<()> {
         .with_always_on_top()
         .with_taskbar(false)
         .with_resizable(true)
+        .with_visible(!start_hidden)
+        .with_active(!start_hidden)
         .with_inner_size([424.0, 520.0])
         .with_min_inner_size([380.0, 380.0])
         .with_icon(icon);
@@ -67,6 +70,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Earth",
         native_options,
-        Box::new(|cc| Ok(Box::new(EarthApp::new(cc)))),
+        Box::new(move |cc| Ok(Box::new(EarthApp::new(cc, start_hidden)))),
     )
 }
