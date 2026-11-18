@@ -49,41 +49,42 @@ impl EarthPalette {
     pub fn resolve(mode: ThemeMode, _system_dark: bool) -> Self {
         let dark = matches!(mode, ThemeMode::Dark);
         if dark {
+            // macOS Dark Mode (Apple HIG): neutral charcoal/graphite elevation + System Blue (#0A84FF)
             Self {
                 is_dark: true,
-                window_bg: Color32::from_rgb(11, 16, 32),       // #0B1020 deep midnight slate
-                surface_bg: Color32::from_rgb(19, 26, 45),      // #131A2D elevated dark card
-                card_bg: Color32::from_rgb(27, 36, 59),         // #1B243B secondary container / pill fill
-                row_hover_bg: Color32::from_rgb(31, 41, 68),    // #1F2944 subtle cobalt hover
-                row_selected_bg: Color32::from_rgb(28, 41, 82), // #1C2952 royal blue tint selection
-                border: Color32::from_rgb(42, 54, 86),          // #2A3656 dark outline
-                border_subtle: Color32::from_rgb(30, 40, 68),   // #1E2844 hairline divider
-                border_strong: Color32::from_rgb(69, 110, 253), // #456EFD active cobalt outline
-                text_primary: Color32::from_rgb(241, 245, 249), // #F1F5F9 crisp cool white
-                text_secondary: Color32::from_rgb(148, 163, 184), // #94A3B8 slate secondary
-                text_muted: Color32::from_rgb(100, 116, 139),   // #64748B slate muted
-                accent: Color32::from_rgb(69, 110, 253),        // #456EFD Electric Royal Blue
-                accent_hover: Color32::from_rgb(102, 136, 254), // #6688FE brighter hover cobalt
-                accent_active: Color32::from_rgb(47, 85, 235),  // #2F55EB pressed cobalt
-                accent_soft: Color32::from_rgb(25, 37, 74),     // #19254A dark cobalt soft tint
-                accent_text: Color32::from_rgb(129, 158, 255),  // #819EFF legible cobalt text
-                accent_secondary: Color32::from_rgb(96, 165, 250), // #60A5FA periwinkle companion
-                pin_amber: Color32::from_rgb(245, 158, 11),     // #F59E0B warm pro amber
-                success: Color32::from_rgb(34, 197, 94),        // #22C55E vibrant emerald
-                success_bg: Color32::from_rgb(17, 41, 30),      // dark emerald soft
-                success_border: Color32::from_rgb(28, 77, 50),
-                success_text: Color32::from_rgb(74, 222, 128),
-                warning_bg: Color32::from_rgb(46, 33, 16),
-                warning_border: Color32::from_rgb(92, 65, 24),
-                warning_text: Color32::from_rgb(251, 191, 36),
-                danger: Color32::from_rgb(239, 68, 68),         // #EF4444 vibrant coral red
-                danger_bg: Color32::from_rgb(51, 20, 26),       // dark coral soft
-                danger_border: Color32::from_rgb(102, 34, 42),
-                danger_text: Color32::from_rgb(248, 113, 113),
-                info_bg: Color32::from_rgb(24, 34, 68),
-                info_border: Color32::from_rgb(49, 71, 138),
-                keycap_bg: Color32::from_rgb(27, 36, 59),
-                keycap_text: Color32::from_rgb(148, 163, 184),
+                window_bg: Color32::from_rgb(30, 30, 30),         // #1E1E1E macOS windowBackgroundColor
+                surface_bg: Color32::from_rgb(40, 40, 42),        // #28282A elevated card / control surface
+                card_bg: Color32::from_rgb(51, 51, 54),           // #333336 search pill / capsules / icon wells
+                row_hover_bg: Color32::from_rgb(56, 56, 60),      // #38383C neutral graphite hover
+                row_selected_bg: Color32::from_rgb(25, 48, 78),   // #19304E subtle System Blue selection tint
+                border: Color32::from_rgb(68, 68, 72),            // #444448 macOS dark window/control bezel
+                border_subtle: Color32::from_rgb(52, 52, 56),     // #343438 macOS separatorColor
+                border_strong: Color32::from_rgb(56, 132, 224),   // #3884E0 focused System Blue ring
+                text_primary: Color32::from_rgb(245, 245, 247),   // #F5F5F7 Apple primary labelColor
+                text_secondary: Color32::from_rgb(152, 152, 157), // #98989D Apple secondaryLabelColor
+                text_muted: Color32::from_rgb(110, 110, 115),     // #6E6E73 Apple tertiaryLabelColor
+                accent: Color32::from_rgb(10, 132, 255),          // #0A84FF Apple Dark Mode systemBlue
+                accent_hover: Color32::from_rgb(64, 156, 255),    // #409CFF lighter systemBlue hover
+                accent_active: Color32::from_rgb(0, 113, 227),    // #0071E3 pressed systemBlue
+                accent_soft: Color32::from_rgb(24, 46, 74),       // #182E4A soft translucent blue pill fill
+                accent_text: Color32::from_rgb(100, 178, 255),    // #64B2FF high-contrast blue label
+                accent_secondary: Color32::from_rgb(100, 210, 255), // #64D2FF Apple Dark Mode systemCyan
+                pin_amber: Color32::from_rgb(255, 159, 10),       // #FF9F0A Apple Dark Mode systemOrange
+                success: Color32::from_rgb(48, 209, 88),          // #30D158 Apple Dark Mode systemGreen
+                success_bg: Color32::from_rgb(24, 48, 32),        // #183020 tinted systemGreen surface
+                success_border: Color32::from_rgb(42, 92, 56),    // #2A5C38
+                success_text: Color32::from_rgb(68, 219, 106),    // #44DB6A
+                warning_bg: Color32::from_rgb(54, 42, 22),        // #362A16 tinted systemOrange surface
+                warning_border: Color32::from_rgb(108, 78, 28),   // #6C4E1C
+                warning_text: Color32::from_rgb(255, 180, 64),    // #FFB440
+                danger: Color32::from_rgb(255, 69, 58),           // #FF453A Apple Dark Mode systemRed
+                danger_bg: Color32::from_rgb(56, 28, 28),         // #381C1C tinted systemRed surface
+                danger_border: Color32::from_rgb(112, 46, 44),    // #702E2C
+                danger_text: Color32::from_rgb(255, 105, 97),     // #FF6961
+                info_bg: Color32::from_rgb(26, 42, 62),           // #1A2A3E
+                info_border: Color32::from_rgb(46, 82, 124),      // #2E527C
+                keycap_bg: Color32::from_rgb(54, 54, 58),         // #36363A neutral dark keycap
+                keycap_text: Color32::from_rgb(174, 174, 178),    // #AEAEB2 Apple systemGray2
                 on_accent: Color32::from_rgb(255, 255, 255),
             }
         } else {
@@ -139,7 +140,14 @@ impl EarthPalette {
         visuals.panel_fill = self.window_bg;
         visuals.extreme_bg_color = self.surface_bg;
         visuals.faint_bg_color = self.card_bg;
-        visuals.window_stroke = Stroke::new(1.0, self.border_subtle);
+        visuals.window_stroke = Stroke::new(
+            1.0,
+            if self.is_dark {
+                self.border
+            } else {
+                self.border_subtle
+            },
+        );
         visuals.window_corner_radius = CornerRadius::same(16);
         visuals.selection.bg_fill = self.accent_soft;
         visuals.selection.stroke = Stroke::new(1.0, self.accent);
@@ -548,6 +556,28 @@ mod tests {
             ctx_1x.global_style().visuals.text_options.color_transfer_function,
             FontColorTransferFunction::DARK_MODE_DEFAULT
         );
+    }
+
+    #[test]
+    fn dark_palette_uses_neutral_macos_graphite_and_system_blue() {
+        let dark = EarthPalette::resolve(ThemeMode::Dark, true);
+        assert!(dark.is_dark);
+
+        let is_neutral = |c: Color32| {
+            let max_ch = c.r().max(c.g()).max(c.b());
+            let min_ch = c.r().min(c.g()).min(c.b());
+            max_ch - min_ch <= 6
+        };
+        assert!(is_neutral(dark.window_bg), "window_bg should be neutral macOS charcoal");
+        assert!(is_neutral(dark.surface_bg), "surface_bg should be neutral macOS graphite");
+        assert!(is_neutral(dark.card_bg), "card_bg should be neutral macOS control fill");
+        assert!(is_neutral(dark.border), "border should be neutral macOS bezel");
+        assert!(is_neutral(dark.text_primary), "text_primary should be neutral labelColor");
+        assert!(
+            dark.window_bg.r() < dark.surface_bg.r() && dark.surface_bg.r() < dark.card_bg.r(),
+            "dark surfaces should step cleanly upward in elevation"
+        );
+        assert_eq!(dark.accent, Color32::from_rgb(10, 132, 255));
     }
 
     #[cfg(target_os = "macos")]

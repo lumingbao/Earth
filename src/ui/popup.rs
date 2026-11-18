@@ -2702,9 +2702,9 @@ fn antd_kind_tag_colors(
             if item.detected_color.is_some() {
                 if palette.is_dark {
                     (
-                        Color32::from_rgb(26, 19, 37),
-                        Color32::from_rgb(48, 28, 77),
-                        Color32::from_rgb(146, 84, 222),
+                        Color32::from_rgb(48, 34, 58),
+                        Color32::from_rgb(96, 62, 120),
+                        Color32::from_rgb(191, 90, 242),
                     )
                 } else {
                     (
@@ -2716,9 +2716,9 @@ fn antd_kind_tag_colors(
             } else if item.is_url {
                 if palette.is_dark {
                     (
-                        Color32::from_rgb(19, 22, 41),
-                        Color32::from_rgb(28, 39, 85),
-                        Color32::from_rgb(89, 126, 247),
+                        Color32::from_rgb(26, 42, 62),
+                        Color32::from_rgb(46, 82, 124),
+                        Color32::from_rgb(100, 178, 255),
                     )
                 } else {
                     (
@@ -2734,9 +2734,9 @@ fn antd_kind_tag_colors(
         ClipKind::Image => {
             if palette.is_dark {
                 (
-                    Color32::from_rgb(17, 33, 35),
-                    Color32::from_rgb(20, 72, 72),
-                    Color32::from_rgb(51, 188, 183),
+                    Color32::from_rgb(24, 46, 52),
+                    Color32::from_rgb(44, 96, 108),
+                    Color32::from_rgb(100, 210, 255),
                 )
             } else {
                 (
