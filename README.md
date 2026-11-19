@@ -80,6 +80,10 @@ cargo build --release
 - **Windows**：`src/platform/windows.rs` 已基于 `windows-sys` 实现高 DPI 自动缩放定位、系统托盘右键菜单、`SendInput` 自动模拟 `Ctrl+V` 粘贴及开机自启（Windows 可执行文件需在 Windows 本机环境或配置对应交叉编译目标后构建测试）。
   - `scripts/package-windows.ps1` 同样默认生成带 `-UNSIGNED` 的开发安装包。正式模式会为 `Earth.exe` 与 Setup 安装器进行 Authenticode 签名，并核对可信证书 SHA-256；打包时检查 PE 版本资源，安装器通过系统 Windows Script Host 按完整 SemVer 拒绝降级。脚本运行受策略限制、版本损坏或目标目录中的已有应用缺少可靠安装登记时，会在覆盖文件前中止并提示处理。
 
+### 下载未签名的开发包
+
+在仓库的 **Actions → Build & Release (Windows + macOS) → Run workflow** 中选择包含修复的分支，`platform` 选择 `all`，保持 `publish_release` **未勾选**。完成后，在该次运行的 **Artifacts** 下载 `earth-windows-x64-development`（Setup EXE、便携 ZIP）或 `earth-macos-universal-development`（DMG、PKG）。解压后的安装包文件名带 `-UNSIGNED`；此流程无需配置签名证书，也不会创建 GitHub Release。重新运行旧标签的失败任务仍会使用原提交和正式签名模式。
+
 ### 正式发布配置
 
 所有版本均从 `Cargo.toml` 通过 `cargo metadata` 读取。发布标签必须严格等于 `v{Cargo 版本}`；CI 的格式检查、Clippy 和测试分别作为独立门禁。推送版本标签或手动选择该版本标签并开启发布时，只有两平台签名验证均成功的正式产物才会进入 Release，并生成完整的 `SHA256SUMS.txt`。手动发布必须选择 `all` 平台；未开启发布的手动运行只生成开发产物。

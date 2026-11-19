@@ -338,14 +338,9 @@ fn capture_clipboard_payload(
         && ctx.has(ContentFormat::Text)
     {
         #[cfg(windows)]
-        let text = bounds::bytes("CF_UNICODETEXT", text_cap * 2 + 2)?.map(|raw| {
-            String::from_utf16_lossy(
-                &raw.chunks_exact(2)
-                    .map(|p| u16::from_le_bytes([p[0], p[1]]))
-                    .take_while(|c| *c != 0)
-                    .collect::<Vec<_>>(),
-            )
-        });
+        let text = bounds::bytes("CF_UNICODETEXT", text_cap * 2 + 2)?
+            .as_deref()
+            .map(bounds::decode_windows_text);
         #[cfg(not(windows))]
         let text = bounds::bytes("public.utf8-plain-text", text_cap)?
             .and_then(|raw| String::from_utf8(raw).ok());

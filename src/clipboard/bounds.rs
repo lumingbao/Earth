@@ -63,6 +63,19 @@ fn parse_dword(bytes: &[u8]) -> Option<u32> {
     Some(u32::from_le_bytes(bytes.get(..4)?.try_into().ok()?))
 }
 
+#[cfg(any(windows, test))]
+pub(super) fn decode_windows_text(bytes: &[u8]) -> String {
+    let (pairs, _) = bytes.as_chunks::<2>();
+    let units = pairs
+        .iter()
+        .copied()
+        .map(u16::from_le_bytes)
+        .take_while(|&unit| unit != 0);
+    char::decode_utf16(units)
+        .map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER))
+        .collect()
+}
+
 pub(super) fn decode(
     bytes: &[u8],
     dib: bool,
@@ -103,6 +116,13 @@ pub(super) fn decode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_unicode_text_respects_utf16_boundaries_and_terminator() {
+        let raw = [0x60, 0x4f, 0x3c, 0xd8, 0x0d, 0xdf, 0, 0, b'X', 0];
+        assert_eq!(decode_windows_text(&raw), "你🌍");
+        assert_eq!(decode_windows_text(&[0x00, 0xd8, b'A', 0, 0xff]), "�A");
+    }
 
     #[test]
     fn dword_reads_value_without_requiring_exact_allocation_size() {
