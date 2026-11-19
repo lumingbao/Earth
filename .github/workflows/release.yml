@@ -6,13 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       platform:
-        description: "Build platform (official publication requires all)"
+        description: "Build platform (publishing a release requires all)"
         required: true
         default: "all"
         type: choice
         options: [all, windows, macos]
       publish_release:
-        description: "Publish a signed release from the matching version tag (requires all platforms)"
+        description: "Publish a GitHub Release from the matching version tag (signed if credentials exist, otherwise -UNSIGNED)"
         required: false
         default: false
         type: boolean
@@ -20,15 +20,14 @@ on:
 permissions:
   contents: read
 
-env:
-  EARTH_RELEASE_CHANNEL: ${{ ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish_release) && 'official' || 'development' }}
-
 jobs:
   validate-version:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       prerelease: ${{ steps.meta.outputs.prerelease }}
+      windows_channel: ${{ steps.channels.outputs.windows_channel }}
+      macos_channel: ${{ steps.channels.outputs.macos_channel }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -43,11 +42,11 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$PUBLISH_RELEASE" == "true" && "$SELECTED_PLATFORM" != "all" ]]; then
-            echo "Official publication requires all platforms so SHA256SUMS covers the complete release." >&2
+            echo "Publishing a release requires all platforms so SHA256SUMS covers the complete release." >&2
             exit 1
           fi
           if [[ "$PUBLISH_RELEASE" == "true" && "$GITHUB_REF" != refs/tags/v* ]]; then
-            echo "Select the matching version tag when manually publishing an official release." >&2
+            echo "Select the matching version tag when manually publishing a release." >&2
             exit 1
           fi
           VERSION="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "earth"))')"
@@ -62,6 +61,100 @@ jobs:
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
+      - name: Resolve platform signing channels
+        id: channels
+        shell: bash
+        env:
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+          EARTH_UPDATE_WINDOWS_CERT_SHA256: ${{ vars.EARTH_UPDATE_WINDOWS_CERT_SHA256 }}
+          EARTH_WINDOWS_PFX_BASE64: ${{ secrets.EARTH_WINDOWS_PFX_BASE64 }}
+          EARTH_WINDOWS_PFX_PASSWORD: ${{ secrets.EARTH_WINDOWS_PFX_PASSWORD }}
+          EARTH_UPDATE_MACOS_TEAM_ID: ${{ vars.EARTH_UPDATE_MACOS_TEAM_ID }}
+          EARTH_MACOS_SIGN_IDENTITY: ${{ vars.EARTH_MACOS_SIGN_IDENTITY }}
+          EARTH_MACOS_INSTALLER_IDENTITY: ${{ vars.EARTH_MACOS_INSTALLER_IDENTITY }}
+          EARTH_MACOS_APP_P12_BASE64: ${{ secrets.EARTH_MACOS_APP_P12_BASE64 }}
+          EARTH_MACOS_INSTALLER_P12_BASE64: ${{ secrets.EARTH_MACOS_INSTALLER_P12_BASE64 }}
+          EARTH_MACOS_P12_PASSWORD: ${{ secrets.EARTH_MACOS_P12_PASSWORD }}
+          EARTH_APPLE_ID: ${{ secrets.EARTH_APPLE_ID }}
+          EARTH_APPLE_APP_PASSWORD: ${{ secrets.EARTH_APPLE_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          want_release=false
+          if [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == refs/tags/v* ]]; then
+            want_release=true
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$PUBLISH_RELEASE" == "true" ]]; then
+            want_release=true
+          fi
+
+          if [[ "$want_release" != "true" ]]; then
+            echo "windows_channel=development" >> "$GITHUB_OUTPUT"
+            echo "macos_channel=development" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          win_vars=(
+            EARTH_UPDATE_WINDOWS_CERT_SHA256
+            EARTH_WINDOWS_PFX_BASE64
+            EARTH_WINDOWS_PFX_PASSWORD
+          )
+          win_present=0
+          win_missing=()
+          for key in "${win_vars[@]}"; do
+            if [[ -n "${!key:-}" ]]; then
+              win_present=$((win_present + 1))
+            else
+              win_missing+=("$key")
+            fi
+          done
+          if (( win_present == ${#win_vars[@]} )); then
+            if ! [[ "$EARTH_UPDATE_WINDOWS_CERT_SHA256" =~ ^[0-9A-Fa-f]{64}$ ]]; then
+              echo "::error::EARTH_UPDATE_WINDOWS_CERT_SHA256 must be a 64-character hex SHA-256 digest." >&2
+              exit 1
+            fi
+            windows_channel="official"
+          elif (( win_present == 0 )); then
+            echo "::notice::Windows signing credentials are not configured; building unsigned Windows release artifacts (-UNSIGNED)."
+            windows_channel="development"
+          else
+            echo "::error::Incomplete Windows signing configuration; missing: ${win_missing[*]}" >&2
+            exit 1
+          fi
+
+          mac_vars=(
+            EARTH_UPDATE_MACOS_TEAM_ID
+            EARTH_MACOS_SIGN_IDENTITY
+            EARTH_MACOS_INSTALLER_IDENTITY
+            EARTH_MACOS_APP_P12_BASE64
+            EARTH_MACOS_INSTALLER_P12_BASE64
+            EARTH_MACOS_P12_PASSWORD
+            EARTH_APPLE_ID
+            EARTH_APPLE_APP_PASSWORD
+          )
+          mac_present=0
+          mac_missing=()
+          for key in "${mac_vars[@]}"; do
+            if [[ -n "${!key:-}" ]]; then
+              mac_present=$((mac_present + 1))
+            else
+              mac_missing+=("$key")
+            fi
+          done
+          if (( mac_present == ${#mac_vars[@]} )); then
+            if ! [[ "$EARTH_UPDATE_MACOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+              echo "::error::EARTH_UPDATE_MACOS_TEAM_ID must be a 10-character Apple Team ID." >&2
+              exit 1
+            fi
+            macos_channel="official"
+          elif (( mac_present == 0 )); then
+            echo "::notice::macOS signing/notarization credentials are not configured; building unsigned macOS release artifacts (-UNSIGNED)."
+            macos_channel="development"
+          else
+            echo "::error::Incomplete macOS signing configuration; missing: ${mac_missing[*]}" >&2
+            exit 1
+          fi
+
+          echo "windows_channel=${windows_channel}" >> "$GITHUB_OUTPUT"
+          echo "macos_channel=${macos_channel}" >> "$GITHUB_OUTPUT"
 
   build-windows:
     name: Build Windows (x64)
@@ -69,7 +162,8 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows'
     runs-on: windows-latest
     env:
-      EARTH_UPDATE_WINDOWS_CERT_SHA256: ${{ vars.EARTH_UPDATE_WINDOWS_CERT_SHA256 }}
+      EARTH_RELEASE_CHANNEL: ${{ needs.validate-version.outputs.windows_channel }}
+      EARTH_UPDATE_WINDOWS_CERT_SHA256: ${{ needs.validate-version.outputs.windows_channel == 'official' && vars.EARTH_UPDATE_WINDOWS_CERT_SHA256 || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -136,9 +230,10 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos'
     runs-on: macos-15
     env:
-      EARTH_UPDATE_MACOS_TEAM_ID: ${{ vars.EARTH_UPDATE_MACOS_TEAM_ID }}
-      EARTH_MACOS_SIGN_IDENTITY: ${{ vars.EARTH_MACOS_SIGN_IDENTITY }}
-      EARTH_MACOS_INSTALLER_IDENTITY: ${{ vars.EARTH_MACOS_INSTALLER_IDENTITY }}
+      EARTH_RELEASE_CHANNEL: ${{ needs.validate-version.outputs.macos_channel }}
+      EARTH_UPDATE_MACOS_TEAM_ID: ${{ needs.validate-version.outputs.macos_channel == 'official' && vars.EARTH_UPDATE_MACOS_TEAM_ID || '' }}
+      EARTH_MACOS_SIGN_IDENTITY: ${{ needs.validate-version.outputs.macos_channel == 'official' && vars.EARTH_MACOS_SIGN_IDENTITY || '' }}
+      EARTH_MACOS_INSTALLER_IDENTITY: ${{ needs.validate-version.outputs.macos_channel == 'official' && vars.EARTH_MACOS_INSTALLER_IDENTITY || '' }}
       EARTH_NOTARY_PROFILE: earth-release
     steps:
       - uses: actions/checkout@v4
@@ -200,7 +295,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish verified official release
+    name: Publish release
     needs: [validate-version, build-windows, build-macos]
     if: |
       always() &&
@@ -214,24 +309,59 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: '*-official'
+          pattern: 'earth-*'
           path: release-artifacts
           merge-multiple: true
-      - name: Verify official artifact set and generate checksums
+      - name: Verify release artifact set and generate checksums
+        id: verify
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.validate-version.outputs.tag }}
+          WINDOWS_CHANNEL: ${{ needs.validate-version.outputs.windows_channel }}
+          MACOS_CHANNEL: ${{ needs.validate-version.outputs.macos_channel }}
         run: |
           set -euo pipefail
           cd release-artifacts
           shopt -s nullglob
+          version="${RELEASE_TAG#v}"
+          win_suffix=""
+          if [[ "$WINDOWS_CHANNEL" != "official" ]]; then
+            win_suffix="-UNSIGNED"
+          fi
+          mac_suffix=""
+          if [[ "$MACOS_CHANNEL" != "official" ]]; then
+            mac_suffix="-UNSIGNED"
+          fi
+          expected=(
+            "Earth-${version}-Windows-x64-Portable${win_suffix}.zip"
+            "Earth-${version}-Windows-x64-Setup${win_suffix}.exe"
+            "Earth-${version}-macOS-universal${mac_suffix}.dmg"
+            "Earth-${version}-macOS-universal${mac_suffix}.pkg"
+          )
           artifacts=(Earth-*)
-          (( ${#artifacts[@]} > 0 ))
-          for artifact in "${artifacts[@]}"; do
-            [[ "$artifact" == "Earth-${RELEASE_TAG#v}-"* && "$artifact" != *UNSIGNED* && -f "$artifact" ]]
+          (( ${#artifacts[@]} == ${#expected[@]} )) || {
+            echo "Unexpected artifact count: got ${#artifacts[@]}, expected ${#expected[@]}" >&2
+            printf 'Actual: %s\n' "${artifacts[@]}" >&2
+            exit 1
+          }
+          for item in "${expected[@]}"; do
+            [[ -f "$item" ]] || {
+              echo "Missing expected artifact: $item" >&2
+              exit 1
+            }
           done
-          sha256sum "${artifacts[@]}" > SHA256SUMS.txt
+          sha256sum "${expected[@]}" > SHA256SUMS.txt
           sha256sum --check SHA256SUMS.txt
+          if [[ "$WINDOWS_CHANNEL" != "official" || "$MACOS_CHANNEL" != "official" ]]; then
+            {
+              echo 'release_notes<<EARTH_NOTES_EOF'
+              echo '> [!WARNING]'
+              echo '> 本版本包含未签名的构建产物（`-UNSIGNED`），因为仓库尚未配置完整的官方代码签名 / Apple 公证凭据。首次运行前请按需在系统安全提示中手动放行；客户端内自动更新将保留「前往下载」手动模式。'
+              echo 'EARTH_NOTES_EOF'
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "release_notes=" >> "$GITHUB_OUTPUT"
+          fi
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -240,4 +370,5 @@ jobs:
           name: Earth ${{ needs.validate-version.outputs.tag }}
           prerelease: ${{ needs.validate-version.outputs.prerelease == 'true' }}
           generate_release_notes: true
+          body: ${{ steps.verify.outputs.release_notes }}
           files: release-artifacts/*

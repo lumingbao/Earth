@@ -82,20 +82,23 @@ cargo build --release
 
 ### 下载未签名的开发包
 
-在仓库的 **Actions → Build & Release (Windows + macOS) → Run workflow** 中选择包含修复的分支，`platform` 选择 `all`，保持 `publish_release` **未勾选**。完成后，在该次运行的 **Artifacts** 下载 `earth-windows-x64-development`（Setup EXE、便携 ZIP）或 `earth-macos-universal-development`（DMG、PKG）。解压后的安装包文件名带 `-UNSIGNED`；此流程无需配置签名证书，也不会创建 GitHub Release。重新运行旧标签的失败任务仍会使用原提交和正式签名模式。
+在仓库的 **Actions → Build & Release (Windows + macOS) → Run workflow** 中选择包含修复的分支，`platform` 选择 `all`，保持 `publish_release` **未勾选**。完成后，在该次运行的 **Artifacts** 下载 `earth-windows-x64-development`（Setup EXE、便携 ZIP）或 `earth-macos-universal-development`（DMG、PKG）。解压后的安装包文件名带 `-UNSIGNED`；此流程无需配置签名证书，也不会创建 GitHub Release。
 
-### 正式发布配置
+### 发布与签名配置
 
-所有版本均从 `Cargo.toml` 通过 `cargo metadata` 读取。发布标签必须严格等于 `v{Cargo 版本}`；CI 的格式检查、Clippy 和测试分别作为独立门禁。推送版本标签或手动选择该版本标签并开启发布时，只有两平台签名验证均成功的正式产物才会进入 Release，并生成完整的 `SHA256SUMS.txt`。手动发布必须选择 `all` 平台；未开启发布的手动运行只生成开发产物。
+所有版本均从 `Cargo.toml` 通过 `cargo metadata` 读取。发布标签必须严格等于 `v{Cargo 版本}`；CI 的格式检查、Clippy 和测试分别作为独立门禁。推送版本标签（或手动选择匹配标签并勾选 `publish_release`）时：
 
-在 GitHub Actions 仓库配置中设置：
+- **若仓库未配置签名证书**：对应平台自动回退为未签名构建（文件名带 `-UNSIGNED`），并照常生成 `SHA256SUMS.txt` 与 GitHub Release（首次运行需按系统提示手动放行，客户端内自动更新保留「前往下载」手动模式）。
+- **若仓库完整配置了对应平台的签名凭据**：按 `official` 模式进行代码签名、Apple 公证与可信发布者校验，仅发布签名通过的正式产物；若**只配置了部分**凭据变量或 Secret，工作流会直接报错中止以防意外降级。
+
+在 GitHub Actions 仓库配置中设置（可选，用于正式签名与内建自动更新验证）：
 
 | 平台 | Variables | Secrets |
 | --- | --- | --- |
 | macOS | `EARTH_UPDATE_MACOS_TEAM_ID`（10 位 Team ID）、`EARTH_MACOS_SIGN_IDENTITY`（Developer ID Application）、`EARTH_MACOS_INSTALLER_IDENTITY`（Developer ID Installer） | `EARTH_MACOS_APP_P12_BASE64`、`EARTH_MACOS_INSTALLER_P12_BASE64`、`EARTH_MACOS_P12_PASSWORD`、`EARTH_APPLE_ID`、`EARTH_APPLE_APP_PASSWORD` |
 | Windows | `EARTH_UPDATE_WINDOWS_CERT_SHA256`（发布者证书 DER 的 64 位 SHA-256 十六进制摘要） | `EARTH_WINDOWS_PFX_BASE64`、`EARTH_WINDOWS_PFX_PASSWORD` |
 
-本地正式打包时，macOS 还需设置 `EARTH_NOTARY_PROFILE` 为已创建的 `notarytool` 钥匙串凭据名称；Windows 需设置 `EARTH_WINDOWS_SIGN_THUMBPRINT` 为当前用户证书库中签名证书的 SHA-1 指纹，并安装 Windows SDK 的 `signtool`。可信发布者标识会编译进应用，必须在构建时提供。缺少正式发布凭据会直接失败，不会降级为未签名发布。
+本地正式打包时，macOS 还需设置 `EARTH_NOTARY_PROFILE` 为已创建的 `notarytool` 钥匙串凭据名称；Windows 需设置 `EARTH_WINDOWS_SIGN_THUMBPRINT` 为当前用户证书库中签名证书的 SHA-1 指纹，并安装 Windows SDK 的 `signtool`。
 
 ## 存储与采集限制
 
