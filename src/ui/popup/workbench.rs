@@ -24,7 +24,7 @@ pub(super) fn render_preview_pane(
             let Some(item) = item else {
                 ui.centered_and_justified(|ui| {
                     ui.label(
-                        RichText::new("选择左侧记录以预览详情与快捷加工")
+                        RichText::new(t("workbench.empty_hint"))
                             .size(13.0)
                             .color(palette.text_muted),
                     );
@@ -36,15 +36,15 @@ pub(super) fn render_preview_pane(
             let kind_label = match item.kind {
                 ClipKind::Text => {
                     if item.detected_color.is_some() {
-                        "颜色色值"
+                        t("workbench.kind.color")
                     } else if item.is_url {
-                        "网页链接"
+                        t("workbench.kind.url")
                     } else {
-                        "文本"
+                        t("workbench.kind.text")
                     }
                 }
-                ClipKind::Image => "图像",
-                ClipKind::Files => "文件",
+                ClipKind::Image => t("workbench.kind.image"),
+                ClipKind::Files => t("workbench.kind.files"),
             };
             state.ensure_preview_cache(item);
             let ts_str = state
@@ -56,7 +56,16 @@ pub(super) fn render_preview_pane(
                 .preview_cache
                 .as_ref()
                 .and_then(|c| c.text_stats)
-                .map(|(lines, chars, words)| format!(" · {lines} 行 · {chars} 字符 · {words} 词"))
+                .map(|(lines, chars, words)| {
+                    tf(
+                        "workbench.text_stats",
+                        &[
+                            ("lines", &lines.to_string()),
+                            ("chars", &chars.to_string()),
+                            ("words", &words.to_string()),
+                        ],
+                    )
+                })
                 .unwrap_or_default();
 
             ui.horizontal(|ui| {
@@ -69,12 +78,18 @@ pub(super) fn render_preview_pane(
                     .show(ui, |ui| {
                         ui.label(RichText::new(kind_label).size(11.0).color(tag_fg));
                     });
+                let count_s = item.copy_count.to_string();
+                let size_s = format_bytes(item.byte_size);
                 ui.add(
                     egui::Label::new(
-                        RichText::new(format!(
-                            "{ts_str} · 复制 {} 次 · {}{stats_suffix}",
-                            item.copy_count,
-                            format_bytes(item.byte_size)
+                        RichText::new(tf(
+                            "workbench.meta_summary",
+                            &[
+                                ("ts", ts_str),
+                                ("count", &count_s),
+                                ("size", &size_s),
+                                ("stats", &stats_suffix),
+                            ],
                         ))
                         .size(11.2)
                         .color(palette.text_secondary),
@@ -85,7 +100,7 @@ pub(super) fn render_preview_pane(
 
             if let Some(app) = &item.source_app {
                 ui.label(
-                    RichText::new(format!("来源应用：{app}"))
+                    RichText::new(tf("workbench.source_app", &[("app", app)]))
                         .size(11.0)
                         .color(palette.text_muted),
                 );
@@ -105,12 +120,16 @@ pub(super) fn render_preview_pane(
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 let pin_btn = if item.pinned {
-                    egui::Button::new(RichText::new("已固定").size(11.5).color(palette.warning_text))
-                        .fill(palette.warning_bg)
-                        .stroke(Stroke::new(1.0, palette.warning_border))
-                        .corner_radius(CornerRadius::same(255))
+                    egui::Button::new(
+                        RichText::new(t("workbench.pinned"))
+                            .size(11.5)
+                            .color(palette.warning_text),
+                    )
+                    .fill(palette.warning_bg)
+                    .stroke(Stroke::new(1.0, palette.warning_border))
+                    .corner_radius(CornerRadius::same(255))
                 } else {
-                    egui::Button::new(RichText::new("固定").size(11.5))
+                    egui::Button::new(RichText::new(t("workbench.pin")).size(11.5))
                         .corner_radius(CornerRadius::same(255))
                 };
                 if ui.add(pin_btn).clicked() {
@@ -122,13 +141,16 @@ pub(super) fn render_preview_pane(
                     .collection_id
                     .and_then(|cid| collections.iter().find(|c| c.id == cid))
                     .map(|c| c.name.as_str())
-                    .unwrap_or("加入收藏分组");
+                    .unwrap_or(t("workbench.collection_placeholder"));
                 egui::ComboBox::from_id_salt(("preview_col", item.id))
                     .selected_text(cur_col)
                     .width(110.0)
                     .show_ui(ui, |ui| {
                         if ui
-                            .selectable_label(item.collection_id.is_none(), "未分组")
+                            .selectable_label(
+                                item.collection_id.is_none(),
+                                t("workbench.collection_none"),
+                            )
                             .clicked()
                         {
                             actions.push(PopupAction::SetCollection {
@@ -149,11 +171,15 @@ pub(super) fn render_preview_pane(
                         }
                     });
 
-                let note_lbl = if item.note.as_deref().map(str::trim).is_some_and(|n| !n.is_empty())
+                let note_lbl = if item
+                    .note
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|n| !n.is_empty())
                 {
-                    "备注"
+                    t("workbench.note")
                 } else {
-                    "+ 备注"
+                    t("workbench.add_note")
                 };
                 if compact_button(ui, note_lbl).clicked() {
                     if is_editing_note {
@@ -165,7 +191,11 @@ pub(super) fn render_preview_pane(
                 }
 
                 if item.kind == ClipKind::Text && !is_masked(item, privacy_masking, state) {
-                    let edit_lbl = if is_editing_text { "退出编辑" } else { "编辑" };
+                    let edit_lbl = if is_editing_text {
+                        t("workbench.exit_edit")
+                    } else {
+                        t("workbench.edit")
+                    };
                     if compact_button(ui, edit_lbl).clicked() {
                         if is_editing_text {
                             state.inline_edit_text = None;
@@ -179,7 +209,11 @@ pub(super) fn render_preview_pane(
 
                 if item.is_sensitive() && privacy_masking {
                     let revealed = state.revealed_sensitive_ids.contains(&item.id);
-                    let btn_lbl = if revealed { "隐藏明文" } else { "显示明文" };
+                    let btn_lbl = if revealed {
+                        t("workbench.hide_plain")
+                    } else {
+                        t("workbench.show_plain")
+                    };
                     if compact_button(ui, btn_lbl).clicked() {
                         if revealed {
                             state.clear_sensitive_context();
@@ -190,10 +224,12 @@ pub(super) fn render_preview_pane(
                 }
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let del_btn = egui::Button::new(RichText::new("删除").color(palette.danger))
-                        .fill(palette.danger_bg)
-                        .stroke(Stroke::new(1.0, palette.danger_border))
-                        .corner_radius(CornerRadius::same(255));
+                    let del_btn = egui::Button::new(
+                        RichText::new(t("workbench.delete")).color(palette.danger),
+                    )
+                    .fill(palette.danger_bg)
+                    .stroke(Stroke::new(1.0, palette.danger_border))
+                    .corner_radius(CornerRadius::same(255));
                     if padded_button(ui, del_btn, vec2(11.0, 4.5)).clicked() {
                         actions.push(PopupAction::DeleteItem(item.id));
                     }
@@ -216,15 +252,18 @@ pub(super) fn render_preview_pane(
                                 ui.visuals_mut().widgets.active.corner_radius = r;
                                 ui.add(
                                     egui::TextEdit::singleline(note_buf)
-                                        .hint_text("输入备注别名（支持搜索匹配）…")
+                                        .hint_text(t("workbench.note_hint"))
                                         .margin(egui::Margin::symmetric(8, 4))
                                         .desired_width(edit_w),
                                 )
                             })
                             .inner;
-                        let enter_hit = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                        let enter_hit =
+                            resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                         let save_btn = egui::Button::new(
-                            RichText::new("保存").size(11.0).color(palette.on_accent),
+                            RichText::new(t("workbench.save"))
+                                .size(11.0)
+                                .color(palette.on_accent),
                         )
                         .fill(palette.accent)
                         .stroke(Stroke::NONE)
@@ -232,7 +271,7 @@ pub(super) fn render_preview_pane(
                         if padded_button(ui, save_btn, vec2(9.0, 3.0)).clicked() || enter_hit {
                             save_note = Some(note_buf.trim().to_string());
                         }
-                        if compact_button(ui, "清除").clicked() {
+                        if compact_button(ui, t("workbench.clear")).clicked() {
                             save_note = Some(String::new());
                         }
                         if dismiss_button(ui).clicked() {
@@ -249,19 +288,26 @@ pub(super) fn render_preview_pane(
                 } else if cancel_note {
                     state.inline_edit_note = None;
                 }
-            } else if let Some(note) = item.note.as_deref().map(str::trim).filter(|n| !n.is_empty())
+            } else if let Some(note) = item
+                .note
+                .as_deref()
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
             {
                 ui.add_space(2.0);
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(format!("备注：{note}"))
+                        RichText::new(tf("workbench.note_display", &[("note", note)]))
                             .size(11.5)
                             .color(palette.accent_text),
                     );
-                    if compact_button(ui, "修改").clicked() {
+                    if compact_button(ui, t("workbench.modify")).clicked() {
                         state.inline_edit_note = Some((item.id, note.to_string()));
                     }
-                    if dismiss_button(ui).on_hover_text("清除备注").clicked() {
+                    if dismiss_button(ui)
+                        .on_hover_text(t("workbench.clear_note_tip"))
+                        .clicked()
+                    {
                         actions.push(PopupAction::SetItemNote {
                             item_id: item.id,
                             note: None,
@@ -307,7 +353,7 @@ pub(super) fn render_preview_pane(
                                 if let Some((_, ref mut edit_buf)) = state.inline_edit_text {
                                     ui.horizontal(|ui| {
                                         let save_btn = egui::Button::new(
-                                            RichText::new("保存修改")
+                                            RichText::new(t("workbench.save_changes"))
                                                 .size(11.0)
                                                 .color(palette.on_accent),
                                         )
@@ -317,10 +363,12 @@ pub(super) fn render_preview_pane(
                                         if padded_button(ui, save_btn, vec2(10.0, 3.5)).clicked() {
                                             commit_edit = Some((edit_buf.clone(), false));
                                         }
-                                        if compact_button(ui, "保存并粘贴").clicked() {
+                                        if compact_button(ui, t("workbench.save_and_paste"))
+                                            .clicked()
+                                        {
                                             commit_edit = Some((edit_buf.clone(), true));
                                         }
-                                        if compact_button(ui, "取消").clicked() {
+                                        if compact_button(ui, t("workbench.cancel")).clicked() {
                                             cancel_edit = true;
                                         }
                                     });
@@ -350,10 +398,14 @@ pub(super) fn render_preview_pane(
                                     state.inline_edit_text = None;
                                 }
                             } else if hidden {
+                                let label = item
+                                    .sensitive_label
+                                    .as_deref()
+                                    .unwrap_or(t("workbench.sensitive_default_label"));
                                 ui.label(
-                                    RichText::new(format!(
-                                        "🔒 检测到敏感内容（{}），已默认脱敏保护。\n点击上方「显示明文」按钮可临时查看完整内容。",
-                                        item.sensitive_label.as_deref().unwrap_or("凭据")
+                                    RichText::new(tf(
+                                        "workbench.sensitive_notice",
+                                        &[("label", label)],
                                     ))
                                     .size(12.5)
                                     .color(palette.text_secondary),
@@ -370,12 +422,21 @@ pub(super) fn render_preview_pane(
                                             && let Ok(pixels) = qr_pixels(*width, modules)
                                         {
                                             cache.qr_texture = Some(ui.ctx().load_texture(
-                                                format!("earth-qr:{}", item.id), pixels, egui::TextureOptions::NEAREST,
+                                                format!("earth-qr:{}", item.id),
+                                                pixels,
+                                                egui::TextureOptions::NEAREST,
                                             ));
                                         }
                                         cache.qr_texture.clone()
                                     });
-                                    render_qr_card(ui, &res, texture.as_ref(), body_h, palette, &mut state.qr_export);
+                                    render_qr_card(
+                                        ui,
+                                        &res,
+                                        texture.as_ref(),
+                                        body_h,
+                                        palette,
+                                        &mut state.qr_export,
+                                    );
                                 }
                             } else {
                                 if let Some(rgba) = item.detected_color {
@@ -416,13 +477,20 @@ pub(super) fn render_preview_pane(
                                 match state.image_preview.texture(ui.ctx(), path) {
                                     Ok(Some(texture)) => {
                                         ui.centered_and_justified(|ui| {
-                                            ui.add(egui::Image::from_texture(&texture)
-                                                .max_size(vec2(max_w, max_h))
-                                                .corner_radius(CornerRadius::same(12)));
+                                            ui.add(
+                                                egui::Image::from_texture(&texture)
+                                                    .max_size(vec2(max_w, max_h))
+                                                    .corner_radius(CornerRadius::same(12)),
+                                            );
                                         });
                                     }
-                                    Ok(None) => { ui.spinner(); ui.label("正在加载预览…"); }
-                                    Err(error) => { ui.label(RichText::new(error).color(palette.danger)); }
+                                    Ok(None) => {
+                                        ui.spinner();
+                                        ui.label(t("workbench.loading_preview"));
+                                    }
+                                    Err(error) => {
+                                        ui.label(RichText::new(error).color(palette.danger));
+                                    }
                                 }
                             }
                         }
@@ -442,11 +510,17 @@ pub(super) fn render_preview_pane(
                                         ui.set_width(ui.available_width());
                                         ui.horizontal(|ui| {
                                             ui.label(
-                                                RichText::new(if f.is_dir { "📁" } else { "📄" })
-                                                    .size(13.0),
+                                                RichText::new(if f.is_dir {
+                                                    "📁"
+                                                } else {
+                                                    "📄"
+                                                })
+                                                .size(13.0),
                                             );
                                             ui.vertical(|ui| {
-                                                ui.label(RichText::new(&f.name).strong().size(12.5));
+                                                ui.label(
+                                                    RichText::new(&f.name).strong().size(12.5),
+                                                );
                                                 ui.label(
                                                     RichText::new(&f.path)
                                                         .size(11.0)
@@ -454,28 +528,32 @@ pub(super) fn render_preview_pane(
                                                 );
                                                 let status = if exists {
                                                     if f.is_dir {
-                                                        "文件夹 · 有效".to_string()
+                                                        t("workbench.file_dir_valid").to_string()
                                                     } else {
-                                                        format!("{} · 有效", format_bytes(f.size_bytes))
+                                                        let size_s = format_bytes(f.size_bytes);
+                                                        tf(
+                                                            "workbench.file_valid",
+                                                            &[("size", &size_s)],
+                                                        )
                                                     }
                                                 } else {
-                                                    "⚠ 原路径不存在".to_string()
+                                                    t("workbench.file_missing").to_string()
                                                 };
-                                                ui.label(
-                                                    RichText::new(status)
-                                                        .size(10.5)
-                                                        .color(if exists {
-                                                            palette.success_text
-                                                        } else {
-                                                            palette.danger_text
-                                                        }),
-                                                );
+                                                ui.label(RichText::new(status).size(10.5).color(
+                                                    if exists {
+                                                        palette.success_text
+                                                    } else {
+                                                        palette.danger_text
+                                                    },
+                                                ));
                                             });
                                             if exists {
                                                 ui.with_layout(
                                                     Layout::right_to_left(Align::Center),
                                                     |ui| {
-                                                        if compact_button(ui, "定位").clicked() {
+                                                        if compact_button(ui, t("workbench.reveal"))
+                                                            .clicked()
+                                                        {
                                                             actions.push(PopupAction::RevealFile(
                                                                 PathBuf::from(&f.path),
                                                             ));
@@ -488,10 +566,11 @@ pub(super) fn render_preview_pane(
                                 ui.add_space(4.0);
                             }
                             if item.files.len() > MAX_PREVIEW_FILES {
+                                let rem = (item.files.len() - MAX_PREVIEW_FILES).to_string();
                                 ui.label(
-                                    RichText::new(format!(
-                                        "… 其余 {} 个文件（粘贴时保留完整列表）",
-                                        item.files.len() - MAX_PREVIEW_FILES
+                                    RichText::new(tf(
+                                        "workbench.files_remaining",
+                                        &[("count", &rem)],
                                     ))
                                     .size(11.0)
                                     .color(palette.text_muted),
@@ -514,12 +593,16 @@ pub(super) fn render_preview_pane(
                         .unwrap_or_default();
                     let hidden = is_masked(item, privacy_masking, state);
                     ui.horizontal_wrapped(|ui| {
-                        if item.is_url && compact_button(ui, "打开链接").clicked() {
+                        if item.is_url && compact_button(ui, t("workbench.open_url")).clicked() {
                             actions.push(PopupAction::OpenUrl(raw.trim().to_string()));
                         }
                         if raw.len() <= 2048 && !hidden {
                             let qr_active = state.qr_preview_id == Some(item.id);
-                            let qr_lbl = if qr_active { "收起二维码" } else { "二维码" };
+                            let qr_lbl = if qr_active {
+                                t("workbench.hide_qr")
+                            } else {
+                                t("workbench.show_qr")
+                            };
                             if compact_button(ui, qr_lbl).clicked() {
                                 if qr_active {
                                     state.qr_preview_id = None;
@@ -540,88 +623,82 @@ pub(super) fn render_preview_pane(
 
                     let mut clear_transform = false;
                     if let Some((tid, qa, ref res)) = state.active_transform
-                        && tid == item.id && !hidden {
-                            ui.add_space(4.0);
-                            egui::Frame::NONE
-                                .fill(palette.info_bg)
-                                .stroke(Stroke::new(1.0, palette.info_border))
-                                .corner_radius(CornerRadius::same(14))
-                                .inner_margin(egui::Margin::same(8))
-                                .show(ui, |ui| {
-                                    ui.set_width(ui.available_width());
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            RichText::new(format!("⚡ {} 结果", qa.label()))
-                                                .size(11.5)
-                                                .strong()
-                                                .color(palette.accent_text),
-                                        );
-                                        ui.with_layout(
-                                            Layout::right_to_left(Align::Center),
-                                            |ui| {
-                                                if dismiss_button(ui).clicked() {
-                                                    clear_transform = true;
-                                                }
-                                                if let Ok(txt) = res {
-                                                    let paste_btn = egui::Button::new(
-                                                        RichText::new("粘贴结果")
-                                                            .size(11.0)
-                                                            .color(palette.on_accent),
-                                                    )
-                                                    .fill(palette.accent)
-                                                    .stroke(Stroke::NONE)
-                                                    .corner_radius(CornerRadius::same(255));
-                                                    if padded_button(
-                                                        ui,
-                                                        paste_btn,
-                                                        vec2(10.0, 4.5),
-                                                    )
-                                                    .clicked()
-                                                    {
-                                                        actions.push(
-                                                            PopupAction::PasteTransformedText(
-                                                                txt.clone(),
-                                                            ),
-                                                        );
-                                                    }
-                                                    if compact_button(ui, "复制结果").clicked() {
-                                                        actions.push(
-                                                            PopupAction::CopyTransformedText(
-                                                                txt.clone(),
-                                                            ),
-                                                        );
-                                                    }
-                                                }
-                                            },
-                                        );
+                        && tid == item.id
+                        && !hidden
+                    {
+                        ui.add_space(4.0);
+                        egui::Frame::NONE
+                            .fill(palette.info_bg)
+                            .stroke(Stroke::new(1.0, palette.info_border))
+                            .corner_radius(CornerRadius::same(14))
+                            .inner_margin(egui::Margin::same(8))
+                            .show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(tf(
+                                            "workbench.qa_result",
+                                            &[("action", qa.label())],
+                                        ))
+                                        .size(11.5)
+                                        .strong()
+                                        .color(palette.accent_text),
+                                    );
+                                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                        if dismiss_button(ui).clicked() {
+                                            clear_transform = true;
+                                        }
+                                        if let Ok(txt) = res {
+                                            let paste_btn = egui::Button::new(
+                                                RichText::new(t("workbench.paste_result"))
+                                                    .size(11.0)
+                                                    .color(palette.on_accent),
+                                            )
+                                            .fill(palette.accent)
+                                            .stroke(Stroke::NONE)
+                                            .corner_radius(CornerRadius::same(255));
+                                            if padded_button(ui, paste_btn, vec2(10.0, 4.5))
+                                                .clicked()
+                                            {
+                                                actions.push(PopupAction::PasteTransformedText(
+                                                    txt.clone(),
+                                                ));
+                                            }
+                                            if compact_button(ui, t("workbench.copy_result"))
+                                                .clicked()
+                                            {
+                                                actions.push(PopupAction::CopyTransformedText(
+                                                    txt.clone(),
+                                                ));
+                                            }
+                                        }
                                     });
-                                    match res {
-                                        Ok(out) => {
-                                            ScrollArea::vertical()
-                                                .id_salt("qa_result_scroll")
-                                                .max_height(56.0)
-                                                .scroll_source(desktop_scroll_source())
-                                                .show(ui, |ui| {
-                                                    ui.add(
-                                                        egui::Label::new(
-                                                            RichText::new(out)
-                                                                .font(FontId::monospace(11.5))
-                                                                .color(palette.text_primary),
-                                                        )
-                                                        .wrap(),
-                                                    );
-                                                });
-                                        }
-                                        Err(err) => {
-                                            ui.label(
-                                                RichText::new(err)
-                                                    .size(11.5)
-                                                    .color(palette.danger),
-                                            );
-                                        }
-                                    }
                                 });
-                        }
+                                match res {
+                                    Ok(out) => {
+                                        ScrollArea::vertical()
+                                            .id_salt("qa_result_scroll")
+                                            .max_height(56.0)
+                                            .scroll_source(desktop_scroll_source())
+                                            .show(ui, |ui| {
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        RichText::new(out)
+                                                            .font(FontId::monospace(11.5))
+                                                            .color(palette.text_primary),
+                                                    )
+                                                    .wrap(),
+                                                );
+                                            });
+                                    }
+                                    Err(err) => {
+                                        ui.label(
+                                            RichText::new(err).size(11.5).color(palette.danger),
+                                        );
+                                    }
+                                }
+                            });
+                    }
                     if clear_transform {
                         state.active_transform = None;
                     }
@@ -629,18 +706,19 @@ pub(super) fn render_preview_pane(
                 ClipKind::Image => {
                     ui.horizontal(|ui| {
                         let zoom_lbl = if state.image_actual_size {
-                            "适应窗口"
+                            t("workbench.image_fit")
                         } else {
-                            "清晰预览（最高 2048px）"
+                            t("workbench.image_crisp")
                         };
                         if compact_button(ui, zoom_lbl).clicked() {
                             state.image_actual_size = !state.image_actual_size;
                         }
                         if let Some(path) = &item.image_path
-                            && compact_button(ui, "另存为图片...").clicked() {
-                                actions.push(PopupAction::SaveImageAs(path.clone()));
-                            }
-                        if compact_button(ui, "复制并粘贴图片").clicked() {
+                            && compact_button(ui, t("workbench.save_image_as")).clicked()
+                        {
+                            actions.push(PopupAction::SaveImageAs(path.clone()));
+                        }
+                        if compact_button(ui, t("workbench.copy_and_paste_image")).clicked() {
                             actions.push(PopupAction::PasteItem {
                                 id: item.id,
                                 behavior: PasteBehavior::CopyAndPaste,
@@ -650,7 +728,7 @@ pub(super) fn render_preview_pane(
                 }
                 ClipKind::Files => {
                     ui.horizontal(|ui| {
-                        if compact_button(ui, "复制路径文本").clicked() {
+                        if compact_button(ui, t("workbench.copy_paths")).clicked() {
                             let paths = item
                                 .files
                                 .iter()
@@ -664,9 +742,10 @@ pub(super) fn render_preview_pane(
                             .as_ref()
                             .and_then(|c| c.file_exists.iter().position(|&ok| ok));
                         if let Some(first) = first_valid_idx.and_then(|i| item.files.get(i))
-                            && compact_button(ui, "在文件管理器中定位").clicked() {
-                                actions.push(PopupAction::RevealFile(PathBuf::from(&first.path)));
-                            }
+                            && compact_button(ui, t("workbench.reveal_in_manager")).clicked()
+                        {
+                            actions.push(PopupAction::RevealFile(PathBuf::from(&first.path)));
+                        }
                     });
                 }
             }

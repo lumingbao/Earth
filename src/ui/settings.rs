@@ -2,6 +2,7 @@ use crate::hotkey::{
     ShortcutCapture, capture_egui_shortcut, format_live_modifiers, format_shortcut_display,
     validate_shortcut,
 };
+use crate::i18n::{AppLanguage, t, tf};
 use crate::model::{
     AppSettings, Collection, CopyTriggerMode, MatchHighlight, PinPosition, PopupPosition,
     SearchBoxVisibility, SearchMode, SortOrder, ThemeMode, format_bytes,
@@ -172,7 +173,7 @@ pub fn render_settings_view(
                 state.recording = None;
             }
             CapturePoll::NeedsModifier => {
-                state.set_status_message("请配合 Ctrl / Alt / Shift 等修饰键组合使用", true);
+                state.set_status_message(t("settings.general.shortcut_needs_mod"), true);
             }
             CapturePoll::Combo(combo) => {
                 if let Err(error) = validate_shortcut(&combo, target == RecordingTarget::Open) {
@@ -212,7 +213,7 @@ pub fn render_settings_view(
 
     // Header bar (draggable)
     ui.horizontal(|ui| {
-        let back_btn = egui::Button::new(RichText::new("← 返回剪贴板").size(12.5))
+        let back_btn = egui::Button::new(RichText::new(t("settings.back")).size(12.5))
             .fill(palette.surface_bg)
             .stroke(Stroke::new(1.0, palette.border))
             .corner_radius(CornerRadius::same(255));
@@ -231,7 +232,7 @@ pub fn render_settings_view(
         ui.painter().text(
             drag_resp.rect.center(),
             egui::Align2::CENTER_CENTER,
-            "Earth 偏好设置",
+            t("settings.title"),
             egui::FontId::proportional(14.5),
             palette.text_primary,
         );
@@ -263,11 +264,11 @@ pub fn render_settings_view(
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 let tabs = [
-                    (SettingsTab::General, "通用"),
-                    (SettingsTab::Storage, "存储"),
-                    (SettingsTab::Appearance, "外观"),
-                    (SettingsTab::Ignore, "忽略与隐私"),
-                    (SettingsTab::Advanced, "高级与收藏"),
+                    (SettingsTab::General, t("settings.tab.general")),
+                    (SettingsTab::Storage, t("settings.tab.storage")),
+                    (SettingsTab::Appearance, t("settings.tab.appearance")),
+                    (SettingsTab::Ignore, t("settings.tab.ignore")),
+                    (SettingsTab::Advanced, t("settings.tab.advanced")),
                 ];
                 let tab_width = (ui.available_width() - 16.0) / tabs.len() as f32;
                 for (tab, label) in tabs {
@@ -400,15 +401,38 @@ fn render_general_tab(
     actions: &mut Vec<SettingsAction>,
 ) {
     section_card(ui, palette, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(t("settings.general.language"));
+            egui::ComboBox::from_id_salt("app_language_combo")
+                .selected_text(settings.language.label())
+                .show_ui(ui, |ui| {
+                    for lang in [AppLanguage::System, AppLanguage::ZhCn, AppLanguage::EnUs] {
+                        if ui
+                            .selectable_value(&mut settings.language, lang, lang.label())
+                            .changed()
+                        {
+                            crate::i18n::set_language(settings.language);
+                            actions.push(SettingsAction::SettingsChanged);
+                        }
+                    }
+                });
+        });
+        ui.add_space(4.0);
         if ui
-            .checkbox(&mut settings.launch_at_login, "登录时启动 Earth")
+            .checkbox(
+                &mut settings.launch_at_login,
+                t("settings.general.launch_at_login"),
+            )
             .changed()
         {
             actions.push(SettingsAction::ToggleAutostart(settings.launch_at_login));
         }
         ui.horizontal(|ui| {
             if ui
-                .checkbox(&mut settings.check_updates, "启用更新提示检查")
+                .checkbox(
+                    &mut settings.check_updates,
+                    t("settings.general.check_updates"),
+                )
                 .changed()
             {
                 actions.push(SettingsAction::SettingsChanged);
@@ -416,11 +440,11 @@ fn render_general_tab(
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if state.checking_updates {
                     ui.label(
-                        RichText::new("正在检查更新...")
+                        RichText::new(t("settings.general.checking_updates"))
                             .size(11.5)
                             .color(palette.text_muted),
                     );
-                } else if compact_button(ui, "检查更新").clicked() {
+                } else if compact_button(ui, t("settings.general.check_updates_now")).clicked() {
                     state.checking_updates = true;
                     actions.push(SettingsAction::CheckUpdatesNow);
                 }
@@ -438,18 +462,19 @@ fn render_general_tab(
             ui.horizontal(|ui| {
                 if has_accessibility {
                     ui.label(
-                        RichText::new("✓ macOS 辅助功能权限已就绪（支持自动粘贴）")
+                        RichText::new(t("settings.general.accessibility_ok"))
                             .size(12.0)
                             .color(palette.success_text),
                     );
                 } else {
                     ui.label(
-                        RichText::new("⚠ 未授予辅助功能权限，自动粘贴需要授权")
+                        RichText::new(t("settings.general.accessibility_missing"))
                             .size(12.0)
                             .color(palette.warning_text),
                     );
                     let auth_btn = egui::Button::new(
-                        RichText::new("前往系统设置授权").color(palette.on_accent),
+                        RichText::new(t("settings.general.accessibility_grant"))
+                            .color(palette.on_accent),
                     )
                     .fill(palette.accent)
                     .stroke(Stroke::NONE)
@@ -461,7 +486,7 @@ fn render_general_tab(
             });
             if !has_accessibility {
                 ui.label(
-                    RichText::new("若系统设置中已开启开关但此处仍提示未授权，是因为版本更新后签名刷新：请在系统设置「辅助功能」中选中 Earth 点击「-」移除后重新添加（或开关一次）。")
+                    RichText::new(t("settings.general.accessibility_hint"))
                         .size(11.0)
                         .color(palette.text_muted),
                 );
@@ -474,7 +499,7 @@ fn render_general_tab(
     ui.add_space(8.0);
     section_card(ui, palette, |ui| {
         ui.label(
-            RichText::new("快捷键（点击右侧按键框后直接按下新组合键）")
+            RichText::new(t("settings.general.shortcuts_title"))
                 .size(12.0)
                 .color(palette.text_secondary),
         );
@@ -488,7 +513,7 @@ fn render_general_tab(
         let mut new_open = settings.hotkey_open.clone();
         if shortcut_row(
             ui,
-            "打开 Earth：",
+            t("settings.general.shortcut_open"),
             &mut new_open,
             &default_open,
             RecordingTarget::Open,
@@ -499,7 +524,7 @@ fn render_general_tab(
         }
         if shortcut_row(
             ui,
-            "固定记录：",
+            t("settings.general.shortcut_pin"),
             &mut settings.hotkey_pin,
             &default_pin,
             RecordingTarget::Pin,
@@ -510,7 +535,7 @@ fn render_general_tab(
         }
         if shortcut_row(
             ui,
-            "删除记录：",
+            t("settings.general.shortcut_delete"),
             &mut settings.hotkey_delete,
             &default_del,
             RecordingTarget::Delete,
@@ -521,7 +546,7 @@ fn render_general_tab(
         }
         if shortcut_row(
             ui,
-            "展开速览：",
+            t("settings.general.shortcut_preview"),
             &mut settings.hotkey_preview,
             &default_prev,
             RecordingTarget::Preview,
@@ -535,7 +560,7 @@ fn render_general_tab(
     ui.add_space(8.0);
     section_card(ui, palette, |ui| {
         ui.horizontal(|ui| {
-            ui.label("鼠标点击记录：");
+            ui.label(t("settings.general.click_mode"));
             egui::ComboBox::from_id_salt("copy_trigger_mode_combo")
                 .selected_text(settings.copy_trigger_mode.label())
                 .show_ui(ui, |ui| {
@@ -551,10 +576,8 @@ fn render_general_tab(
         });
 
         let click_hint = match settings.copy_trigger_mode {
-            CopyTriggerMode::DoubleClick => "单击记录展开右侧工作台预览，双击记录执行复制/粘贴。",
-            CopyTriggerMode::SingleClick => {
-                "工作台收起时单击记录直接复制/粘贴（不自动展开工作台）；可通过顶部栏分栏按钮、快捷键或右键菜单打开工作台，工作台展开时单击其他记录可切换预览，再次点击当前选中记录即可复制。"
-            }
+            CopyTriggerMode::DoubleClick => t("settings.general.click_hint_double"),
+            CopyTriggerMode::SingleClick => t("settings.general.click_hint_single"),
         };
         ui.label(
             RichText::new(click_hint)
@@ -564,7 +587,7 @@ fn render_general_tab(
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("搜索匹配模式：");
+            ui.label(t("settings.general.search_mode"));
             egui::ComboBox::from_id_salt("search_mode_combo")
                 .selected_text(settings.search_mode.label())
                 .show_ui(ui, |ui| {
@@ -581,7 +604,7 @@ fn render_general_tab(
 
         ui.add_space(4.0);
         if ui
-            .checkbox(&mut settings.auto_paste, "选择后自动粘贴到原应用")
+            .checkbox(&mut settings.auto_paste, t("settings.general.auto_paste"))
             .changed()
         {
             actions.push(SettingsAction::SettingsChanged);
@@ -589,7 +612,7 @@ fn render_general_tab(
         if ui
             .checkbox(
                 &mut settings.plain_text_paste,
-                "默认以纯文本格式粘贴（去除富文本样式）",
+                t("settings.general.plain_text_paste"),
             )
             .changed()
         {
@@ -598,9 +621,9 @@ fn render_general_tab(
 
         ui.add_space(4.0);
         #[cfg(target_os = "macos")]
-        let hint = "• 按住 ⌥ 并点击/回车：仅复制到剪贴板\n• 按住 ⌘ 并点击/回车：复制并立即粘贴\n• 按住 ⇧⌘ 并点击/回车：复制并以纯文本匹配格式粘贴";
+        let hint = t("settings.general.paste_hint_macos");
         #[cfg(not(target_os = "macos"))]
-        let hint = "• 按住 Alt 并点击/回车：仅复制到剪贴板\n• 直接点击/回车（或 Ctrl+Enter）：复制并按默认方式粘贴\n• 按住 Ctrl+Shift 并点击/回车：复制并以纯文本匹配格式粘贴";
+        let hint = t("settings.general.paste_hint_other");
 
         ui.label(RichText::new(hint).size(11.5).color(palette.text_muted));
     });
@@ -615,19 +638,31 @@ fn render_update_status_row(
 ) {
     let (status_text, status_color) = match dl_state {
         UpdateDownloadState::Downloading { version } if version == &rel.version => (
-            format!("⬇ 正在下载新版本 v{}…", rel.version),
+            tf(
+                "settings.general.update_downloading",
+                &[("version", &rel.version)],
+            ),
             palette.accent_text,
         ),
         UpdateDownloadState::ReadyToInstall { version, .. } if version == &rel.version => (
-            format!("✓ 新版本 v{} 已就绪", rel.version),
+            tf(
+                "settings.general.update_ready",
+                &[("version", &rel.version)],
+            ),
             palette.success_text,
         ),
         UpdateDownloadState::Failed { version, error } if version == &rel.version => (
-            format!("⚠ v{} 自动下载失败：{error}", rel.version),
+            tf(
+                "settings.general.update_failed",
+                &[("version", &rel.version), ("error", error)],
+            ),
             palette.warning_text,
         ),
         _ => (
-            format!("🎉 发现新版本 v{}", rel.version),
+            tf(
+                "settings.general.update_available",
+                &[("version", &rel.version)],
+            ),
             palette.accent_text,
         ),
     };
@@ -668,7 +703,7 @@ fn render_update_status_row(
                     },
                 );
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if compact_button(ui, "前往下载").clicked() {
+                    if compact_button(ui, t("banner.update_open_download")).clicked() {
                         actions.push(SettingsAction::OpenUrl(rel.html_url.clone()));
                     }
                     match dl_state {
@@ -677,7 +712,7 @@ fn render_update_status_row(
                             staged_path,
                         } if version == &rel.version => {
                             let restart_btn = egui::Button::new(
-                                RichText::new("重启完成更新")
+                                RichText::new(t("banner.update_restart"))
                                     .size(11.0)
                                     .color(palette.on_accent),
                             )
@@ -695,13 +730,13 @@ fn render_update_status_row(
                         UpdateDownloadState::Failed { version, .. }
                             if version == &rel.version && rel.download_url.is_some() =>
                         {
-                            if compact_button(ui, "重试自动更新").clicked() {
+                            if compact_button(ui, t("settings.general.update_retry")).clicked() {
                                 actions.push(SettingsAction::StartUpdateDownload(rel.clone()));
                             }
                         }
                         _ if rel.download_url.is_some() => {
                             let auto_btn = egui::Button::new(
-                                RichText::new("自动更新")
+                                RichText::new(t("banner.update_auto"))
                                     .size(11.0)
                                     .color(palette.on_accent),
                             )
@@ -754,9 +789,12 @@ fn shortcut_row(
         };
         let text = if is_recording {
             if let Some(mods) = live_mods {
-                format!("{mods}+... (Esc 取消)")
+                tf(
+                    "settings.general.shortcut_recording_mods",
+                    &[("mods", &mods)],
+                )
             } else {
-                "请按下组合键 (Esc 取消)...".to_string()
+                t("settings.general.shortcut_recording").to_string()
             }
         } else {
             format_shortcut_display(value)
@@ -786,8 +824,8 @@ fn shortcut_row(
             ui.ctx().memory_mut(|m| m.surrender_focus(resp.id));
         }
 
-        if compact_button(ui, "重置")
-            .on_hover_text("恢复默认快捷键")
+        if compact_button(ui, t("settings.general.shortcut_reset"))
+            .on_hover_text(t("settings.general.shortcut_reset_tip"))
             .clicked()
         {
             *value = default_val.to_string();
@@ -807,30 +845,37 @@ fn render_storage_tab(
     actions: &mut Vec<SettingsAction>,
 ) {
     section_card(ui, palette, |ui| {
-        ui.label(RichText::new("保存以下剪贴板类型：").strong());
+        ui.label(RichText::new(t("settings.storage.save_types")).strong());
         ui.add_space(4.0);
-        if ui.checkbox(&mut settings.save_files, "文件").changed() {
+        if ui
+            .checkbox(&mut settings.save_files, t("settings.storage.type_files"))
+            .changed()
+        {
             actions.push(SettingsAction::SettingsChanged);
         }
-        if ui.checkbox(&mut settings.save_images, "图像").changed() {
+        if ui
+            .checkbox(&mut settings.save_images, t("settings.storage.type_images"))
+            .changed()
+        {
             actions.push(SettingsAction::SettingsChanged);
         }
-        if ui.checkbox(&mut settings.save_text, "文本").changed() {
+        if ui
+            .checkbox(&mut settings.save_text, t("settings.storage.type_text"))
+            .changed()
+        {
             actions.push(SettingsAction::SettingsChanged);
         }
         ui.label(
-            RichText::new(
-                "仅记录勾选类型的复制内容（已固定和已加入收藏分组的记录不会被自动淘汰）。",
-            )
-            .size(11.5)
-            .color(palette.text_muted),
+            RichText::new(t("settings.storage.save_types_hint"))
+                .size(11.5)
+                .color(palette.text_muted),
         );
     });
 
     ui.add_space(8.0);
     section_card(ui, palette, |ui| {
         ui.horizontal(|ui| {
-            ui.label("历史上限数量：");
+            ui.label(t("settings.storage.max_history"));
             if ui
                 .add(
                     egui::DragValue::new(&mut settings.max_history)
@@ -842,10 +887,12 @@ fn render_storage_tab(
                 actions.push(SettingsAction::SettingsChanged);
             }
             ui.add_space(12.0);
+            let count_s = item_count.to_string();
+            let size_s = format_bytes(storage_bytes);
             ui.label(
-                RichText::new(format!(
-                    "当前 {item_count} 条 · 占用 {}",
-                    format_bytes(storage_bytes)
+                RichText::new(tf(
+                    "settings.storage.stats",
+                    &[("count", &count_s), ("size", &size_s)],
                 ))
                 .size(12.0)
                 .color(palette.text_secondary),
@@ -853,26 +900,26 @@ fn render_storage_tab(
         });
 
         ui.horizontal_wrapped(|ui| {
-            ui.label("单条上限（超限跳过）：");
+            ui.label(t("settings.storage.item_limits"));
             if ui
                 .add(
                     egui::DragValue::new(&mut settings.max_text_mib)
                         .range(1..=16)
-                        .prefix("文本 ")
+                        .prefix(t("settings.storage.limit_text_prefix"))
                         .suffix(" MiB"),
                 )
                 .changed()
                 | ui.add(
                     egui::DragValue::new(&mut settings.max_image_mib)
                         .range(1..=64)
-                        .prefix("图片 ")
+                        .prefix(t("settings.storage.limit_image_prefix"))
                         .suffix(" MiB"),
                 )
                 .changed()
                 | ui.add(
                     egui::DragValue::new(&mut settings.max_image_megapixels)
                         .range(1..=64)
-                        .suffix(" 百万像素"),
+                        .suffix(t("settings.storage.limit_megapixels_suffix")),
                 )
                 .changed()
             {
@@ -881,7 +928,7 @@ fn render_storage_tab(
         });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
-            ui.label("默认排序方式：");
+            ui.label(t("settings.storage.sort_order"));
             egui::ComboBox::from_id_salt("sort_order_combo")
                 .selected_text(settings.sort_order.label())
                 .show_ui(ui, |ui| {
@@ -902,29 +949,31 @@ fn render_storage_tab(
 
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
-            if ui.button("清除未固定").clicked() {
+            if ui.button(t("settings.storage.clear_unpinned")).clicked() {
                 actions.push(SettingsAction::ClearHistory(false));
             }
             if ui
                 .add(
-                    egui::Button::new(RichText::new("清空全部（含固定）").color(palette.danger))
-                        .fill(palette.danger_bg)
-                        .stroke(Stroke::new(1.0, palette.danger_border))
-                        .corner_radius(CornerRadius::same(255)),
+                    egui::Button::new(
+                        RichText::new(t("settings.storage.clear_all")).color(palette.danger),
+                    )
+                    .fill(palette.danger_bg)
+                    .stroke(Stroke::new(1.0, palette.danger_border))
+                    .corner_radius(CornerRadius::same(255)),
                 )
                 .clicked()
             {
                 actions.push(SettingsAction::ClearHistory(true));
             }
-            if ui.button("导出 JSON...").clicked() {
+            if ui.button(t("settings.storage.export_json")).clicked() {
                 actions.push(SettingsAction::ExportJson);
             }
-            if ui.button("导入 JSON...").clicked() {
+            if ui.button(t("settings.storage.import_json")).clicked() {
                 actions.push(SettingsAction::ImportJson);
             }
         });
         ui.label(
-            RichText::new("本地历史与备份未加密；敏感内容遮罩仅影响显示。新版 JSON 备份包含图片，单图上限 64 MiB、备份上限 128 MiB。")
+            RichText::new(t("settings.storage.backup_note"))
                 .size(11.5)
                 .color(palette.text_muted),
         );
@@ -939,7 +988,7 @@ fn render_appearance_tab(
 ) {
     section_card(ui, palette, |ui| {
         ui.horizontal(|ui| {
-            ui.label("主题外观：");
+            ui.label(t("settings.appearance.theme"));
             egui::ComboBox::from_id_salt("theme_mode_combo")
                 .selected_text(settings.theme_mode.label())
                 .show_ui(ui, |ui| {
@@ -955,7 +1004,7 @@ fn render_appearance_tab(
         });
 
         ui.horizontal(|ui| {
-            ui.label("弹窗位置：");
+            ui.label(t("settings.appearance.popup_pos"));
             egui::ComboBox::from_id_salt("popup_pos_combo")
                 .selected_text(settings.popup_position.label())
                 .show_ui(ui, |ui| {
@@ -976,7 +1025,7 @@ fn render_appearance_tab(
         });
 
         ui.horizontal(|ui| {
-            ui.label("固定位置：");
+            ui.label(t("settings.appearance.pin_pos"));
             egui::ComboBox::from_id_salt("pin_pos_combo")
                 .selected_text(settings.pin_position.label())
                 .show_ui(ui, |ui| {
@@ -992,7 +1041,7 @@ fn render_appearance_tab(
         });
 
         ui.horizontal(|ui| {
-            ui.label("高亮搜索匹配：");
+            ui.label(t("settings.appearance.highlight"));
             egui::ComboBox::from_id_salt("highlight_combo")
                 .selected_text(settings.match_highlight.label())
                 .show_ui(ui, |ui| {
@@ -1018,21 +1067,24 @@ fn render_appearance_tab(
         changed |= ui
             .checkbox(
                 &mut settings.show_special_symbols,
-                "显示特殊空白符号（· ⇥ ↵）",
+                t("settings.appearance.special_symbols"),
             )
             .changed();
         changed |= ui
-            .checkbox(&mut settings.show_tray_icon, "显示菜单栏 / 系统托盘图标")
+            .checkbox(
+                &mut settings.show_tray_icon,
+                t("settings.appearance.show_tray"),
+            )
             .changed();
         changed |= ui
             .checkbox(
                 &mut settings.show_clipboard_in_menubar,
-                "在菜单栏图标旁 / 托盘提示显示最新剪贴板内容",
+                t("settings.appearance.menubar_preview"),
             )
             .changed();
 
         ui.horizontal(|ui| {
-            ui.label("搜索框显示时机：");
+            ui.label(t("settings.appearance.search_vis"));
             egui::ComboBox::from_id_salt("search_vis_combo")
                 .selected_text(settings.search_box_visibility.label())
                 .show_ui(ui, |ui| {
@@ -1051,16 +1103,22 @@ fn render_appearance_tab(
         });
 
         changed |= ui
-            .checkbox(&mut settings.show_source_app_badge, "显示来源应用程序标签")
+            .checkbox(
+                &mut settings.show_source_app_badge,
+                t("settings.appearance.source_app"),
+            )
             .changed();
         changed |= ui
             .checkbox(
                 &mut settings.show_hex_color_swatch,
-                "显示颜色色块（HEX / RGB）",
+                t("settings.appearance.color_swatch"),
             )
             .changed();
         changed |= ui
-            .checkbox(&mut settings.show_footer_menu, "显示底部操作栏")
+            .checkbox(
+                &mut settings.show_footer_menu,
+                t("settings.appearance.footer_menu"),
+            )
             .changed();
 
         if changed {
@@ -1080,14 +1138,14 @@ fn render_ignore_tab(
         if ui
             .checkbox(
                 &mut settings.enable_privacy_masking,
-                "启用敏感信息自动脱敏遮罩（API Key / JWT / Bearer Token / 私钥）",
+                t("settings.ignore.privacy_mask"),
             )
             .changed()
         {
             actions.push(SettingsAction::SettingsChanged);
         }
         ui.label(
-            RichText::new("开启后，疑似密钥的内容在列表中会以 •••• 遮罩，需在右侧预览面板点击「显示明文」查看。")
+            RichText::new(t("settings.ignore.privacy_hint"))
                 .size(11.5)
                 .color(palette.text_muted),
         );
@@ -1097,9 +1155,9 @@ fn render_ignore_tab(
     section_card(ui, palette, |ui| {
         ui.horizontal(|ui| {
             for (sub, title) in [
-                (IgnoreSubTab::Apps, "忽略应用"),
-                (IgnoreSubTab::ClipboardTypes, "忽略剪贴板类型"),
-                (IgnoreSubTab::Regexes, "正则表达式"),
+                (IgnoreSubTab::Apps, t("settings.ignore.sub_apps")),
+                (IgnoreSubTab::ClipboardTypes, t("settings.ignore.sub_types")),
+                (IgnoreSubTab::Regexes, t("settings.ignore.sub_regexes")),
             ] {
                 ui.selectable_value(&mut state.ignore_sub_tab, sub, title);
             }
@@ -1111,7 +1169,7 @@ fn render_ignore_tab(
                 if ui
                     .checkbox(
                         &mut settings.ignore_only_outside_list,
-                        "白名单模式：忽略列表之外的所有应用程序",
+                        t("settings.ignore.whitelist_mode"),
                     )
                     .changed()
                 {
@@ -1121,14 +1179,14 @@ fn render_ignore_tab(
                     ui,
                     &mut settings.ignored_apps,
                     &mut state.new_ignore_app,
-                    "输入应用名称或 Bundle ID / 进程名（如 1Password、WeChat.exe）",
+                    t("settings.ignore.app_placeholder"),
                     palette,
                     actions,
                 );
             }
             IgnoreSubTab::ClipboardTypes => {
                 ui.label(
-                    RichText::new("精确匹配格式名。text、html、rtf、image、files 只忽略该表示；隐私标记和其他自定义格式忽略整条复制。")
+                    RichText::new(t("settings.ignore.types_hint"))
                         .size(11.5)
                         .color(palette.text_muted),
                 );
@@ -1136,14 +1194,14 @@ fn render_ignore_tab(
                     ui,
                     &mut settings.ignored_clipboard_types,
                     &mut state.new_ignore_type,
-                    "例如 org.nspasteboard.ConcealedType",
+                    t("settings.ignore.type_placeholder"),
                     palette,
                     actions,
                 );
             }
             IgnoreSubTab::Regexes => {
                 ui.label(
-                    RichText::new("若复制文本匹配下列任意正则表达式，将不录入历史记录：")
+                    RichText::new(t("settings.ignore.regex_hint"))
                         .size(11.5)
                         .color(palette.text_muted),
                 );
@@ -1151,7 +1209,7 @@ fn render_ignore_tab(
                     ui,
                     &mut settings.ignored_regexes,
                     &mut state.new_ignore_regex,
-                    r"输入正则表达式，例如 ^sk-[A-Za-z0-9]+$",
+                    t("settings.ignore.regex_placeholder"),
                     palette,
                     actions,
                 );
@@ -1173,10 +1231,11 @@ fn render_editable_string_list(
             .hint_text(placeholder)
             .desired_width(ui.available_width() - 68.0);
         let resp = ui.add(edit);
-        let add_btn = egui::Button::new(RichText::new("添加").color(palette.on_accent))
-            .fill(palette.accent)
-            .stroke(Stroke::NONE)
-            .corner_radius(CornerRadius::same(255));
+        let add_btn =
+            egui::Button::new(RichText::new(t("settings.ignore.add")).color(palette.on_accent))
+                .fill(palette.accent)
+                .stroke(Stroke::NONE)
+                .corner_radius(CornerRadius::same(255));
         let add_clicked = ui.add(add_btn).clicked()
             || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
         if add_clicked {
@@ -1199,7 +1258,7 @@ fn render_editable_string_list(
         .show(ui, |ui| {
             if list.is_empty() {
                 ui.label(
-                    RichText::new("暂无规则")
+                    RichText::new(t("settings.ignore.empty"))
                         .size(12.0)
                         .color(palette.text_muted),
                 );
@@ -1208,7 +1267,7 @@ fn render_editable_string_list(
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(entry).size(12.0));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            if compact_button(ui, "移除").clicked() {
+                            if compact_button(ui, t("settings.ignore.remove")).clicked() {
                                 remove_idx = Some(idx);
                             }
                         });
@@ -1233,13 +1292,16 @@ fn render_advanced_tab(
 ) {
     section_card(ui, palette, |ui| {
         if ui
-            .checkbox(&mut settings.paused, "暂停记录新的剪贴板项目")
+            .checkbox(&mut settings.paused, t("settings.advanced.paused"))
             .changed()
         {
             actions.push(SettingsAction::SettingsChanged);
         }
         if ui
-            .checkbox(&mut settings.ignore_next_event, "仅忽略下一次复制")
+            .checkbox(
+                &mut settings.ignore_next_event,
+                t("settings.advanced.ignore_next"),
+            )
             .changed()
         {
             actions.push(SettingsAction::SettingsChanged);
@@ -1248,7 +1310,7 @@ fn render_advanced_tab(
         if ui
             .checkbox(
                 &mut settings.clear_on_exit,
-                "退出 Earth 时清除未固定历史记录",
+                t("settings.advanced.clear_on_exit"),
             )
             .changed()
         {
@@ -1257,7 +1319,7 @@ fn render_advanced_tab(
         if ui
             .checkbox(
                 &mut settings.clear_system_clipboard_too,
-                "清除历史时同时清空系统剪贴板",
+                t("settings.advanced.clear_system"),
             )
             .changed()
         {
@@ -1267,9 +1329,9 @@ fn render_advanced_tab(
 
     ui.add_space(8.0);
     section_card(ui, palette, |ui| {
-        ui.label(RichText::new("Earth Collections · 智能收藏分组").strong());
+        ui.label(RichText::new(t("settings.advanced.collections_title")).strong());
         ui.label(
-            RichText::new("将常用指令、代码模板或长期素材放入收藏分组，永不随历史上限淘汰。")
+            RichText::new(t("settings.advanced.collections_hint"))
                 .size(11.5)
                 .color(palette.text_muted),
         );
@@ -1278,7 +1340,7 @@ fn render_advanced_tab(
         ui.horizontal(|ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut state.new_collection_name)
-                    .hint_text("新分组名称（如：SQL 模板）")
+                    .hint_text(t("settings.advanced.collection_placeholder"))
                     .desired_width(132.0),
             );
             for hex in ["#456EFD", "#22C55E", "#F59E0B", "#EC4899", "#8B5CF6"] {
@@ -1297,10 +1359,12 @@ fn render_advanced_tab(
                     state.new_collection_color = hex.to_string();
                 }
             }
-            let create_btn = egui::Button::new(RichText::new("创建分组").color(palette.on_accent))
-                .fill(palette.accent)
-                .stroke(Stroke::NONE)
-                .corner_radius(CornerRadius::same(255));
+            let create_btn = egui::Button::new(
+                RichText::new(t("settings.advanced.create_collection")).color(palette.on_accent),
+            )
+            .fill(palette.accent)
+            .stroke(Stroke::NONE)
+            .corner_radius(CornerRadius::same(255));
             if ui.add(create_btn).clicked() && !state.new_collection_name.trim().is_empty() {
                 actions.push(SettingsAction::CreateCollection {
                     name: state.new_collection_name.trim().to_string(),
@@ -1324,12 +1388,14 @@ fn render_advanced_tab(
                     let submitted =
                         edit_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if compact_button(ui, "取消").clicked() {
+                        if compact_button(ui, t("settings.advanced.cancel")).clicked() {
                             state.editing_collection_id = None;
                             state.editing_collection_name.clear();
                         }
                         let save_btn = egui::Button::new(
-                            RichText::new("保存").size(12.0).color(palette.on_accent),
+                            RichText::new(t("settings.advanced.save"))
+                                .size(12.0)
+                                .color(palette.on_accent),
                         )
                         .fill(palette.accent)
                         .stroke(Stroke::NONE)
@@ -1349,18 +1415,19 @@ fn render_advanced_tab(
                 } else {
                     ui.label(RichText::new(&col.name).size(13.0));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        let del_btn =
-                            egui::Button::new(RichText::new("删除").color(palette.danger))
-                                .fill(palette.danger_bg)
-                                .stroke(Stroke::new(1.0, palette.danger_border))
-                                .corner_radius(CornerRadius::same(255));
+                        let del_btn = egui::Button::new(
+                            RichText::new(t("settings.advanced.delete")).color(palette.danger),
+                        )
+                        .fill(palette.danger_bg)
+                        .stroke(Stroke::new(1.0, palette.danger_border))
+                        .corner_radius(CornerRadius::same(255));
                         if padded_button(ui, del_btn, vec2(11.0, 4.5))
-                            .on_hover_text("删除分组（不会删除组内记录本身）")
+                            .on_hover_text(t("settings.advanced.delete_collection_tip"))
                             .clicked()
                         {
                             actions.push(SettingsAction::DeleteCollection(col.id));
                         }
-                        if compact_button(ui, "重命名").clicked() {
+                        if compact_button(ui, t("settings.advanced.rename")).clicked() {
                             state.editing_collection_id = Some(col.id);
                             state.editing_collection_name = col.name.clone();
                         }
@@ -1789,5 +1856,117 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn english_settings_view_renders_localized_labels_without_overlap() {
+        crate::i18n::with_test_language(crate::i18n::ResolvedLanguage::EnUs, || {
+            let ctx = egui::Context::default();
+            let palette = EarthPalette::resolve(ThemeMode::Light, false);
+            palette.apply_to_ctx(&ctx);
+
+            let rel = ReleaseInfo {
+                version: "0.5.0".into(),
+                html_url: "https://github.com/lumingbao/Earth/releases/tag/v0.5.0".into(),
+                tag_name: "v0.5.0".into(),
+                download_url: Some(
+                    "https://github.com/lumingbao/Earth/releases/download/v0.5.0/Earth-0.5.0-macOS-universal.dmg"
+                        .into(),
+                ),
+                asset_name: Some("Earth-0.5.0-macOS-universal.dmg".into()),
+                checksum_url: Some(
+                    "https://github.com/lumingbao/Earth/releases/download/v0.5.0/SHA256SUMS.txt"
+                        .into(),
+                ),
+            };
+
+            let mut settings = AppSettings::default();
+            let mut state = SettingsState {
+                active_tab: SettingsTab::General,
+                available_update: Some(rel),
+                update_download: UpdateDownloadState::Downloading {
+                    version: "0.5.0".into(),
+                },
+                ..Default::default()
+            };
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    vec2(424.0, 520.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let ctx = ui.ctx().clone();
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| {
+                        let _ = render_settings_view(
+                            ui,
+                            &ctx,
+                            SettingsViewData {
+                                settings: &mut settings,
+                                collections: &[],
+                                palette: &palette,
+                                storage_bytes: 0,
+                                item_count: 0,
+                                has_accessibility: true,
+                            },
+                            &mut state,
+                        );
+                    });
+            });
+            out.textures_delta.clear();
+
+            let mut rects = Vec::new();
+            fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(String, egui::Rect)>) {
+                match shape {
+                    egui::epaint::Shape::Text(t) => {
+                        out.push((t.galley.text().to_string(), t.visual_bounding_rect()));
+                    }
+                    egui::epaint::Shape::Vec(v) => {
+                        for child in v {
+                            walk(child, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for clipped in &out.shapes {
+                walk(&clipped.shape, &mut rects);
+            }
+
+            assert!(rects.iter().any(|(t, _)| t == "Earth Preferences"));
+            assert!(rects.iter().any(|(t, _)| t == "Language:"));
+            let (_, check_rect) = rects
+                .iter()
+                .find(|(t, _)| t.contains("Check for updates"))
+                .expect("English checkbox should render");
+            let (_, check_btn_rect) = rects
+                .iter()
+                .find(|(t, _)| t == "Check Now")
+                .expect("English Check Now button should render");
+            let (_, dl_page_rect) = rects
+                .iter()
+                .find(|(t, _)| t == "Download")
+                .expect("English Download button should render");
+            let (_, status_rect) = rects
+                .iter()
+                .find(|(t, _)| t.contains("⬇ Downloading v0.5.0"))
+                .expect("English downloading status should render");
+
+            assert!(
+                check_rect.right() + 4.0 <= check_btn_rect.left(),
+                "English checkbox overlapped Check Now button: {check_rect:?} vs {check_btn_rect:?}"
+            );
+            assert!(
+                check_rect.bottom() <= status_rect.top(),
+                "English status must render below checkbox: {check_rect:?} vs {status_rect:?}"
+            );
+            assert!(
+                status_rect.right() + 4.0 <= dl_page_rect.left(),
+                "English status overlapped Download button: {status_rect:?} vs {dl_page_rect:?}"
+            );
+        });
     }
 }

@@ -52,16 +52,16 @@ pub(super) fn render_items_list(
                     ui.add_space(40.0);
                     ui.label(
                         RichText::new(if state.search_query.is_empty() {
-                            "暂无剪贴板记录"
+                            t("list.empty_all")
                         } else {
-                            "没有找到匹配的记录"
+                            t("list.empty_search")
                         })
                         .size(14.0)
                         .color(palette.text_secondary),
                     );
                     ui.add_space(6.0);
                     ui.label(
-                        RichText::new("复制文字、图片或文件后将自动出现在这里")
+                        RichText::new(t("list.empty_hint"))
                             .size(12.0)
                             .color(palette.text_muted),
                     );

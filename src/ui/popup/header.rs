@@ -21,9 +21,9 @@ pub(super) fn render_header(
             Color32::TRANSPARENT
         };
         let hint = if show_search {
-            "搜索记录..."
+            t("header.search_hint")
         } else {
-            "直接打字即可搜索..."
+            t("header.search_hint_typing")
         };
 
         let search_row_h = 22.0;
@@ -96,7 +96,7 @@ pub(super) fn render_header(
                             .stroke(Stroke::new(1.0, palette.border_strong))
                             .corner_radius(CornerRadius::same(255));
                             if padded_button(ui, mode_btn, vec2(8.0, 2.0))
-                                .on_hover_text("点击切换搜索模式：精确 / 模糊 / 正则")
+                                .on_hover_text(t("header.search_mode_tip"))
                                 .clicked()
                             {
                                 settings.search_mode = match settings.search_mode {
@@ -145,15 +145,17 @@ pub(super) fn render_header(
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 5.0;
-            if icon_button(ui, 28.0, false, "偏好设置 (⌘,)", palette, draw_gear_glyph).clicked()
-            {
+            #[cfg(target_os = "macos")]
+            let prefs_shortcut = "⌘,";
+            #[cfg(not(target_os = "macos"))]
+            let prefs_shortcut = "Ctrl+,";
+            let settings_tip = tf("header.settings_tip", &[("shortcut", prefs_shortcut)]);
+            if icon_button(ui, 28.0, false, &settings_tip, palette, draw_gear_glyph).clicked() {
                 actions.push(PopupAction::OpenSettings);
             }
 
-            let preview_tip = format!(
-                "切换速览工作台 ({})",
-                format_shortcut_display(&settings.hotkey_preview)
-            );
+            let preview_shortcut = format_shortcut_display(&settings.hotkey_preview);
+            let preview_tip = tf("header.workbench_tip", &[("shortcut", &preview_shortcut)]);
             if icon_button(
                 ui,
                 28.0,
@@ -171,7 +173,7 @@ pub(super) fn render_header(
                 ui,
                 28.0,
                 settings.enable_privacy_masking,
-                "隐私脱敏保护（自动遮罩密钥/Token）",
+                t("header.privacy_tip"),
                 palette,
                 draw_shield_glyph,
             )
@@ -183,9 +185,9 @@ pub(super) fn render_header(
             }
 
             let pause_tip = if settings.paused {
-                "已暂停记录新复制（点击恢复）"
+                t("header.pause_resume_tip")
             } else {
-                "正在监听剪贴板（点击暂停）"
+                t("header.pause_active_tip")
             };
             if icon_button(
                 ui,
@@ -205,9 +207,9 @@ pub(super) fn render_header(
             }
 
             let pin_tip = if state.window_pinned {
-                "已钉住窗口（失焦不关闭并始终置顶，点击取消）"
+                t("header.window_pinned_tip")
             } else {
-                "钉住窗口（点击其他界面不自动关闭并始终置顶）"
+                t("header.window_unpinned_tip")
             };
             let pinned_now = state.window_pinned;
             if icon_button(ui, 28.0, pinned_now, pin_tip, palette, |p, r, c| {
@@ -239,11 +241,11 @@ pub(super) fn render_filter_strip(
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.5;
                 let pills = [
-                    (CategoryFilter::All, "全部"),
-                    (CategoryFilter::Text, "文本"),
-                    (CategoryFilter::Image, "图片"),
-                    (CategoryFilter::Files, "文件"),
-                    (CategoryFilter::Pinned, "固定"),
+                    (CategoryFilter::All, t("filter.all")),
+                    (CategoryFilter::Text, t("filter.text")),
+                    (CategoryFilter::Image, t("filter.image")),
+                    (CategoryFilter::Files, t("filter.files")),
+                    (CategoryFilter::Pinned, t("filter.pinned")),
                 ];
 
                 for (filter, label) in pills {

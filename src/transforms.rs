@@ -1,3 +1,4 @@
+use crate::i18n::{t, tf};
 use crate::storage::sha256_hex;
 use base64::{Engine as _, engine::general_purpose};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
@@ -560,20 +561,20 @@ pub enum QuickActionKind {
 impl QuickActionKind {
     pub fn label(&self) -> &'static str {
         match self {
-            QuickActionKind::JsonPretty => "JSON 格式化",
-            QuickActionKind::JsonMinify => "JSON 压缩",
-            QuickActionKind::Base64Encode => "Base64 编码",
-            QuickActionKind::Base64Decode => "Base64 解码",
-            QuickActionKind::UrlEncode => "URL 编码",
-            QuickActionKind::UrlDecode => "URL 解码",
-            QuickActionKind::TimestampConvert => "时间戳转换",
-            QuickActionKind::TrimNormalize => "去除空白",
-            QuickActionKind::LinesDedupe => "多行去重",
-            QuickActionKind::LinesSort => "多行排序",
+            QuickActionKind::JsonPretty => t("qa.json_pretty"),
+            QuickActionKind::JsonMinify => t("qa.json_minify"),
+            QuickActionKind::Base64Encode => t("qa.base64_encode"),
+            QuickActionKind::Base64Decode => t("qa.base64_decode"),
+            QuickActionKind::UrlEncode => t("qa.url_encode"),
+            QuickActionKind::UrlDecode => t("qa.url_decode"),
+            QuickActionKind::TimestampConvert => t("qa.timestamp"),
+            QuickActionKind::TrimNormalize => t("qa.trim_normalize"),
+            QuickActionKind::LinesDedupe => t("qa.lines_dedupe"),
+            QuickActionKind::LinesSort => t("qa.lines_sort"),
             QuickActionKind::CaseSnake => "snake_case",
             QuickActionKind::CaseCamel => "camelCase",
             QuickActionKind::CaseUpperSnake => "UPPER_CASE",
-            QuickActionKind::UnescapeString => "反转义",
+            QuickActionKind::UnescapeString => t("qa.unescape"),
             QuickActionKind::Sha256Hash => "SHA-256",
         }
     }
@@ -582,13 +583,13 @@ impl QuickActionKind {
 pub fn apply_quick_action(action: QuickActionKind, input: &str) -> Result<String, String> {
     match action {
         QuickActionKind::JsonPretty => {
-            let value: serde_json::Value =
-                serde_json::from_str(input.trim()).map_err(|e| format!("非有效 JSON: {e}"))?;
+            let value: serde_json::Value = serde_json::from_str(input.trim())
+                .map_err(|e| tf("qa.err_invalid_json", &[("error", &e.to_string())]))?;
             serde_json::to_string_pretty(&value).map_err(|e| e.to_string())
         }
         QuickActionKind::JsonMinify => {
-            let value: serde_json::Value =
-                serde_json::from_str(input.trim()).map_err(|e| format!("非有效 JSON: {e}"))?;
+            let value: serde_json::Value = serde_json::from_str(input.trim())
+                .map_err(|e| tf("qa.err_invalid_json", &[("error", &e.to_string())]))?;
             serde_json::to_string(&value).map_err(|e| e.to_string())
         }
         QuickActionKind::Base64Encode => Ok(general_purpose::STANDARD.encode(input.as_bytes())),
@@ -596,13 +597,13 @@ pub fn apply_quick_action(action: QuickActionKind, input: &str) -> Result<String
             let bytes = general_purpose::STANDARD
                 .decode(input.trim().as_bytes())
                 .or_else(|_| general_purpose::URL_SAFE.decode(input.trim().as_bytes()))
-                .map_err(|e| format!("非有效 Base64: {e}"))?;
-            String::from_utf8(bytes).map_err(|_| "解码结果不是有效 UTF-8 文本".to_string())
+                .map_err(|e| tf("qa.err_invalid_base64", &[("error", &e.to_string())]))?;
+            String::from_utf8(bytes).map_err(|_| t("qa.err_invalid_utf8").to_string())
         }
         QuickActionKind::UrlEncode => Ok(urlencoding::encode(input).into_owned()),
         QuickActionKind::UrlDecode => urlencoding::decode(input)
             .map(|cow| cow.into_owned())
-            .map_err(|e| format!("URL 解码失败: {e}")),
+            .map_err(|e| tf("qa.err_url_decode", &[("error", &e.to_string())])),
         QuickActionKind::TimestampConvert => convert_timestamp_smart(input),
         QuickActionKind::TrimNormalize => {
             let cleaned = input
@@ -719,28 +720,26 @@ pub fn convert_timestamp_smart(input: &str) -> Result<String, String> {
         let (secs, nanos, unit) = if num.abs() >= 1_000_000_000_000 {
             let s = num.div_euclid(1000);
             let ms = num.rem_euclid(1000) as u32;
-            (s, ms * 1_000_000, "毫秒 (ms)")
+            (s, ms * 1_000_000, t("qa.ts_unit_ms"))
         } else {
-            (num, 0, "秒 (s)")
+            (num, 0, t("qa.ts_unit_s"))
         };
 
         let utc_dt = DateTime::<Utc>::from_timestamp(secs, nanos)
-            .ok_or_else(|| "时间戳超出有效范围".to_string())?;
+            .ok_or_else(|| t("qa.ts_out_of_range").to_string())?;
         let local_dt: DateTime<Local> = utc_dt.into();
-        return Ok(format!(
-            "本地时间: {}\nUTC 时间: {}\n输入精度: {}",
-            local_dt.format("%Y-%m-%d %H:%M:%S%.3f"),
-            utc_dt.format("%Y-%m-%d %H:%M:%S%.3f UTC"),
-            unit
+        let local_s = local_dt.format("%Y-%m-%d %H:%M:%S%.3f").to_string();
+        let utc_s = utc_dt.format("%Y-%m-%d %H:%M:%S%.3f UTC").to_string();
+        return Ok(tf(
+            "qa.ts_formatted",
+            &[("local", &local_s), ("utc", &utc_s), ("unit", unit)],
         ));
     }
 
     if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {
-        return Ok(format!(
-            "Unix 秒: {}\nUnix 毫秒: {}",
-            dt.timestamp(),
-            dt.timestamp_millis()
-        ));
+        let secs = dt.timestamp().to_string();
+        let millis = dt.timestamp_millis().to_string();
+        return Ok(tf("qa.ts_unix", &[("secs", &secs), ("millis", &millis)]));
     }
 
     for fmt in [
@@ -752,26 +751,22 @@ pub fn convert_timestamp_smart(input: &str) -> Result<String, String> {
         if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, fmt)
             && let Some(local_dt) = Local.from_local_datetime(&naive).single()
         {
-            return Ok(format!(
-                "Unix 秒: {}\nUnix 毫秒: {}",
-                local_dt.timestamp(),
-                local_dt.timestamp_millis()
-            ));
+            let secs = local_dt.timestamp().to_string();
+            let millis = local_dt.timestamp_millis().to_string();
+            return Ok(tf("qa.ts_unix", &[("secs", &secs), ("millis", &millis)]));
         }
         if fmt == "%Y-%m-%d"
             && let Ok(date) = chrono::NaiveDate::parse_from_str(trimmed, fmt)
             && let Some(naive) = date.and_hms_opt(0, 0, 0)
             && let Some(local_dt) = Local.from_local_datetime(&naive).single()
         {
-            return Ok(format!(
-                "Unix 秒: {}\nUnix 毫秒: {}",
-                local_dt.timestamp(),
-                local_dt.timestamp_millis()
-            ));
+            let secs = local_dt.timestamp().to_string();
+            let millis = local_dt.timestamp_millis().to_string();
+            return Ok(tf("qa.ts_unix", &[("secs", &secs), ("millis", &millis)]));
         }
     }
 
-    Err("请输入 Unix 时间戳（秒/毫秒）或常见日期格式（如 2026-11-13 11:30:00）".to_string())
+    Err(t("qa.ts_invalid").to_string())
 }
 
 pub fn available_quick_actions(input: &str) -> Vec<QuickActionKind> {

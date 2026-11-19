@@ -3,6 +3,7 @@
 mod app;
 mod clipboard;
 mod hotkey;
+mod i18n;
 mod instance;
 mod model;
 mod platform;

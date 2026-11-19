@@ -12,7 +12,7 @@ pub(super) fn draw_qr_action_buttons(
     export: &mut QrExport,
 ) {
     let copy_btn = egui::Button::new(
-        RichText::new("复制二维码图片")
+        RichText::new(t("qr.copy_image"))
             .size(11.5)
             .color(palette.on_accent),
     )
@@ -39,7 +39,7 @@ pub(super) fn draw_qr_save_button(
 ) {
     if ui
         .add_enabled_ui(!export.is_busy(), |ui| {
-            compact_button(ui, RichText::new("另存为图片...").size(11.5))
+            compact_button(ui, RichText::new(t("qr.save_image")).size(11.5))
         })
         .inner
         .clicked()
@@ -76,11 +76,12 @@ pub(super) fn render_qr_card(
                     let font_id = FontId::proportional(11.5);
                     let (w1, w2, btn_h) = ui.fonts_mut(|f| {
                         let g1 = f.layout_no_wrap(
-                            "复制二维码图片".into(),
+                            t("qr.copy_image").into(),
                             font_id.clone(),
                             Color32::WHITE,
                         );
-                        let g2 = f.layout_no_wrap("另存为图片...".into(), font_id, Color32::WHITE);
+                        let g2 =
+                            f.layout_no_wrap(t("qr.save_image").into(), font_id, Color32::WHITE);
                         (
                             g1.size().x + 22.0,
                             g2.size().x + 22.0,
@@ -217,14 +218,14 @@ pub(super) fn render_color_card(
     let rgb_str = format_color_rgb(rgba);
     let hsl_str = format_color_hsl(rgba);
     let rgb_btn = if rgba[3] == 255 {
-        "复制 RGB"
+        t("color.copy_rgb")
     } else {
-        "复制 RGBA"
+        t("color.copy_rgba")
     };
     let hsl_btn = if rgba[3] == 255 {
-        "复制 HSL"
+        t("color.copy_hsl")
     } else {
-        "复制 HSLA"
+        t("color.copy_hsla")
     };
 
     egui::Frame::NONE
@@ -244,7 +245,7 @@ pub(super) fn render_color_card(
                         let alpha_pct = ((rgba[3] as f32 / 255.0) * 100.0).round() as u8;
                         ui.add_space(2.0);
                         ui.label(
-                            RichText::new(format!("透明 {alpha_pct}%"))
+                            RichText::new(tf("color.alpha", &[("pct", &alpha_pct.to_string())]))
                                 .size(10.0)
                                 .color(palette.text_muted),
                         );
@@ -254,7 +255,7 @@ pub(super) fn render_color_card(
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 4.0;
                     let rows: [(&str, &str, bool); 3] = [
-                        (&hex_str, "复制 HEX", true),
+                        (&hex_str, t("color.copy_hex"), true),
                         (&rgb_str, rgb_btn, false),
                         (&hsl_str, hsl_btn, false),
                     ];

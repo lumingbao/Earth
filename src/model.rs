@@ -1,3 +1,4 @@
+use crate::i18n::{AppLanguage, t, tf};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -139,19 +140,18 @@ impl ClipItem {
                     (Some(w), Some(h)) => format!("{}×{}", w, h),
                     _ => "Image".to_string(),
                 };
-                format!("图片 · {} · {}", dims, format_bytes(self.byte_size))
+                let size = format_bytes(self.byte_size);
+                tf("model.image_summary", &[("dims", &dims), ("size", &size)])
             }
             ClipKind::Files => {
                 if self.files.is_empty() {
-                    "文件".to_string()
+                    t("model.file_fallback").to_string()
                 } else if self.files.len() == 1 {
                     truncate_chars(&self.files[0].name, max_chars)
                 } else {
-                    format!(
-                        "{} 等 {} 个文件",
-                        truncate_chars(&self.files[0].name, max_chars.saturating_sub(12)),
-                        self.files.len()
-                    )
+                    let name = truncate_chars(&self.files[0].name, max_chars.saturating_sub(12));
+                    let count = self.files.len().to_string();
+                    tf("model.files_multi", &[("name", &name), ("count", &count)])
                 }
             }
         }
@@ -186,9 +186,9 @@ pub enum SearchMode {
 impl SearchMode {
     pub fn label(&self) -> &'static str {
         match self {
-            SearchMode::Exact => "精确",
-            SearchMode::Fuzzy => "模糊",
-            SearchMode::Regex => "正则",
+            SearchMode::Exact => t("model.search_mode.exact"),
+            SearchMode::Fuzzy => t("model.search_mode.fuzzy"),
+            SearchMode::Regex => t("model.search_mode.regex"),
         }
     }
 }
@@ -203,8 +203,8 @@ pub enum CopyTriggerMode {
 impl CopyTriggerMode {
     pub fn label(&self) -> &'static str {
         match self {
-            CopyTriggerMode::DoubleClick => "双击复制（单击展开工作台）",
-            CopyTriggerMode::SingleClick => "单击直接复制",
+            CopyTriggerMode::DoubleClick => t("model.copy_trigger.double_click"),
+            CopyTriggerMode::SingleClick => t("model.copy_trigger.single_click"),
         }
     }
 }
@@ -219,9 +219,9 @@ pub enum SortOrder {
 impl SortOrder {
     pub fn label(&self) -> &'static str {
         match self {
-            SortOrder::LastCopiedAt => "上次复制时间",
-            SortOrder::FirstCopiedAt => "首次复制时间",
-            SortOrder::CopyCount => "复制次数",
+            SortOrder::LastCopiedAt => t("model.sort_order.last_copied"),
+            SortOrder::FirstCopiedAt => t("model.sort_order.first_copied"),
+            SortOrder::CopyCount => t("model.sort_order.copy_count"),
         }
     }
 }
@@ -237,10 +237,10 @@ pub enum PopupPosition {
 impl PopupPosition {
     pub fn label(&self) -> &'static str {
         match self {
-            PopupPosition::Cursor => "光标",
-            PopupPosition::ScreenCenter => "屏幕中心",
-            PopupPosition::WindowCenter => "窗口中心",
-            PopupPosition::Tray => "菜单栏 / 托盘",
+            PopupPosition::Cursor => t("model.popup_pos.cursor"),
+            PopupPosition::ScreenCenter => t("model.popup_pos.screen_center"),
+            PopupPosition::WindowCenter => t("model.popup_pos.window_center"),
+            PopupPosition::Tray => t("model.popup_pos.tray"),
         }
     }
 }
@@ -254,8 +254,8 @@ pub enum PinPosition {
 impl PinPosition {
     pub fn label(&self) -> &'static str {
         match self {
-            PinPosition::Top => "顶部",
-            PinPosition::Bottom => "底部",
+            PinPosition::Top => t("model.pin_pos.top"),
+            PinPosition::Bottom => t("model.pin_pos.bottom"),
         }
     }
 }
@@ -270,9 +270,9 @@ pub enum MatchHighlight {
 impl MatchHighlight {
     pub fn label(&self) -> &'static str {
         match self {
-            MatchHighlight::Bold => "粗体",
-            MatchHighlight::Italic => "斜体",
-            MatchHighlight::Underline => "下划线",
+            MatchHighlight::Bold => t("model.highlight.bold"),
+            MatchHighlight::Italic => t("model.highlight.italic"),
+            MatchHighlight::Underline => t("model.highlight.underline"),
         }
     }
 }
@@ -286,8 +286,8 @@ pub enum SearchBoxVisibility {
 impl SearchBoxVisibility {
     pub fn label(&self) -> &'static str {
         match self {
-            SearchBoxVisibility::Always => "始终",
-            SearchBoxVisibility::WhileTyping => "输入时",
+            SearchBoxVisibility::Always => t("model.search_vis.always"),
+            SearchBoxVisibility::WhileTyping => t("model.search_vis.while_typing"),
         }
     }
 }
@@ -302,9 +302,9 @@ pub enum ThemeMode {
 impl ThemeMode {
     pub fn label(&self) -> &'static str {
         match self {
-            ThemeMode::System => "跟随系统（浅色）",
-            ThemeMode::Dark => "Earth 深色",
-            ThemeMode::Light => "Earth 浅色",
+            ThemeMode::System => t("model.theme.system"),
+            ThemeMode::Dark => t("model.theme.dark"),
+            ThemeMode::Light => t("model.theme.light"),
         }
     }
 }
@@ -325,6 +325,7 @@ pub enum PasteBehavior {
 #[serde(default)]
 pub struct AppSettings {
     // General
+    pub language: AppLanguage,
     pub launch_at_login: bool,
     pub check_updates: bool,
     pub hotkey_open: String,
@@ -386,6 +387,7 @@ impl Default for AppSettings {
         let hotkey_preview = "Ctrl+Shift+P".to_string();
 
         Self {
+            language: AppLanguage::System,
             launch_at_login: false,
             check_updates: true,
             hotkey_open,

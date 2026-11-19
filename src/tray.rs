@@ -1,3 +1,4 @@
+use crate::i18n::{t, tf};
 use crate::platform::TrayPosition;
 use std::sync::mpsc::{self, Receiver};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
@@ -14,8 +15,12 @@ pub enum TrayAction {
 
 pub struct EarthTray {
     tray_icon: TrayIcon,
+    show_item: MenuItem,
     pause_item: CheckMenuItem,
     ignore_next_item: CheckMenuItem,
+    settings_item: MenuItem,
+    clear_item: MenuItem,
+    quit_item: MenuItem,
     id_show: MenuId,
     id_pause: MenuId,
     id_ignore_next: MenuId,
@@ -41,12 +46,12 @@ impl EarthTray {
         ignore_next: bool,
     ) -> Result<Self, String> {
         let menu = Menu::new();
-        let show_item = MenuItem::new("打开 Earth 剪贴板", true, None);
-        let pause_item = CheckMenuItem::new("暂停记录新复制", true, paused, None);
-        let ignore_next_item = CheckMenuItem::new("仅忽略下一次复制", true, ignore_next, None);
-        let settings_item = MenuItem::new("偏好设置...", true, None);
-        let clear_item = MenuItem::new("清除未固定记录", true, None);
-        let quit_item = MenuItem::new("退出 Earth", true, None);
+        let show_item = MenuItem::new(t("tray.open"), true, None);
+        let pause_item = CheckMenuItem::new(t("tray.pause"), true, paused, None);
+        let ignore_next_item = CheckMenuItem::new(t("tray.ignore_next"), true, ignore_next, None);
+        let settings_item = MenuItem::new(t("tray.settings"), true, None);
+        let clear_item = MenuItem::new(t("tray.clear_unpinned"), true, None);
+        let quit_item = MenuItem::new(t("tray.quit"), true, None);
 
         let id_show = show_item.id().clone();
         let id_pause = pause_item.id().clone();
@@ -87,7 +92,7 @@ impl EarthTray {
         let builder = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_menu_on_left_click(false)
-            .with_tooltip("Earth — 跨平台智能剪贴板");
+            .with_tooltip(t("tray.tooltip"));
 
         #[cfg(target_os = "macos")]
         let builder = builder.with_icon_templated(icon);
@@ -96,22 +101,26 @@ impl EarthTray {
 
         let tray_icon = builder
             .build()
-            .map_err(|e| format!("创建系统托盘失败: {e}"))?;
+            .map_err(|e| tf("tray.err_create", &[("error", &e.to_string())]))?;
 
         tray_icon
             .set_visible(visible)
-            .map_err(|e| format!("设置托盘可见性失败: {e}"))?;
+            .map_err(|e| tf("tray.err_visibility", &[("error", &e.to_string())]))?;
 
         let initial_title_or_tip = if cfg!(target_os = "macos") {
             None
         } else {
-            Some("Earth — 跨平台智能剪贴板".to_string())
+            Some(t("tray.tooltip").to_string())
         };
 
         Ok(Self {
             tray_icon,
+            show_item,
             pause_item,
             ignore_next_item,
+            settings_item,
+            clear_item,
+            quit_item,
             id_show,
             id_pause,
             id_ignore_next,
@@ -126,6 +135,23 @@ impl EarthTray {
             last_ignore_next: ignore_next,
             last_title_or_tip: initial_title_or_tip,
         })
+    }
+
+    pub fn refresh_language(&mut self) {
+        self.show_item.set_text(t("tray.open"));
+        self.pause_item.set_text(t("tray.pause"));
+        self.ignore_next_item.set_text(t("tray.ignore_next"));
+        self.settings_item.set_text(t("tray.settings"));
+        self.clear_item.set_text(t("tray.clear_unpinned"));
+        self.quit_item.set_text(t("tray.quit"));
+        #[cfg(not(target_os = "macos"))]
+        {
+            self.last_title_or_tip = None;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = self.tray_icon.set_tooltip(Some(t("tray.tooltip")));
+        }
     }
 
     pub fn last_tray_pos(&self) -> Option<TrayPosition> {
@@ -146,7 +172,7 @@ impl EarthTray {
         if show_icon != self.last_visible {
             self.tray_icon
                 .set_visible(show_icon)
-                .map_err(|e| format!("设置托盘可见性失败: {e}"))?;
+                .map_err(|e| tf("tray.err_visibility", &[("error", &e.to_string())]))?;
             self.last_visible = show_icon;
         }
         if paused != self.last_paused {
@@ -182,9 +208,9 @@ impl EarthTray {
             let next_tip = if let Some(preview) = menubar_preview {
                 Some(format!("Earth · {preview}"))
             } else if paused {
-                Some("Earth — 剪贴板（已暂停）".to_string())
+                Some(t("tray.tooltip_paused").to_string())
             } else {
-                Some("Earth — 跨平台智能剪贴板".to_string())
+                Some(t("tray.tooltip").to_string())
             };
             if next_tip != self.last_title_or_tip {
                 let _ = self.tray_icon.set_tooltip(next_tip.as_deref());

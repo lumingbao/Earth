@@ -137,7 +137,10 @@ pub(super) fn render_item_row(
                             let raw = item.text_content.as_deref().unwrap_or("");
                             if is_masked(item, settings.enable_privacy_masking, state) {
                                 let masked = mask_sensitive_preview(raw);
-                                let lbl = item.sensitive_label.as_deref().unwrap_or("敏感");
+                                let lbl = item
+                                    .sensitive_label
+                                    .as_deref()
+                                    .unwrap_or(t("list.sensitive_fallback"));
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new(format!("[{lbl}] {masked}"))
@@ -357,21 +360,21 @@ pub(super) fn render_item_row(
     }
 
     resp.context_menu(|ui| {
-        if ui.button("复制并粘贴").clicked() {
+        if ui.button(t("context.copy_and_paste")).clicked() {
             actions.push(PopupAction::PasteItem {
                 id: item.id,
                 behavior: PasteBehavior::CopyAndPaste,
             });
             ui.close();
         }
-        if ui.button("仅复制到剪贴板").clicked() {
+        if ui.button(t("context.copy_only")).clicked() {
             actions.push(PopupAction::PasteItem {
                 id: item.id,
                 behavior: PasteBehavior::CopyOnly,
             });
             ui.close();
         }
-        if item.kind == ClipKind::Text && ui.button("纯文本粘贴").clicked() {
+        if item.kind == ClipKind::Text && ui.button(t("context.paste_plain")).clicked() {
             actions.push(PopupAction::PasteItem {
                 id: item.id,
                 behavior: PasteBehavior::CopyAndPastePlainText,
@@ -380,16 +383,18 @@ pub(super) fn render_item_row(
         }
         ui.separator();
         let pin_label = if item.pinned {
-            "取消固定"
+            t("context.unpin")
         } else {
-            "固定记录"
+            t("context.pin")
         };
         if ui.button(pin_label).clicked() {
             actions.push(PopupAction::TogglePin(item.id));
             ui.close();
         }
-        ui.menu_button("加入收藏分组", |ui| {
-            if item.collection_id.is_some() && ui.button("移出收藏分组").clicked() {
+        ui.menu_button(t("context.add_to_collection"), |ui| {
+            if item.collection_id.is_some()
+                && ui.button(t("context.remove_from_collection")).clicked()
+            {
                 actions.push(PopupAction::SetCollection {
                     item_id: item.id,
                     collection_id: None,
@@ -406,7 +411,7 @@ pub(super) fn render_item_row(
                 }
             }
         });
-        if ui.button("在右侧速览面板查看").clicked() {
+        if ui.button(t("context.open_workbench")).clicked() {
             state.select_item(Some(item.id));
             state.set_preview_open(true);
 
@@ -414,7 +419,7 @@ pub(super) fn render_item_row(
         }
         ui.separator();
         if ui
-            .button(RichText::new("删除此记录").color(palette.danger))
+            .button(RichText::new(t("context.delete")).color(palette.danger))
             .clicked()
         {
             actions.push(PopupAction::DeleteItem(item.id));

@@ -11,10 +11,12 @@ pub(super) fn render_footer(
 ) {
     ui.separator();
     ui.horizontal(|ui| {
+        let count_s = total_items.to_string();
+        let size_s = format_bytes(storage_bytes);
         ui.label(
-            RichText::new(format!(
-                "{total_items} 条 · {}",
-                format_bytes(storage_bytes)
+            RichText::new(tf(
+                "footer.stats",
+                &[("count", &count_s), ("size", &size_s)],
             ))
             .size(11.5)
             .color(palette.text_muted),
@@ -31,9 +33,9 @@ pub(super) fn render_footer(
             )
         };
         let ignore_lbl = if settings.ignore_next_event {
-            "✓ 忽略下次"
+            t("footer.ignore_next_active")
         } else {
-            "忽略下次"
+            t("footer.ignore_next")
         };
         if footer_btn(
             ui,
@@ -45,7 +47,7 @@ pub(super) fn render_footer(
                     palette.text_secondary
                 }),
         )
-        .on_hover_text("忽略下一次系统剪贴板复制")
+        .on_hover_text(t("footer.ignore_next_tip"))
         .clicked()
         {
             actions.push(PopupAction::ToggleIgnoreNext);
@@ -57,24 +59,29 @@ pub(super) fn render_footer(
             #[cfg(not(target_os = "macos"))]
             let (quit_s, prefs_s, clear_s) = ("Ctrl+Q", "Ctrl+,", "Ctrl+Alt+⌫");
 
-            if footer_btn(ui, RichText::new("退出").size(11.5))
-                .on_hover_text(format!("退出 Earth ({quit_s})"))
+            if footer_btn(ui, RichText::new(t("footer.quit")).size(11.5))
+                .on_hover_text(tf("footer.quit_tip", &[("shortcut", quit_s)]))
                 .clicked()
             {
                 actions.push(PopupAction::Quit);
             }
-            if footer_btn(ui, RichText::new("关于").size(11.5)).clicked() {
+            if footer_btn(ui, RichText::new(t("footer.about")).size(11.5)).clicked() {
                 state.show_about_modal = true;
             }
-            if footer_btn(ui, RichText::new("设置").size(11.5))
-                .on_hover_text(format!("偏好设置 ({prefs_s})"))
+            if footer_btn(ui, RichText::new(t("footer.settings")).size(11.5))
+                .on_hover_text(tf("footer.settings_tip", &[("shortcut", prefs_s)]))
                 .clicked()
             {
                 actions.push(PopupAction::OpenSettings);
             }
-            if footer_btn(ui, RichText::new("清除").size(11.5).color(palette.danger))
-                .on_hover_text(format!("清除未固定记录 ({clear_s})"))
-                .clicked()
+            if footer_btn(
+                ui,
+                RichText::new(t("footer.clear"))
+                    .size(11.5)
+                    .color(palette.danger),
+            )
+            .on_hover_text(tf("footer.clear_tip", &[("shortcut", clear_s)]))
+            .clicked()
             {
                 actions.push(PopupAction::ClearUnpinned);
             }
@@ -177,7 +184,7 @@ pub(super) fn render_banner(
                     if show_ax_btn
                         && is_warn
                         && cfg!(target_os = "macos")
-                        && compact_button(ui, "打开辅助功能设置").clicked()
+                        && compact_button(ui, t("footer.open_accessibility")).clicked()
                     {
                         actions.push(PopupAction::OpenAccessibilitySettings);
                     }
@@ -193,7 +200,7 @@ pub(super) fn render_about_overlay(
     state: &mut PopupState,
     palette: &EarthPalette,
 ) {
-    egui::Window::new("关于 Earth")
+    egui::Window::new(t("about.window_title"))
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
@@ -212,7 +219,7 @@ pub(super) fn render_about_overlay(
                     ctx.stop_dragging();
                 }
                 ui.add_space(6.0);
-                ui.label(RichText::new("Earth 剪贴板").size(16.0).strong());
+                ui.label(RichText::new(t("about.app_name")).size(16.0).strong());
                 ui.label(
                     RichText::new(concat!("v", env!("CARGO_PKG_VERSION"), " · Pure Rust"))
                         .size(11.5)
@@ -220,15 +227,16 @@ pub(super) fn render_about_overlay(
                 );
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new("By 西岚")
+                    RichText::new(t("about.author"))
                         .size(12.0)
                         .color(palette.text_muted),
                 );
                 ui.add_space(12.0);
-                let close_btn = egui::Button::new(RichText::new("关闭").color(palette.on_accent))
-                    .fill(palette.accent)
-                    .stroke(Stroke::NONE)
-                    .corner_radius(CornerRadius::same(255));
+                let close_btn =
+                    egui::Button::new(RichText::new(t("about.close")).color(palette.on_accent))
+                        .fill(palette.accent)
+                        .stroke(Stroke::NONE)
+                        .corner_radius(CornerRadius::same(255));
                 if ui.add(close_btn).clicked() {
                     state.show_about_modal = false;
                 }

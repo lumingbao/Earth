@@ -130,7 +130,7 @@ fn trusted_publisher() -> Result<String, String> {
     if valid_publisher_pin(value) {
         Ok(value.to_string())
     } else {
-        Err("此构建未配置可信更新发布者，请点击「前往下载」手动更新".into())
+        Err(crate::i18n::t("updater.unconfigured_publisher").into())
     }
 }
 

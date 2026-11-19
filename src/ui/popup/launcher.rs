@@ -110,11 +110,9 @@ pub fn render_popup_view(
                         ui.set_max_width(msg_w);
                         ui.add(
                             egui::Label::new(
-                                RichText::new(
-                                    "⚠ 辅助功能未生效（若已开启，请在设置中点「-」移除后重加）",
-                                )
-                                .size(11.0)
-                                .color(palette.text_primary),
+                                RichText::new(t("banner.accessibility_warn"))
+                                    .size(11.0)
+                                    .color(palette.text_primary),
                             )
                             .truncate(),
                         );
@@ -123,7 +121,7 @@ pub fn render_popup_view(
                         if dismiss_button(ui).clicked() {
                             state.dismissed_accessibility_banner = true;
                         }
-                        if compact_button(ui, "去授权").clicked() {
+                        if compact_button(ui, t("banner.accessibility_btn")).clicked() {
                             actions.push(PopupAction::OpenAccessibilitySettings);
                         }
                     });
@@ -137,15 +135,18 @@ pub fn render_popup_view(
         let dl_state = state.update_download.clone();
         let banner_text = match &dl_state {
             UpdateDownloadState::Downloading { version } if version == &rel.version => {
-                format!("⬇ 正在自动下载新版本 v{}…", rel.version)
+                tf("banner.update_downloading", &[("version", &rel.version)])
             }
             UpdateDownloadState::ReadyToInstall { version, .. } if version == &rel.version => {
-                format!("🎉 新版本 v{} 已下载就绪", rel.version)
+                tf("banner.update_ready", &[("version", &rel.version)])
             }
             UpdateDownloadState::Failed { version, .. } if version == &rel.version => {
-                format!("⚠ v{} 自动下载失败，可重试或前往下载", rel.version)
+                tf("banner.update_failed", &[("version", &rel.version)])
             }
-            _ => format!("🎉 发现新版本 v{}（当前 v{CURRENT_VERSION}）", rel.version),
+            _ => tf(
+                "banner.update_available",
+                &[("version", &rel.version), ("current", CURRENT_VERSION)],
+            ),
         };
 
         egui::Frame::NONE
@@ -173,7 +174,7 @@ pub fn render_popup_view(
                         if dismiss_button(ui).clicked() {
                             state.dismissed_update_version = Some(rel.version.clone());
                         }
-                        if compact_button(ui, "前往下载").clicked() {
+                        if compact_button(ui, t("banner.update_open_download")).clicked() {
                             actions.push(PopupAction::OpenUrl(rel.html_url.clone()));
                         }
                         match dl_state {
@@ -182,7 +183,7 @@ pub fn render_popup_view(
                                 staged_path,
                             } if version == rel.version => {
                                 let restart_btn = egui::Button::new(
-                                    RichText::new("重启完成更新")
+                                    RichText::new(t("banner.update_restart"))
                                         .size(11.0)
                                         .color(palette.on_accent),
                                 )
@@ -198,13 +199,13 @@ pub fn render_popup_view(
                             UpdateDownloadState::Failed { version, .. }
                                 if version == rel.version && rel.download_url.is_some() =>
                             {
-                                if compact_button(ui, "重试下载").clicked() {
+                                if compact_button(ui, t("banner.update_retry")).clicked() {
                                     actions.push(PopupAction::StartUpdateDownload(rel.clone()));
                                 }
                             }
                             _ if rel.download_url.is_some() => {
                                 let auto_btn = egui::Button::new(
-                                    RichText::new("自动更新")
+                                    RichText::new(t("banner.update_auto"))
                                         .size(11.0)
                                         .color(palette.on_accent),
                                 )

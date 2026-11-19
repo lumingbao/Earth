@@ -1,3 +1,4 @@
+use crate::i18n::{t, tf};
 use egui::{InputState, Key, Modifiers};
 use global_hotkey::hotkey::HotKey;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
@@ -162,7 +163,8 @@ fn replace_registered_hotkey(
 /// Shared validation for native and egui recorders, and for global registration.
 pub fn validate_shortcut(shortcut: &str, global: bool) -> Result<(), String> {
     use global_hotkey::hotkey::{Code, Modifiers as HotkeyMods};
-    let hotkey = HotKey::from_str(shortcut).map_err(|e| format!("无法解析快捷键: {e}"))?;
+    let hotkey = HotKey::from_str(shortcut)
+        .map_err(|e| tf("hotkey.err_parse", &[("error", &e.to_string())]))?;
     let mods = hotkey.mods;
     let key = hotkey.key;
     let ctrl = HotkeyMods::CONTROL;
@@ -170,7 +172,7 @@ pub fn validate_shortcut(shortcut: &str, global: bool) -> Result<(), String> {
     let alt = HotkeyMods::ALT;
     let shift = HotkeyMods::SHIFT;
     if mods.is_empty() || mods == shift {
-        return Err("快捷键需要配合 Ctrl / Alt / Command 等修饰键".to_string());
+        return Err(t("hotkey.err_needs_mod").to_string());
     }
     let reserved = (key == Code::Space && (mods == ctrl || mods == cmd))
         || (key == Code::Tab && (mods == alt || mods == cmd))
@@ -184,7 +186,7 @@ pub fn validate_shortcut(shortcut: &str, global: bool) -> Result<(), String> {
     ) && (mods == ctrl || mods == cmd);
     let menu_accelerator = global && mods == alt && !cfg!(target_os = "macos");
     if reserved || editing || menu_accelerator {
-        return Err("该组合被系统或常用编辑/菜单操作占用，请使用其他组合".to_string());
+        return Err(t("hotkey.err_reserved").to_string());
     }
     Ok(())
 }
@@ -192,7 +194,7 @@ pub fn validate_shortcut(shortcut: &str, global: bool) -> Result<(), String> {
 pub fn format_shortcut_display(shortcut: &str) -> String {
     let trimmed = shortcut.trim();
     if trimmed.is_empty() {
-        return "未设置".to_string();
+        return t("hotkey.unset").to_string();
     }
     let parts: Vec<&str> = trimmed
         .split('+')
@@ -200,7 +202,7 @@ pub fn format_shortcut_display(shortcut: &str) -> String {
         .filter(|s| !s.is_empty())
         .collect();
     if parts.is_empty() {
-        return "未设置".to_string();
+        return t("hotkey.unset").to_string();
     }
 
     #[cfg(target_os = "macos")]
@@ -221,7 +223,7 @@ pub fn format_shortcut_display(shortcut: &str) -> String {
                 }
             } else {
                 let key_disp = match part.to_ascii_lowercase().as_str() {
-                    "space" => "空格".to_string(),
+                    "space" => t("hotkey.space").to_string(),
                     "backspace" => "⌫".to_string(),
                     "delete" => "⌦".to_string(),
                     "enter" | "return" => "↩".to_string(),

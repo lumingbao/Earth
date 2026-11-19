@@ -1,4 +1,5 @@
 use crate::hotkey::{consume_egui_shortcut, format_shortcut_display};
+use crate::i18n::{t, tf};
 use crate::model::{
     AppSettings, CategoryFilter, ClipItem, ClipKind, Collection, CopyTriggerMode, PasteBehavior,
     SearchBoxVisibility, SearchMode, format_bytes, truncate_chars,
@@ -262,9 +263,12 @@ impl PopupState {
                     let raw = item.text_content.as_deref().unwrap_or("");
                     let display = match raw.char_indices().nth(MAX_PREVIEW_TEXT_CHARS) {
                         Some((byte_idx, _)) => format!(
-                            "{}\n\n…（内容较长，速览仅展示前 {} 个字符；复制与粘贴仍保留完整内容）",
+                            "{}{}",
                             &raw[..byte_idx],
-                            MAX_PREVIEW_TEXT_CHARS
+                            tf(
+                                "workbench.preview_truncated",
+                                &[("max", &MAX_PREVIEW_TEXT_CHARS.to_string())]
+                            )
                         ),
                         None => raw.to_string(),
                     };
@@ -315,12 +319,13 @@ impl PopupState {
 
 fn build_qr_matrix(text: &str) -> Result<(usize, Vec<bool>), String> {
     if text.is_empty() {
-        return Err("空文本无法生成二维码".to_string());
+        return Err(t("qr.err_empty").to_string());
     }
     if text.len() > 2048 {
-        return Err("文本长度超过二维码容量上限（2048 字节）".to_string());
+        return Err(t("qr.err_too_long").to_string());
     }
-    let code = qrcode::QrCode::new(text.as_bytes()).map_err(|e| format!("生成二维码失败: {e}"))?;
+    let code = qrcode::QrCode::new(text.as_bytes())
+        .map_err(|e| tf("qr.err_generate", &[("error", &e.to_string())]))?;
     let width = code.width();
     let colors = code
         .into_colors()
