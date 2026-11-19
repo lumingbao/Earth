@@ -14,7 +14,7 @@ pub struct InstanceGuard {
     repaint: Arc<Mutex<Option<egui::Context>>>,
     worker: Option<JoinHandle<()>>,
     #[cfg(target_os = "macos")]
-    reopen_delegate: Option<objc2::rc::Retained<macos::ReopenDelegate>>,
+    reopen_handler: Option<objc2::rc::Retained<macos::ReopenHandler>>,
     // Drop ownership last, after closing/removing the native signal endpoint.
     _lock: File,
 }
@@ -76,7 +76,7 @@ impl InstanceGuard {
             repaint,
             worker: Some(worker),
             #[cfg(target_os = "macos")]
-            reopen_delegate: None,
+            reopen_handler: None,
         }))
     }
 
@@ -89,7 +89,7 @@ impl InstanceGuard {
         }
         #[cfg(target_os = "macos")]
         {
-            self.reopen_delegate = Some(macos::install(Arc::clone(&self.pending), ctx)?);
+            self.reopen_handler = Some(macos::install(Arc::clone(&self.pending), ctx)?);
         }
         Ok(())
     }
@@ -110,10 +110,10 @@ impl Drop for InstanceGuard {
         // Remove the endpoint before releasing ownership of the data directory.
         self.signal.cleanup();
         #[cfg(target_os = "macos")]
-        if self.reopen_delegate.is_some()
+        if self.reopen_handler.take().is_some()
             && let Some(mtm) = objc2::MainThreadMarker::new()
         {
-            objc2_app_kit::NSApplication::sharedApplication(mtm).setDelegate(None);
+            macos::uninstall(mtm);
         }
     }
 }
@@ -122,10 +122,12 @@ impl Drop for InstanceGuard {
 mod macos {
     use super::*;
     use objc2::rc::Retained;
-    use objc2::runtime::ProtocolObject;
-    use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
-    use objc2_app_kit::{NSApplication, NSApplicationDelegate};
-    use objc2_foundation::{NSObject, NSObjectProtocol};
+    use objc2::runtime::AnyObject;
+    use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+    use objc2_foundation::{NSAppleEventManager, NSObject, NSObjectProtocol};
+
+    pub(super) const K_CORE_EVENT_CLASS: u32 = u32::from_be_bytes(*b"aevt");
+    pub(super) const K_AE_REOPEN_APPLICATION: u32 = u32::from_be_bytes(*b"rapp");
 
     pub struct ReopenState {
         pending: Arc<AtomicBool>,
@@ -135,15 +137,19 @@ mod macos {
         #[unsafe(super = NSObject)]
         #[thread_kind = MainThreadOnly]
         #[ivars = ReopenState]
-        pub struct ReopenDelegate;
+        pub struct ReopenHandler;
 
-        unsafe impl NSObjectProtocol for ReopenDelegate {}
-        unsafe impl NSApplicationDelegate for ReopenDelegate {
-            #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
-            fn reopen(&self, _app: &NSApplication, _visible: bool) -> bool {
+        unsafe impl NSObjectProtocol for ReopenHandler {}
+
+        impl ReopenHandler {
+            #[unsafe(method(handleReopenEvent:withReplyEvent:))]
+            fn handle_reopen(
+                &self,
+                _event: Option<&AnyObject>,
+                _reply: Option<&AnyObject>,
+            ) {
                 self.ivars().pending.store(true, Ordering::Release);
                 self.ivars().ctx.request_repaint();
-                false
             }
         }
     );
@@ -151,17 +157,35 @@ mod macos {
     pub fn install(
         pending: Arc<AtomicBool>,
         ctx: egui::Context,
-    ) -> Result<Retained<ReopenDelegate>, String> {
+    ) -> Result<Retained<ReopenHandler>, String> {
         let mtm = MainThreadMarker::new().ok_or("macOS 窗口唤醒须在主线程初始化")?;
-        // Winit explicitly leaves NSApplicationDelegate for applications to own.
-        let app = NSApplication::sharedApplication(mtm);
-        if app.delegate().is_some() {
-            return Err("macOS 应用代理已被占用，重复打开时请使用托盘或全局快捷键".into());
-        }
-        let delegate = ReopenDelegate::alloc(mtm).set_ivars(ReopenState { pending, ctx });
-        let delegate: Retained<ReopenDelegate> = unsafe { msg_send![super(delegate), init] };
-        app.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
-        Ok(delegate)
+        let handler = ReopenHandler::alloc(mtm).set_ivars(ReopenState { pending, ctx });
+        let handler: Retained<ReopenHandler> = unsafe { msg_send![super(handler), init] };
+        // Install an Apple Event reopen handler rather than replacing NSApplicationDelegate,
+        // because winit 0.30 registers its own ApplicationDelegate and requires keeping it.
+        let manager = NSAppleEventManager::sharedAppleEventManager();
+        let target: &AnyObject = &handler;
+        let _: () = unsafe {
+            msg_send![
+                &*manager,
+                setEventHandler: target,
+                andSelector: sel!(handleReopenEvent:withReplyEvent:),
+                forEventClass: K_CORE_EVENT_CLASS,
+                andEventID: K_AE_REOPEN_APPLICATION
+            ]
+        };
+        Ok(handler)
+    }
+
+    pub fn uninstall(_mtm: MainThreadMarker) {
+        let manager = NSAppleEventManager::sharedAppleEventManager();
+        let _: () = unsafe {
+            msg_send![
+                &*manager,
+                removeEventHandlerForEventClass: K_CORE_EVENT_CLASS,
+                andEventID: K_AE_REOPEN_APPLICATION
+            ]
+        };
     }
 }
 
@@ -511,5 +535,19 @@ mod tests {
         assert!(native::notify(&dir).is_err());
         assert_eq!(fs::read(&target).unwrap(), b"unchanged");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reopen_handler_registers_expected_selector_and_fourcc() {
+        use objc2::ClassType;
+
+        assert_eq!(macos::K_CORE_EVENT_CLASS, 0x6165_7674);
+        assert_eq!(macos::K_AE_REOPEN_APPLICATION, 0x7261_7070);
+        assert!(
+            macos::ReopenHandler::class()
+                .instance_method(objc2::sel!(handleReopenEvent:withReplyEvent:))
+                .is_some()
+        );
     }
 }

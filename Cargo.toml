@@ -34,7 +34,7 @@ active-win-pos-rs = "0.11"
 libc = "0.2"
 winit = "0.30"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSURL", "NSData", "NSDictionary", "NSNull", "NSObjCRuntime", "NSGeometry"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSURL", "NSData", "NSDictionary", "NSNull", "NSObjCRuntime", "NSGeometry", "NSAppleEventManager"] }
 objc2-app-kit = { version = "0.3", features = [
     "NSApplication",
     "NSRunningApplication",
