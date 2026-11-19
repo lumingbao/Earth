@@ -270,9 +270,27 @@ pub fn render_settings_view(
                     (SettingsTab::Ignore, t("settings.tab.ignore")),
                     (SettingsTab::Advanced, t("settings.tab.advanced")),
                 ];
-                let tab_width = (ui.available_width() - 16.0) / tabs.len() as f32;
-                for (tab, label) in tabs {
+                let font_id = egui::FontId::proportional(12.0);
+                let measured: Vec<f32> = tabs
+                    .iter()
+                    .map(|(_, label)| {
+                        ui.painter()
+                            .layout_no_wrap(
+                                (*label).to_string(),
+                                font_id.clone(),
+                                palette.text_secondary,
+                            )
+                            .size()
+                            .x
+                    })
+                    .collect();
+                let total_text_w: f32 = measured.iter().sum();
+                let spacing_total = 4.0 * (tabs.len().saturating_sub(1)) as f32;
+                let total_avail = (ui.available_width() - spacing_total).max(0.0);
+                let extra_per_tab = ((total_avail - total_text_w) / tabs.len() as f32).max(6.0);
+                for ((tab, label), text_w) in tabs.into_iter().zip(measured) {
                     let active = state.active_tab == tab;
+                    let tab_width = text_w + extra_per_tab;
                     let (rect, resp) =
                         ui.allocate_exact_size(vec2(tab_width, 28.0), egui::Sense::click());
                     if active {
@@ -293,7 +311,7 @@ pub fn render_settings_view(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
                         label,
-                        egui::FontId::proportional(12.0),
+                        font_id.clone(),
                         text_color,
                     );
                     if resp.clicked() {
@@ -458,38 +476,55 @@ fn render_general_tab(
 
         #[cfg(target_os = "macos")]
         {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if has_accessibility {
-                    ui.label(
+            ui.add_space(6.0);
+            if has_accessibility {
+                ui.add(
+                    egui::Label::new(
                         RichText::new(t("settings.general.accessibility_ok"))
                             .size(12.0)
                             .color(palette.success_text),
-                    );
-                } else {
-                    ui.label(
-                        RichText::new(t("settings.general.accessibility_missing"))
-                            .size(12.0)
-                            .color(palette.warning_text),
-                    );
-                    let auth_btn = egui::Button::new(
-                        RichText::new(t("settings.general.accessibility_grant"))
-                            .color(palette.on_accent),
                     )
-                    .fill(palette.accent)
-                    .stroke(Stroke::NONE)
-                    .corner_radius(CornerRadius::same(255));
-                    if ui.add(auth_btn).clicked() {
-                        actions.push(SettingsAction::OpenAccessibilitySettings);
-                    }
-                }
-            });
-            if !has_accessibility {
-                ui.label(
-                    RichText::new(t("settings.general.accessibility_hint"))
-                        .size(11.0)
-                        .color(palette.text_muted),
+                    .wrap(),
                 );
+            } else {
+                egui::Frame::NONE
+                    .fill(palette.warning_bg)
+                    .stroke(Stroke::new(1.0, palette.warning_border))
+                    .corner_radius(CornerRadius::same(12))
+                    .inner_margin(egui::Margin::symmetric(10, 8))
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.set_max_width(ui.available_width());
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(t("settings.general.accessibility_missing"))
+                                    .size(12.0)
+                                    .color(palette.warning_text),
+                            )
+                            .wrap(),
+                        );
+                        ui.add_space(4.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(t("settings.general.accessibility_hint"))
+                                    .size(11.0)
+                                    .color(palette.text_muted),
+                            )
+                            .wrap(),
+                        );
+                        ui.add_space(6.0);
+                        let auth_btn = egui::Button::new(
+                            RichText::new(t("settings.general.accessibility_grant"))
+                                .size(11.5)
+                                .color(palette.on_accent),
+                        )
+                        .fill(palette.accent)
+                        .stroke(Stroke::NONE)
+                        .corner_radius(CornerRadius::same(255));
+                        if padded_button(ui, auth_btn, vec2(12.0, 4.5)).clicked() {
+                            actions.push(SettingsAction::OpenAccessibilitySettings);
+                        }
+                    });
             }
         }
         #[cfg(not(target_os = "macos"))]
@@ -766,9 +801,14 @@ fn shortcut_row(
     let mut changed = false;
     let is_recording = state.recording == Some(target);
     ui.horizontal(|ui| {
-        ui.allocate_ui(vec2(86.0, 24.0), |ui| {
-            ui.label(label);
-        });
+        ui.allocate_ui_with_layout(
+            vec2(88.0, 26.0),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.set_min_width(88.0);
+                ui.label(label);
+            },
+        );
 
         let live_mods = if is_recording {
             platform::native_recording_modifiers()
@@ -1910,7 +1950,7 @@ mod tests {
                                 palette: &palette,
                                 storage_bytes: 0,
                                 item_count: 0,
-                                has_accessibility: true,
+                                has_accessibility: false,
                             },
                             &mut state,
                         );
@@ -1938,6 +1978,32 @@ mod tests {
 
             assert!(rects.iter().any(|(t, _)| t == "Earth Preferences"));
             assert!(rects.iter().any(|(t, _)| t == "Language:"));
+
+            let tab_labels = ["General", "Storage", "Appearance", "Privacy", "Advanced"];
+            let tab_rects: Vec<egui::Rect> = tab_labels
+                .iter()
+                .map(|label| {
+                    rects
+                        .iter()
+                        .find(|(t, _)| t == label)
+                        .unwrap_or_else(|| panic!("tab '{label}' should render"))
+                        .1
+                })
+                .collect();
+            for pair in tab_rects.windows(2) {
+                assert!(
+                    pair[0].right() + 6.0 <= pair[1].left(),
+                    "English settings tabs collided or were cramped: {:?} vs {:?}",
+                    pair[0],
+                    pair[1]
+                );
+            }
+            assert!(
+                tab_rects.last().unwrap().right() <= 424.0,
+                "Last English tab overflowed viewport: {:?}",
+                tab_rects.last()
+            );
+
             let (_, check_rect) = rects
                 .iter()
                 .find(|(t, _)| t.contains("Check for updates"))
@@ -1967,6 +2033,41 @@ mod tests {
                 status_rect.right() + 4.0 <= dl_page_rect.left(),
                 "English status overlapped Download button: {status_rect:?} vs {dl_page_rect:?}"
             );
+
+            #[cfg(target_os = "macos")]
+            {
+                let (_, warn_rect) = rects
+                    .iter()
+                    .find(|(t, _)| t.contains("Accessibility permission required"))
+                    .expect("Accessibility warning should render on macOS");
+                let (_, open_btn_rect) = rects
+                    .iter()
+                    .find(|(t, _)| t == "Open System Settings")
+                    .expect("Open System Settings button should render on macOS");
+                assert!(
+                    warn_rect.bottom() <= open_btn_rect.top(),
+                    "Open System Settings button should sit cleanly below warning text: {warn_rect:?} vs {open_btn_rect:?}"
+                );
+                assert!(
+                    open_btn_rect.right() <= 390.0,
+                    "Open System Settings button overflowed card bounds: {open_btn_rect:?}"
+                );
+            }
+
+            let reset_xs: Vec<f32> = rects
+                .iter()
+                .filter(|(t, _)| t == "Reset")
+                .map(|(_, r)| r.left())
+                .collect();
+            if reset_xs.len() >= 2 {
+                let first_x = reset_xs[0];
+                for x in &reset_xs[1..] {
+                    assert!(
+                        (x - first_x).abs() <= 1.0,
+                        "Shortcut Reset buttons should align in a straight column: {reset_xs:?}"
+                    );
+                }
+            }
         });
     }
 }

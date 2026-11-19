@@ -105,7 +105,7 @@ pub fn render_popup_view(
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    let msg_w = (ui.available_width() - 96.0).max(120.0);
+                    let msg_w = (ui.available_width() - 136.0).max(120.0);
                     ui.allocate_ui(vec2(msg_w, 18.0), |ui| {
                         ui.set_max_width(msg_w);
                         ui.add(
