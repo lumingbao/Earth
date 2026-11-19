@@ -435,7 +435,7 @@ fn render_general_tab(
     actions: &mut Vec<SettingsAction>,
 ) {
     section_card(ui, palette, |ui| {
-        ui.horizontal(|ui| {
+        control_row(ui, |ui| {
             ui.label(t("settings.general.language"));
             egui::ComboBox::from_id_salt("app_language_combo")
                 .selected_text(settings.language.label())
@@ -461,7 +461,7 @@ fn render_general_tab(
         {
             actions.push(SettingsAction::ToggleAutostart(settings.launch_at_login));
         }
-        ui.horizontal(|ui| {
+        control_row(ui, |ui| {
             if ui
                 .checkbox(
                     &mut settings.check_updates,
@@ -610,7 +610,7 @@ fn render_general_tab(
 
     ui.add_space(8.0);
     section_card(ui, palette, |ui| {
-        ui.horizontal(|ui| {
+        control_row(ui, |ui| {
             ui.label(t("settings.general.click_mode"));
             egui::ComboBox::from_id_salt("copy_trigger_mode_combo")
                 .selected_text(settings.copy_trigger_mode.label())
@@ -637,7 +637,7 @@ fn render_general_tab(
         );
 
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        control_row(ui, |ui| {
             ui.label(t("settings.general.search_mode"));
             egui::ComboBox::from_id_salt("search_mode_combo")
                 .selected_text(settings.search_mode.label())
@@ -816,7 +816,7 @@ fn shortcut_row(
 ) -> bool {
     let mut changed = false;
     let is_recording = state.recording == Some(target);
-    ui.horizontal(|ui| {
+    control_row(ui, |ui| {
         ui.allocate_ui_with_layout(
             vec2(88.0, 26.0),
             Layout::left_to_right(Align::Center),
@@ -930,7 +930,7 @@ fn render_storage_tab(
 
     ui.add_space(8.0);
     section_card(ui, palette, |ui| {
-        ui.horizontal(|ui| {
+        control_row(ui, |ui| {
             ui.label(t("settings.storage.max_history"));
             if ui
                 .add(
@@ -955,35 +955,38 @@ fn render_storage_tab(
             );
         });
 
-        ui.horizontal_wrapped(|ui| {
-            ui.label(t("settings.storage.item_limits"));
-            if ui
-                .add(
-                    egui::DragValue::new(&mut settings.max_text_mib)
-                        .range(1..=16)
-                        .prefix(t("settings.storage.limit_text_prefix"))
-                        .suffix(" MiB"),
-                )
-                .changed()
-                | ui.add(
-                    egui::DragValue::new(&mut settings.max_image_mib)
-                        .range(1..=64)
-                        .prefix(t("settings.storage.limit_image_prefix"))
-                        .suffix(" MiB"),
-                )
-                .changed()
-                | ui.add(
-                    egui::DragValue::new(&mut settings.max_image_megapixels)
-                        .range(1..=64)
-                        .suffix(t("settings.storage.limit_megapixels_suffix")),
-                )
-                .changed()
-            {
-                actions.push(SettingsAction::SettingsChanged);
-            }
+        ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y = standard_control_row_height(ui);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(t("settings.storage.item_limits"));
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut settings.max_text_mib)
+                            .range(1..=16)
+                            .prefix(t("settings.storage.limit_text_prefix"))
+                            .suffix(" MiB"),
+                    )
+                    .changed()
+                    | ui.add(
+                        egui::DragValue::new(&mut settings.max_image_mib)
+                            .range(1..=64)
+                            .prefix(t("settings.storage.limit_image_prefix"))
+                            .suffix(" MiB"),
+                    )
+                    .changed()
+                    | ui.add(
+                        egui::DragValue::new(&mut settings.max_image_megapixels)
+                            .range(1..=64)
+                            .suffix(t("settings.storage.limit_megapixels_suffix")),
+                    )
+                    .changed()
+                {
+                    actions.push(SettingsAction::SettingsChanged);
+                }
+            });
         });
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
+        control_row(ui, |ui| {
             ui.label(t("settings.storage.sort_order"));
             egui::ComboBox::from_id_salt("sort_order_combo")
                 .selected_text(settings.sort_order.label())
@@ -1043,7 +1046,7 @@ fn render_appearance_tab(
     actions: &mut Vec<SettingsAction>,
 ) {
     section_card(ui, palette, |ui| {
-        ui.horizontal(|ui| {
+        control_row(ui, |ui| {
             ui.label(t("settings.appearance.theme"));
             egui::ComboBox::from_id_salt("theme_mode_combo")
                 .selected_text(settings.theme_mode.label())
@@ -1059,7 +1062,7 @@ fn render_appearance_tab(
                 });
         });
 
-        ui.horizontal(|ui| {
+        control_row(ui, |ui| {
             ui.label(t("settings.appearance.popup_pos"));
             egui::ComboBox::from_id_salt("popup_pos_combo")
                 .selected_text(settings.popup_position.label())
@@ -1080,7 +1083,7 @@ fn render_appearance_tab(
                 });
         });
 
-        ui.horizontal(|ui| {
+        control_row(ui, |ui| {
             ui.label(t("settings.appearance.pin_pos"));
             egui::ComboBox::from_id_salt("pin_pos_combo")
                 .selected_text(settings.pin_position.label())
@@ -1096,7 +1099,7 @@ fn render_appearance_tab(
                 });
         });
 
-        ui.horizontal(|ui| {
+        control_row(ui, |ui| {
             ui.label(t("settings.appearance.highlight"));
             egui::ComboBox::from_id_salt("highlight_combo")
                 .selected_text(settings.match_highlight.label())
@@ -1139,7 +1142,7 @@ fn render_appearance_tab(
             )
             .changed();
 
-        ui.horizontal(|ui| {
+        control_row(ui, |ui| {
             ui.label(t("settings.appearance.search_vis"));
             egui::ComboBox::from_id_salt("search_vis_combo")
                 .selected_text(settings.search_box_visibility.label())
@@ -1282,7 +1285,7 @@ fn render_editable_string_list(
     palette: &EarthPalette,
     actions: &mut Vec<SettingsAction>,
 ) {
-    ui.horizontal(|ui| {
+    control_row(ui, |ui| {
         let edit = egui::TextEdit::singleline(draft)
             .hint_text(placeholder)
             .desired_width(ui.available_width() - 68.0);
@@ -1320,7 +1323,7 @@ fn render_editable_string_list(
                 );
             } else {
                 for (idx, entry) in list.iter().enumerate() {
-                    ui.horizontal(|ui| {
+                    control_row(ui, |ui| {
                         ui.label(RichText::new(entry).size(12.0));
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             if compact_button(ui, t("settings.ignore.remove")).clicked() {
@@ -1393,7 +1396,7 @@ fn render_advanced_tab(
         );
         ui.add_space(4.0);
 
-        ui.horizontal(|ui| {
+        control_row(ui, |ui| {
             ui.add(
                 egui::TextEdit::singleline(&mut state.new_collection_name)
                     .hint_text(t("settings.advanced.collection_placeholder"))
@@ -1432,7 +1435,7 @@ fn render_advanced_tab(
 
         ui.add_space(6.0);
         for col in collections {
-            ui.horizontal(|ui| {
+            control_row(ui, |ui| {
                 let dot_color = parse_hex_color32(&col.color_hex).unwrap_or(palette.accent);
                 let (r, _) = ui.allocate_exact_size(vec2(14.0, 14.0), egui::Sense::hover());
                 ui.painter().circle_filled(r.center(), 5.0, dot_color);
@@ -1492,6 +1495,25 @@ fn render_advanced_tab(
             });
         }
     });
+}
+
+fn standard_control_row_height(ui: &Ui) -> f32 {
+    (ui.text_style_height(&egui::TextStyle::Body) + ui.spacing().button_padding.y * 2.0)
+        .max(ui.spacing().interact_size.y)
+}
+
+/// Renders a horizontal form row sized to the standard pill control height so leading
+/// labels share the exact vertical centerline of sibling ComboBoxes, Buttons, and inputs.
+fn control_row(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui)) {
+    let row_h = standard_control_row_height(ui);
+    ui.allocate_ui_with_layout(
+        vec2(ui.available_width(), row_h),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            ui.set_min_height(row_h);
+            add_contents(ui);
+        },
+    );
 }
 
 fn section_card(ui: &mut Ui, palette: &EarthPalette, add_contents: impl FnOnce(&mut Ui)) {
@@ -2085,5 +2107,150 @@ mod tests {
                 }
             }
         });
+    }
+
+    #[test]
+    fn settings_form_labels_vertically_align_with_controls() {
+        let ctx = egui::Context::default();
+        crate::ui::theme::install_crisp_fonts(&ctx);
+        let palette = EarthPalette::resolve(ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        fn render_tab_text_rects(
+            ctx: &egui::Context,
+            palette: &EarthPalette,
+            tab: SettingsTab,
+        ) -> Vec<(String, egui::Rect)> {
+            let mut settings = AppSettings::default();
+            let mut state = SettingsState {
+                active_tab: tab,
+                ..Default::default()
+            };
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    vec2(424.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let ctx = ui.ctx().clone();
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| {
+                        let _ = render_settings_view(
+                            ui,
+                            &ctx,
+                            SettingsViewData {
+                                settings: &mut settings,
+                                collections: &[],
+                                palette,
+                                storage_bytes: 0,
+                                item_count: 0,
+                                has_accessibility: true,
+                            },
+                            &mut state,
+                        );
+                    });
+            });
+            out.textures_delta.clear();
+            let mut rects = Vec::new();
+            fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(String, egui::Rect)>) {
+                match shape {
+                    egui::epaint::Shape::Text(t) => {
+                        out.push((t.galley.text().to_string(), t.visual_bounding_rect()));
+                    }
+                    egui::epaint::Shape::Vec(v) => {
+                        for child in v {
+                            walk(child, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for clipped in &out.shapes {
+                walk(&clipped.shape, &mut rects);
+            }
+            rects
+        }
+
+        for lang in [
+            crate::i18n::ResolvedLanguage::ZhCn,
+            crate::i18n::ResolvedLanguage::EnUs,
+        ] {
+            crate::i18n::with_test_language(lang, || {
+                let defaults = AppSettings::default();
+                let general = render_tab_text_rects(&ctx, &palette, SettingsTab::General);
+                let appearance = render_tab_text_rects(&ctx, &palette, SettingsTab::Appearance);
+                let storage = render_tab_text_rects(&ctx, &palette, SettingsTab::Storage);
+
+                let pairs = [
+                    (
+                        &general,
+                        t("settings.general.language"),
+                        defaults.language.label(),
+                    ),
+                    (
+                        &general,
+                        t("settings.general.click_mode"),
+                        defaults.copy_trigger_mode.label(),
+                    ),
+                    (
+                        &general,
+                        t("settings.general.search_mode"),
+                        defaults.search_mode.label(),
+                    ),
+                    (
+                        &appearance,
+                        t("settings.appearance.theme"),
+                        defaults.theme_mode.label(),
+                    ),
+                    (
+                        &appearance,
+                        t("settings.appearance.popup_pos"),
+                        defaults.popup_position.label(),
+                    ),
+                    (
+                        &appearance,
+                        t("settings.appearance.pin_pos"),
+                        defaults.pin_position.label(),
+                    ),
+                    (
+                        &appearance,
+                        t("settings.appearance.highlight"),
+                        defaults.match_highlight.label(),
+                    ),
+                    (
+                        &appearance,
+                        t("settings.appearance.search_vis"),
+                        defaults.search_box_visibility.label(),
+                    ),
+                    (
+                        &storage,
+                        t("settings.storage.sort_order"),
+                        defaults.sort_order.label(),
+                    ),
+                ];
+                for (rects, label, value) in pairs {
+                    let (_, label_rect) = rects
+                        .iter()
+                        .find(|(text, _)| text == label)
+                        .unwrap_or_else(|| panic!("[{lang:?}] missing label '{label}'"));
+                    let (_, val_rect) = rects
+                        .iter()
+                        .find(|(text, _)| text == value)
+                        .unwrap_or_else(|| {
+                            panic!("[{lang:?}] missing control value '{value}' for '{label}'")
+                        });
+                    let dy = (label_rect.center().y - val_rect.center().y).abs();
+                    assert!(
+                        dy <= 1.5,
+                        "[{lang:?}] label '{label}' (cy={:.1}) not vertically aligned with '{value}' (cy={:.1}), dy={dy:.1}",
+                        label_rect.center().y,
+                        val_rect.center().y,
+                    );
+                }
+            });
+        }
     }
 }
