@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="280" height="112" viewBox="0 0 280 112" role="img" aria-label="Earth">
+  <title>Earth</title>
+  <defs>
+    <linearGradient id="earth-card-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0A1624"/>
+      <stop offset="52%" stop-color="#0D2736"/>
+      <stop offset="100%" stop-color="#0B3835"/>
+    </linearGradient>
+    <radialGradient id="earth-glow-top" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#38BDF8" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#38BDF8" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="earth-glow-bottom" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#10B981" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="#10B981" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="earth-globe" cx="34%" cy="30%" r="72%">
+      <stop offset="0%" stop-color="#7DD3FC"/>
+      <stop offset="45%" stop-color="#0EA5E9"/>
+      <stop offset="100%" stop-color="#0F766E"/>
+    </radialGradient>
+    <clipPath id="earth-card-clip">
+      <rect x="12" y="16" width="80" height="80" rx="20"/>
+    </clipPath>
+  </defs>
+  <g>
+    <rect x="12" y="16" width="80" height="80" rx="20" fill="url(#earth-card-bg)"/>
+    <g clip-path="url(#earth-card-clip)">
+      <circle cx="34" cy="34" r="42" fill="url(#earth-glow-top)"/>
+      <circle cx="76" cy="82" r="42" fill="url(#earth-glow-bottom)"/>
+      <g transform="translate(52 56) rotate(-22)">
+        <path d="M -31 0 A 31 11 0 0 1 31 0" fill="none" stroke="#38BDF8" stroke-opacity="0.46" stroke-width="3.6" stroke-linecap="round"/>
+      </g>
+      <circle cx="52" cy="56" r="20.5" fill="url(#earth-globe)"/>
+      <ellipse cx="52" cy="56" rx="9.5" ry="20.2" fill="none" stroke="#FFFFFF" stroke-opacity="0.42" stroke-width="1.4"/>
+      <line x1="31.8" y1="56" x2="72.2" y2="56" stroke="#FFFFFF" stroke-opacity="0.42" stroke-width="1.4"/>
+      <line x1="52" y1="35.8" x2="52" y2="76.2" stroke="#FFFFFF" stroke-opacity="0.34" stroke-width="1.2"/>
+      <g transform="translate(52 56) rotate(-22)">
+        <path d="M -31 0 A 31 11 0 0 0 31 0" fill="none" stroke="#6EE7B7" stroke-opacity="0.95" stroke-width="3.8" stroke-linecap="round"/>
+      </g>
+    </g>
+    <rect x="12.75" y="16.75" width="78.5" height="78.5" rx="19.25" fill="none" stroke="#FFFFFF" stroke-opacity="0.16" stroke-width="1.5"/>
+  </g>
+  <g transform="translate(114 78.5)">
+    <path fill="#0E0E10" d="M3.75 -0.00L3.75 -45.09L33.62 -45.09L33.62 -37.31L13.19 -37.31L13.19 -26.48L32.47 -26.48L32.47 -19.11L13.19 -19.11L13.19 -7.78L33.62 -7.78L33.62 -0.00ZM49.67 0.53Q46.33 0.53 43.79 -0.77Q41.25 -2.06 39.83 -4.35Q38.41 -6.64 38.41 -9.59L38.41 -9.64Q38.41 -12.70 39.94 -14.88Q41.47 -17.05 44.38 -18.30Q47.30 -19.56 51.45 -19.83L64.52 -20.64L64.52 -14.97L52.83 -14.20Q50.19 -14.05 48.81 -12.97Q47.44 -11.89 47.44 -10.11L47.44 -10.06Q47.44 -8.22 48.85 -7.17Q50.27 -6.12 52.62 -6.12Q54.67 -6.12 56.27 -6.92Q57.88 -7.72 58.80 -9.11Q59.73 -10.50 59.73 -12.23L59.73 -22.39Q59.73 -24.62 58.32 -25.91Q56.91 -27.20 54.22 -27.20Q51.67 -27.20 50.16 -26.15Q48.66 -25.09 48.31 -23.47L48.25 -23.17L39.91 -23.17L39.94 -23.55Q40.20 -26.66 42.00 -29.05Q43.80 -31.45 46.99 -32.82Q50.19 -34.19 54.61 -34.19Q58.94 -34.19 62.13 -32.79Q65.33 -31.39 67.09 -28.87Q68.86 -26.34 68.86 -22.97L68.86 -0.00L59.73 -0.00L59.73 -4.98L59.55 -4.98Q58.59 -3.28 57.12 -2.04Q55.64 -0.80 53.76 -0.13Q51.88 0.53 49.67 0.53ZM74.94 -0.00L74.94 -33.50L84.06 -33.50L84.06 -27.66L84.25 -27.66Q84.98 -30.75 86.96 -32.47Q88.94 -34.19 91.86 -34.19Q92.62 -34.19 93.30 -34.09Q93.98 -33.98 94.50 -33.83L94.50 -25.80Q93.94 -26.03 93.06 -26.17Q92.19 -26.31 91.19 -26.31Q88.94 -26.31 87.34 -25.44Q85.73 -24.56 84.90 -22.88Q84.06 -21.19 84.06 -18.75L84.06 -0.00ZM113.00 0.69Q107.42 0.69 104.74 -1.65Q102.06 -3.98 102.06 -9.36L102.06 -26.62L97.41 -26.62L97.41 -33.50L102.06 -33.50L102.06 -41.67L111.28 -41.67L111.28 -33.50L117.41 -33.50L117.41 -26.62L111.28 -26.62L111.28 -10.36Q111.28 -8.02 112.32 -7.10Q113.36 -6.19 115.44 -6.19Q116.05 -6.19 116.52 -6.23Q116.98 -6.28 117.41 -6.33L117.41 0.34Q116.64 0.47 115.53 0.58Q114.42 0.69 113.00 0.69ZM122.86 -0.00L122.86 -45.09L131.98 -45.09L131.98 -27.70L132.17 -27.70Q133.47 -30.83 136.08 -32.51Q138.69 -34.19 142.45 -34.19Q146.09 -34.19 148.72 -32.58Q151.34 -30.97 152.77 -28.02Q154.19 -25.08 154.19 -21.03L154.19 -0.00L145.06 -0.00L145.06 -19.16Q145.06 -22.66 143.39 -24.64Q141.72 -26.62 138.61 -26.62Q136.61 -26.62 135.12 -25.67Q133.62 -24.72 132.80 -23.05Q131.98 -21.38 131.98 -19.17L131.98 -0.00Z"/>
+  </g>
+</svg>
