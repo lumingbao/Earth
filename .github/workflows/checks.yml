@@ -1,0 +1,28 @@
+name: Check
+on: [pull_request, push]
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Check installer SemVer guards
+        run: node packaging/semver.test.js
+      - name: Check native Windows Script Host entry
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & "$env:SystemRoot\System32\cscript.exe" //B //NoLogo packaging/semver.js 9999.0.0
+          if ($LASTEXITCODE -ne 0) { throw "The native installer version checker failed with exit code $LASTEXITCODE" }
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked

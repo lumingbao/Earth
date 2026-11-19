@@ -14,7 +14,7 @@ pub fn restore_frontmost_app(_app: &ActiveAppInfo) -> bool {
     false
 }
 
-pub fn simulate_paste() -> Result<(), String> {
+pub fn simulate_paste(_target: &ActiveAppInfo) -> Result<(), String> {
     Err("当前平台暂不支持自动模拟粘贴".to_string())
 }
 
@@ -71,9 +71,18 @@ pub fn open_url(url: &str) {
 pub fn preferred_system_fonts() -> PreferredSystemFonts {
     let mut ui = Vec::new();
     for (path, ps) in [
-        ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", "NotoSansCJKsc-Regular"),
-        ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", "NotoSansCJKsc-Regular"),
-        ("/usr/share/fonts/truetype/wqy/wqy-microhei.ttc", "WenQuanYiMicroHei"),
+        (
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "NotoSansCJKsc-Regular",
+        ),
+        (
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+            "NotoSansCJKsc-Regular",
+        ),
+        (
+            "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+            "WenQuanYiMicroHei",
+        ),
     ] {
         let p = PathBuf::from(path);
         if p.is_file() {

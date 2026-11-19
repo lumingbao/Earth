@@ -1,9 +1,10 @@
+use crate::platform::TrayPosition;
 use std::sync::mpsc::{self, Receiver};
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 pub enum TrayAction {
-    TogglePopup(Option<(f32, f32)>),
+    TogglePopup(Option<TrayPosition>),
     TogglePause,
     IgnoreNextEvent,
     OpenSettings,
@@ -23,7 +24,9 @@ pub struct EarthTray {
     id_quit: MenuId,
     tray_rx: Receiver<TrayIconEvent>,
     menu_rx: Receiver<MenuEvent>,
-    last_tray_logical_pos: Option<(f32, f32)>,
+    // Physical desktop pixels on Windows, platform points elsewhere. Never
+    // cache Windows positions in units belonging to a movable egui viewport.
+    last_tray_native_pos: Option<TrayPosition>,
     last_visible: bool,
     last_paused: bool,
     last_ignore_next: bool,
@@ -95,7 +98,9 @@ impl EarthTray {
             .build()
             .map_err(|e| format!("创建系统托盘失败: {e}"))?;
 
-        let _ = tray_icon.set_visible(visible);
+        tray_icon
+            .set_visible(visible)
+            .map_err(|e| format!("设置托盘可见性失败: {e}"))?;
 
         let initial_title_or_tip = if cfg!(target_os = "macos") {
             None
@@ -115,7 +120,7 @@ impl EarthTray {
             id_quit,
             tray_rx,
             menu_rx,
-            last_tray_logical_pos: None,
+            last_tray_native_pos: None,
             last_visible: visible,
             last_paused: paused,
             last_ignore_next: ignore_next,
@@ -123,8 +128,12 @@ impl EarthTray {
         })
     }
 
-    pub fn last_tray_pos(&self) -> Option<(f32, f32)> {
-        self.last_tray_logical_pos
+    pub fn last_tray_pos(&self) -> Option<TrayPosition> {
+        self.last_tray_native_pos
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.last_visible
     }
 
     pub fn sync_state(
@@ -133,9 +142,11 @@ impl EarthTray {
         paused: bool,
         ignore_next: bool,
         menubar_preview: Option<&str>,
-    ) {
+    ) -> Result<(), String> {
         if show_icon != self.last_visible {
-            let _ = self.tray_icon.set_visible(show_icon);
+            self.tray_icon
+                .set_visible(show_icon)
+                .map_err(|e| format!("设置托盘可见性失败: {e}"))?;
             self.last_visible = show_icon;
         }
         if paused != self.last_paused {
@@ -180,6 +191,7 @@ impl EarthTray {
                 self.last_title_or_tip = next_tip;
             }
         }
+        Ok(())
     }
 
     pub fn poll_actions(&mut self, dpi_scale: f32) -> Vec<TrayAction> {
@@ -193,22 +205,38 @@ impl EarthTray {
                 ..
             } = ev
             {
-                let scale = dpi_scale.max(1.0) as f64;
-                let logical_x = ((rect.position.x + rect.size.width as f64 * 0.5) / scale) as f32;
-                let logical_y = ((rect.position.y + rect.size.height as f64) / scale) as f32;
-                let pos = if rect.size.width > 0 {
-                    (logical_x, logical_y)
-                } else {
-                    ((position.x / scale) as f32, (position.y / scale) as f32)
+                let physical = tray_anchor_physical(
+                    (position.x, position.y),
+                    (rect.position.x, rect.position.y),
+                    (rect.size.width, rect.size.height),
+                );
+                #[cfg(target_os = "windows")]
+                let pos = {
+                    let _ = dpi_scale;
+                    physical
                 };
-                self.last_tray_logical_pos = Some(pos);
+                #[cfg(not(target_os = "windows"))]
+                let pos = {
+                    let scale = dpi_scale.max(1.0);
+                    TrayPosition {
+                        popup_anchor: (
+                            physical.popup_anchor.0 / scale,
+                            physical.popup_anchor.1 / scale,
+                        ),
+                        monitor_anchor: (
+                            physical.monitor_anchor.0 / scale,
+                            physical.monitor_anchor.1 / scale,
+                        ),
+                    }
+                };
+                self.last_tray_native_pos = Some(pos);
                 actions.push(TrayAction::TogglePopup(Some(pos)));
             }
         }
 
         while let Ok(ev) = self.menu_rx.try_recv() {
             if ev.id == self.id_show {
-                actions.push(TrayAction::TogglePopup(self.last_tray_logical_pos));
+                actions.push(TrayAction::TogglePopup(self.last_tray_native_pos));
             } else if ev.id == self.id_pause {
                 actions.push(TrayAction::TogglePause);
             } else if ev.id == self.id_ignore_next {
@@ -222,6 +250,29 @@ impl EarthTray {
             }
         }
         actions
+    }
+}
+
+fn tray_anchor_physical(
+    click: (f64, f64),
+    rect_position: (f64, f64),
+    rect_size: (u32, u32),
+) -> TrayPosition {
+    if rect_size.0 > 0 && rect_size.1 > 0 {
+        let center_x = (rect_position.0 + f64::from(rect_size.0) * 0.5) as f32;
+        TrayPosition {
+            popup_anchor: (center_x, (rect_position.1 + f64::from(rect_size.1)) as f32),
+            monitor_anchor: (
+                center_x,
+                (rect_position.1 + f64::from(rect_size.1) * 0.5) as f32,
+            ),
+        }
+    } else {
+        let point = (click.0 as f32, click.1 as f32);
+        TrayPosition {
+            popup_anchor: point,
+            monitor_anchor: point,
+        }
     }
 }
 
@@ -371,7 +422,8 @@ pub fn build_earth_tray_monochrome_rgba(size: u32, paused: bool) -> Vec<u8> {
             // Globe outline + interior meridian/equator lines clipped cleanly to the sphere.
             let outer_cov = aa_stroke((dist - radius).abs(), w_outer);
             let globe_fill = aa_fill(dist, radius);
-            let mer_cov = aa_stroke(ellipse_dist(dx, dy, radius * 0.47, radius), w_inner) * globe_fill;
+            let mer_cov =
+                aa_stroke(ellipse_dist(dx, dy, radius * 0.47, radius), w_inner) * globe_fill;
             let eq_cov = aa_stroke(dy.abs(), w_inner) * globe_fill;
             let globe_cov = outer_cov.max(mer_cov).max(eq_cov);
 
@@ -406,7 +458,24 @@ pub fn build_earth_tray_monochrome_rgba(size: u32, paused: bool) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_earth_tray_monochrome_rgba, build_earth_tray_rgba};
+    use super::{build_earth_tray_monochrome_rgba, build_earth_tray_rgba, tray_anchor_physical};
+
+    #[test]
+    fn tray_anchor_uses_physical_icon_bounds_including_negative_origins() {
+        let position = tray_anchor_physical((900.0, 600.0), (-1900.0, -80.0), (32, 40));
+        assert_eq!(position.popup_anchor, (-1884.0, -40.0));
+        assert_eq!(position.monitor_anchor, (-1884.0, -60.0));
+        let fallback = tray_anchor_physical((-50.0, 1060.0), (0.0, 0.0), (0, 0));
+        assert_eq!(fallback.popup_anchor, (-50.0, 1060.0));
+        assert_eq!(fallback.monitor_anchor, fallback.popup_anchor);
+    }
+
+    #[test]
+    fn tray_monitor_anchor_stays_inside_icon_at_stacked_screen_boundary() {
+        let position = tray_anchor_physical((200.0, 1060.0), (1840.0, 1040.0), (40, 40));
+        assert_eq!(position.popup_anchor, (1860.0, 1080.0));
+        assert!(position.monitor_anchor.1 >= 1040.0 && position.monitor_anchor.1 < 1080.0);
+    }
 
     #[test]
     fn monochrome_tray_icon_is_pure_white_with_alpha_silhouette() {

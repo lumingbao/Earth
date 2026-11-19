@@ -1,6 +1,6 @@
 use crate::model::{MatchHighlight, ThemeMode};
-use egui::epaint::text::{FontData, FontFamily, FontInsert, FontPriority, InsertFontFamily};
 use egui::epaint::FontColorTransferFunction;
+use egui::epaint::text::{FontData, FontFamily, FontInsert, FontPriority, InsertFontFamily};
 use egui::{Color32, CornerRadius, FontId, Stroke, Style, TextFormat, Ui, Visuals};
 use std::collections::HashSet;
 use std::path::Path;
@@ -106,78 +106,78 @@ impl EarthPalette {
             // macOS Dark Mode (Apple HIG): neutral charcoal/graphite elevation + System Blue (#0A84FF)
             Self {
                 is_dark: true,
-                window_bg: Color32::from_rgb(30, 30, 30),         // #1E1E1E macOS windowBackgroundColor
-                surface_bg: Color32::from_rgb(40, 40, 42),        // #28282A elevated card / control surface
-                card_bg: Color32::from_rgb(51, 51, 54),           // #333336 search pill / capsules / icon wells
-                row_hover_bg: Color32::from_rgb(56, 56, 60),      // #38383C neutral graphite hover
-                row_selected_bg: Color32::from_rgb(25, 48, 78),   // #19304E subtle System Blue selection tint
-                border: Color32::from_rgb(68, 68, 72),            // #444448 macOS dark window/control bezel
-                border_subtle: Color32::from_rgb(52, 52, 56),     // #343438 macOS separatorColor
-                border_strong: Color32::from_rgb(56, 132, 224),   // #3884E0 focused System Blue ring
-                text_primary: Color32::from_rgb(245, 245, 247),   // #F5F5F7 Apple primary labelColor
+                window_bg: Color32::from_rgb(30, 30, 30), // #1E1E1E macOS windowBackgroundColor
+                surface_bg: Color32::from_rgb(40, 40, 42), // #28282A elevated card / control surface
+                card_bg: Color32::from_rgb(51, 51, 54), // #333336 search pill / capsules / icon wells
+                row_hover_bg: Color32::from_rgb(56, 56, 60), // #38383C neutral graphite hover
+                row_selected_bg: Color32::from_rgb(25, 48, 78), // #19304E subtle System Blue selection tint
+                border: Color32::from_rgb(68, 68, 72), // #444448 macOS dark window/control bezel
+                border_subtle: Color32::from_rgb(52, 52, 56), // #343438 macOS separatorColor
+                border_strong: Color32::from_rgb(56, 132, 224), // #3884E0 focused System Blue ring
+                text_primary: Color32::from_rgb(245, 245, 247), // #F5F5F7 Apple primary labelColor
                 text_secondary: Color32::from_rgb(152, 152, 157), // #98989D Apple secondaryLabelColor
-                text_muted: Color32::from_rgb(110, 110, 115),     // #6E6E73 Apple tertiaryLabelColor
-                accent: Color32::from_rgb(10, 132, 255),          // #0A84FF Apple Dark Mode systemBlue
-                accent_hover: Color32::from_rgb(64, 156, 255),    // #409CFF lighter systemBlue hover
-                accent_active: Color32::from_rgb(0, 113, 227),    // #0071E3 pressed systemBlue
-                accent_soft: Color32::from_rgb(24, 46, 74),       // #182E4A soft translucent blue pill fill
-                accent_text: Color32::from_rgb(100, 178, 255),    // #64B2FF high-contrast blue label
+                text_muted: Color32::from_rgb(110, 110, 115), // #6E6E73 Apple tertiaryLabelColor
+                accent: Color32::from_rgb(10, 132, 255),      // #0A84FF Apple Dark Mode systemBlue
+                accent_hover: Color32::from_rgb(64, 156, 255), // #409CFF lighter systemBlue hover
+                accent_active: Color32::from_rgb(0, 113, 227), // #0071E3 pressed systemBlue
+                accent_soft: Color32::from_rgb(24, 46, 74), // #182E4A soft translucent blue pill fill
+                accent_text: Color32::from_rgb(100, 178, 255), // #64B2FF high-contrast blue label
                 accent_secondary: Color32::from_rgb(100, 210, 255), // #64D2FF Apple Dark Mode systemCyan
-                pin_amber: Color32::from_rgb(255, 159, 10),       // #FF9F0A Apple Dark Mode systemOrange
-                success: Color32::from_rgb(48, 209, 88),          // #30D158 Apple Dark Mode systemGreen
-                success_bg: Color32::from_rgb(24, 48, 32),        // #183020 tinted systemGreen surface
-                success_border: Color32::from_rgb(42, 92, 56),    // #2A5C38
-                success_text: Color32::from_rgb(68, 219, 106),    // #44DB6A
-                warning_bg: Color32::from_rgb(54, 42, 22),        // #362A16 tinted systemOrange surface
-                warning_border: Color32::from_rgb(108, 78, 28),   // #6C4E1C
-                warning_text: Color32::from_rgb(255, 180, 64),    // #FFB440
-                danger: Color32::from_rgb(255, 69, 58),           // #FF453A Apple Dark Mode systemRed
-                danger_bg: Color32::from_rgb(56, 28, 28),         // #381C1C tinted systemRed surface
-                danger_border: Color32::from_rgb(112, 46, 44),    // #702E2C
-                danger_text: Color32::from_rgb(255, 105, 97),     // #FF6961
-                info_bg: Color32::from_rgb(26, 42, 62),           // #1A2A3E
-                info_border: Color32::from_rgb(46, 82, 124),      // #2E527C
-                keycap_bg: Color32::from_rgb(54, 54, 58),         // #36363A neutral dark keycap
-                keycap_text: Color32::from_rgb(174, 174, 178),    // #AEAEB2 Apple systemGray2
+                pin_amber: Color32::from_rgb(255, 159, 10), // #FF9F0A Apple Dark Mode systemOrange
+                success: Color32::from_rgb(48, 209, 88),    // #30D158 Apple Dark Mode systemGreen
+                success_bg: Color32::from_rgb(24, 48, 32),  // #183020 tinted systemGreen surface
+                success_border: Color32::from_rgb(42, 92, 56), // #2A5C38
+                success_text: Color32::from_rgb(68, 219, 106), // #44DB6A
+                warning_bg: Color32::from_rgb(54, 42, 22),  // #362A16 tinted systemOrange surface
+                warning_border: Color32::from_rgb(108, 78, 28), // #6C4E1C
+                warning_text: Color32::from_rgb(255, 180, 64), // #FFB440
+                danger: Color32::from_rgb(255, 69, 58),     // #FF453A Apple Dark Mode systemRed
+                danger_bg: Color32::from_rgb(56, 28, 28),   // #381C1C tinted systemRed surface
+                danger_border: Color32::from_rgb(112, 46, 44), // #702E2C
+                danger_text: Color32::from_rgb(255, 105, 97), // #FF6961
+                info_bg: Color32::from_rgb(26, 42, 62),     // #1A2A3E
+                info_border: Color32::from_rgb(46, 82, 124), // #2E527C
+                keycap_bg: Color32::from_rgb(54, 54, 58),   // #36363A neutral dark keycap
+                keycap_text: Color32::from_rgb(174, 174, 178), // #AEAEB2 Apple systemGray2
                 on_accent: Color32::from_rgb(255, 255, 255),
             }
         } else {
             // macOS Light Mode (Apple HIG): neutral warm-cool paper grays + System Blue (#007AFF)
             Self {
                 is_dark: false,
-                window_bg: Color32::from_rgb(245, 245, 247),      // #F5F5F7 macOS windowBackgroundColor
-                surface_bg: Color32::from_rgb(255, 255, 255),     // #FFFFFF elevated card / control surface
-                card_bg: Color32::from_rgb(235, 235, 238),        // #EBEBEE search pill / capsules / icon wells
-                row_hover_bg: Color32::from_rgb(242, 242, 245),   // #F2F2F5 neutral light hover
+                window_bg: Color32::from_rgb(245, 245, 247), // #F5F5F7 macOS windowBackgroundColor
+                surface_bg: Color32::from_rgb(255, 255, 255), // #FFFFFF elevated card / control surface
+                card_bg: Color32::from_rgb(235, 235, 238), // #EBEBEE search pill / capsules / icon wells
+                row_hover_bg: Color32::from_rgb(242, 242, 245), // #F2F2F5 neutral light hover
                 row_selected_bg: Color32::from_rgb(232, 242, 255), // #E8F2FF subtle System Blue selection tint
-                border: Color32::from_rgb(209, 209, 214),         // #D1D1D6 Apple systemGray4 bezel
-                border_subtle: Color32::from_rgb(229, 229, 234),  // #E5E5EA Apple systemGray5 separator
-                border_strong: Color32::from_rgb(153, 200, 255),  // #99C8FF focused System Blue ring
-                text_primary: Color32::from_rgb(29, 29, 31),      // #1D1D1F Apple primary labelColor
+                border: Color32::from_rgb(209, 209, 214), // #D1D1D6 Apple systemGray4 bezel
+                border_subtle: Color32::from_rgb(229, 229, 234), // #E5E5EA Apple systemGray5 separator
+                border_strong: Color32::from_rgb(153, 200, 255), // #99C8FF focused System Blue ring
+                text_primary: Color32::from_rgb(29, 29, 31),     // #1D1D1F Apple primary labelColor
                 text_secondary: Color32::from_rgb(110, 110, 115), // #6E6E73 Apple secondaryLabelColor
-                text_muted: Color32::from_rgb(142, 142, 147),     // #8E8E93 Apple tertiaryLabelColor
-                accent: Color32::from_rgb(0, 122, 255),           // #007AFF Apple Light Mode systemBlue
-                accent_hover: Color32::from_rgb(30, 140, 255),    // #1E8CFF lighter systemBlue hover
-                accent_active: Color32::from_rgb(0, 102, 214),    // #0066D6 pressed systemBlue
-                accent_soft: Color32::from_rgb(232, 242, 255),    // #E8F2FF soft translucent blue pill fill
-                accent_text: Color32::from_rgb(0, 102, 214),      // #0066D6 accessible blue label
+                text_muted: Color32::from_rgb(142, 142, 147), // #8E8E93 Apple tertiaryLabelColor
+                accent: Color32::from_rgb(0, 122, 255),       // #007AFF Apple Light Mode systemBlue
+                accent_hover: Color32::from_rgb(30, 140, 255), // #1E8CFF lighter systemBlue hover
+                accent_active: Color32::from_rgb(0, 102, 214), // #0066D6 pressed systemBlue
+                accent_soft: Color32::from_rgb(232, 242, 255), // #E8F2FF soft translucent blue pill fill
+                accent_text: Color32::from_rgb(0, 102, 214),   // #0066D6 accessible blue label
                 accent_secondary: Color32::from_rgb(50, 173, 230), // #32ADE6 Apple Light Mode systemCyan
-                pin_amber: Color32::from_rgb(255, 149, 0),        // #FF9500 Apple Light Mode systemOrange
-                success: Color32::from_rgb(52, 199, 89),          // #34C759 Apple Light Mode systemGreen
-                success_bg: Color32::from_rgb(232, 249, 236),     // #E8F9EC tinted systemGreen surface
+                pin_amber: Color32::from_rgb(255, 149, 0), // #FF9500 Apple Light Mode systemOrange
+                success: Color32::from_rgb(52, 199, 89),   // #34C759 Apple Light Mode systemGreen
+                success_bg: Color32::from_rgb(232, 249, 236), // #E8F9EC tinted systemGreen surface
                 success_border: Color32::from_rgb(179, 234, 193), // #B3EAC1
-                success_text: Color32::from_rgb(36, 138, 61),     // #248A3D accessible systemGreen text
-                warning_bg: Color32::from_rgb(255, 244, 224),     // #FFF4E0 tinted systemOrange surface
+                success_text: Color32::from_rgb(36, 138, 61), // #248A3D accessible systemGreen text
+                warning_bg: Color32::from_rgb(255, 244, 224), // #FFF4E0 tinted systemOrange surface
                 warning_border: Color32::from_rgb(255, 216, 153), // #FFD899
-                warning_text: Color32::from_rgb(178, 80, 0),      // #B25000 accessible systemOrange text
-                danger: Color32::from_rgb(255, 59, 48),           // #FF3B30 Apple Light Mode systemRed
-                danger_bg: Color32::from_rgb(255, 236, 235),      // #FFECEB tinted systemRed surface
-                danger_border: Color32::from_rgb(255, 194, 190),  // #FFC2BE
-                danger_text: Color32::from_rgb(215, 0, 21),       // #D70015 accessible systemRed text
-                info_bg: Color32::from_rgb(232, 242, 255),        // #E8F2FF
-                info_border: Color32::from_rgb(179, 215, 255),    // #B3D7FF
-                keycap_bg: Color32::from_rgb(235, 235, 238),      // #EBEBEE neutral light keycap
-                keycap_text: Color32::from_rgb(110, 110, 115),    // #6E6E73 Apple secondary gray
+                warning_text: Color32::from_rgb(178, 80, 0), // #B25000 accessible systemOrange text
+                danger: Color32::from_rgb(255, 59, 48),    // #FF3B30 Apple Light Mode systemRed
+                danger_bg: Color32::from_rgb(255, 236, 235), // #FFECEB tinted systemRed surface
+                danger_border: Color32::from_rgb(255, 194, 190), // #FFC2BE
+                danger_text: Color32::from_rgb(215, 0, 21), // #D70015 accessible systemRed text
+                info_bg: Color32::from_rgb(232, 242, 255), // #E8F2FF
+                info_border: Color32::from_rgb(179, 215, 255), // #B3D7FF
+                keycap_bg: Color32::from_rgb(235, 235, 238), // #EBEBEE neutral light keycap
+                keycap_text: Color32::from_rgb(110, 110, 115), // #6E6E73 Apple secondary gray
                 on_accent: Color32::from_rgb(255, 255, 255),
             }
         }
@@ -389,14 +389,30 @@ pub fn build_highlighted_layout_job(
     for (char_idx, ch) in text.chars().enumerate() {
         let is_matched = matched_indices.contains(&char_idx);
         if char_idx > 0 && is_matched != run_matched && !run.is_empty() {
-            append_run(&mut job, &run, run_matched, highlight_mode, palette, font_size, base_color);
+            append_run(
+                &mut job,
+                &run,
+                run_matched,
+                highlight_mode,
+                palette,
+                font_size,
+                base_color,
+            );
             run.clear();
         }
         run_matched = is_matched;
         run.push(ch);
     }
     if !run.is_empty() {
-        append_run(&mut job, &run, run_matched, highlight_mode, palette, font_size, base_color);
+        append_run(
+            &mut job,
+            &run,
+            run_matched,
+            highlight_mode,
+            palette,
+            font_size,
+            base_color,
+        );
     }
 
     job
@@ -438,7 +454,9 @@ fn append_run(
 
 pub fn parse_hex_color32(hex: &str) -> Option<Color32> {
     let rgba = crate::transforms::detect_hex_color(hex)?;
-    Some(Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]))
+    Some(Color32::from_rgba_unmultiplied(
+        rgba[0], rgba[1], rgba[2], rgba[3],
+    ))
 }
 
 /// Installs crisp native system UI & CJK fonts (`PingFang SC` + `Menlo` on macOS,
@@ -639,7 +657,10 @@ mod tests {
         let opts_1x = ctx_1x.global_style().visuals.text_options;
         assert!(opts_1x.font_hinting);
         assert!(!opts_1x.subpixel_binning);
-        assert_eq!(opts_1x.color_transfer_function, FontColorTransferFunction::Gamma(0.75));
+        assert_eq!(
+            opts_1x.color_transfer_function,
+            FontColorTransferFunction::Gamma(0.75)
+        );
 
         let ctx_2x = egui::Context::default();
         let mut raw_2x = egui::RawInput::default();
@@ -653,14 +674,22 @@ mod tests {
         });
         out_2x.textures_delta.clear();
         assert_eq!(
-            ctx_2x.global_style().visuals.text_options.color_transfer_function,
+            ctx_2x
+                .global_style()
+                .visuals
+                .text_options
+                .color_transfer_function,
             FontColorTransferFunction::Gamma(0.88)
         );
 
         let dark = EarthPalette::resolve(ThemeMode::Dark, true);
         dark.apply_to_ctx(&ctx_1x);
         assert_eq!(
-            ctx_1x.global_style().visuals.text_options.color_transfer_function,
+            ctx_1x
+                .global_style()
+                .visuals
+                .text_options
+                .color_transfer_function,
             FontColorTransferFunction::DARK_MODE_DEFAULT
         );
     }
@@ -675,11 +704,26 @@ mod tests {
             let min_ch = c.r().min(c.g()).min(c.b());
             max_ch - min_ch <= 6
         };
-        assert!(is_neutral(dark.window_bg), "window_bg should be neutral macOS charcoal");
-        assert!(is_neutral(dark.surface_bg), "surface_bg should be neutral macOS graphite");
-        assert!(is_neutral(dark.card_bg), "card_bg should be neutral macOS control fill");
-        assert!(is_neutral(dark.border), "border should be neutral macOS bezel");
-        assert!(is_neutral(dark.text_primary), "text_primary should be neutral labelColor");
+        assert!(
+            is_neutral(dark.window_bg),
+            "window_bg should be neutral macOS charcoal"
+        );
+        assert!(
+            is_neutral(dark.surface_bg),
+            "surface_bg should be neutral macOS graphite"
+        );
+        assert!(
+            is_neutral(dark.card_bg),
+            "card_bg should be neutral macOS control fill"
+        );
+        assert!(
+            is_neutral(dark.border),
+            "border should be neutral macOS bezel"
+        );
+        assert!(
+            is_neutral(dark.text_primary),
+            "text_primary should be neutral labelColor"
+        );
         assert!(
             dark.window_bg.r() < dark.surface_bg.r() && dark.surface_bg.r() < dark.card_bg.r(),
             "dark surfaces should step cleanly upward in elevation"
@@ -688,10 +732,22 @@ mod tests {
 
         let light = EarthPalette::resolve(ThemeMode::Light, false);
         assert!(!light.is_dark);
-        assert!(is_neutral(light.window_bg), "light window_bg should be neutral macOS off-white");
-        assert!(is_neutral(light.card_bg), "light card_bg should be neutral macOS control fill");
-        assert!(is_neutral(light.border), "light border should be neutral macOS bezel");
-        assert!(is_neutral(light.text_primary), "light text_primary should be neutral labelColor");
+        assert!(
+            is_neutral(light.window_bg),
+            "light window_bg should be neutral macOS off-white"
+        );
+        assert!(
+            is_neutral(light.card_bg),
+            "light card_bg should be neutral macOS control fill"
+        );
+        assert!(
+            is_neutral(light.border),
+            "light border should be neutral macOS bezel"
+        );
+        assert!(
+            is_neutral(light.text_primary),
+            "light text_primary should be neutral labelColor"
+        );
         assert_eq!(light.accent, Color32::from_rgb(0, 122, 255));
     }
 
@@ -709,15 +765,23 @@ mod tests {
         }
 
         let preferred = crate::platform::preferred_system_fonts();
-        let pf = preferred.ui.first().expect("macOS should resolve primary CJK UI font");
+        let pf = preferred
+            .ui
+            .first()
+            .expect("macOS should resolve primary CJK UI font");
         let bytes = std::fs::read(&pf.path).unwrap();
-        let idx = resolve_rasterizable_ttc_face(&bytes, pf.postscript_name)
-            .expect("selected UI font must have rasterizable outlines and matching PostScript name");
+        let idx = resolve_rasterizable_ttc_face(&bytes, pf.postscript_name).expect(
+            "selected UI font must have rasterizable outlines and matching PostScript name",
+        );
         if bytes.get(0..4) == Some(b"ttcf") {
             let face_off = read_u32_be(&bytes, 12 + idx as usize * 4)
                 .expect("TTC face offset should exist") as usize;
             assert!(face_has_supported_outlines(&bytes, face_off));
-            assert!(face_postscript_matches(&bytes, face_off, pf.postscript_name));
+            assert!(face_postscript_matches(
+                &bytes,
+                face_off,
+                pf.postscript_name
+            ));
         } else {
             assert_eq!(idx, 0, "single-face font must resolve to index 0");
             assert!(face_has_supported_outlines(&bytes, 0));
@@ -732,7 +796,10 @@ mod tests {
             text_width = resp.rect.width();
         });
         out.textures_delta.clear();
-        assert!(text_width > 20.0, "expected rendered CJK text width > 20px, got {text_width}");
+        assert!(
+            text_width > 20.0,
+            "expected rendered CJK text width > 20px, got {text_width}"
+        );
 
         ctx.fonts(|f| {
             let prop_primary = f
@@ -770,9 +837,15 @@ mod tests {
 
         let rem_fade = toast.tick(12.89).expect("toast fading during final 220ms");
         let opacity = StatusToast::opacity_for_remaining(rem_fade);
-        assert!(opacity > 0.0 && opacity < 1.0, "expected fade opacity, got {opacity}");
+        assert!(
+            opacity > 0.0 && opacity < 1.0,
+            "expected fade opacity, got {opacity}"
+        );
 
-        assert!(toast.tick(13.0).is_none(), "toast must expire cleanly at 3.0s");
+        assert!(
+            toast.tick(13.0).is_none(),
+            "toast must expire cleanly at 3.0s"
+        );
         assert!(toast.tick(14.0).is_none(), "toast stays expired past 3.0s");
     }
 
@@ -797,7 +870,11 @@ mod tests {
             .collect();
         out.textures_delta.clear();
 
-        assert_eq!(segments.len(), 2, "dismiss button should paint two crossed vector strokes");
+        assert_eq!(
+            segments.len(),
+            2,
+            "dismiss button should paint two crossed vector strokes"
+        );
         let c = btn_rect.center();
         for [a, b] in segments {
             let mid = egui::pos2((a.x + b.x) * 0.5, (a.y + b.y) * 0.5);

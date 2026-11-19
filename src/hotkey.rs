@@ -31,35 +31,66 @@ impl GlobalHotkeyController {
             suspended: false,
             rx,
         };
-        let warn = ctrl.set_open_shortcut(initial_open_shortcut).err();
+        let warn = ctrl
+            .set_open_shortcut(initial_open_shortcut)
+            .err()
+            .map(|error| {
+                let fallback = crate::model::AppSettings::default().hotkey_open;
+                if ctrl.set_open_shortcut(&fallback).is_ok() {
+                    format!(
+                        "{error}；已恢复默认唤醒快捷键 {}",
+                        format_shortcut_display(&fallback)
+                    )
+                } else {
+                    error
+                }
+            });
         Ok((ctrl, warn))
     }
 
     pub fn set_open_shortcut(&mut self, shortcut: &str) -> Result<(), String> {
-        self.desired_open_shortcut = shortcut.trim().to_string();
+        validate_shortcut(shortcut, true)?;
         if self.suspended {
-            return Ok(());
+            return Err("请先结束快捷键录制，再应用新的快捷键".to_string());
         }
-        self.apply_open_shortcut()
+        let previous = self.desired_open_shortcut.clone();
+        self.desired_open_shortcut = shortcut.trim().to_string();
+        if let Err(error) = self.apply_open_shortcut() {
+            self.desired_open_shortcut = previous;
+            return Err(error);
+        }
+        Ok(())
     }
 
-    pub fn set_suspended(&mut self, suspended: bool) {
+    pub fn set_suspended(&mut self, suspended: bool) -> Result<(), String> {
         if self.suspended == suspended {
-            return;
+            return Ok(());
+        }
+        while self.rx.try_recv().is_ok() {}
+        if suspended && let Some(prev) = self.active_open_hotkey {
+            self.manager
+                .unregister(prev)
+                .map_err(|e| format!("暂停全局快捷键失败: {e}"))?;
+            self.active_open_hotkey = None;
         }
         self.suspended = suspended;
-        while self.rx.try_recv().is_ok() {}
-        if suspended {
-            if let Some(prev) = self.active_open_hotkey.take() {
-                let _ = self.manager.unregister(prev);
-            }
-        } else {
-            let _ = self.apply_open_shortcut();
+        if !suspended {
+            self.apply_open_shortcut()?;
         }
+        Ok(())
+    }
+
+    pub fn is_available(&self) -> bool {
+        !self.suspended && self.active_open_hotkey.is_some()
+    }
+
+    pub fn open_shortcut(&self) -> &str {
+        &self.desired_open_shortcut
     }
 
     fn apply_open_shortcut(&mut self) -> Result<(), String> {
         let trimmed = self.desired_open_shortcut.trim();
+        validate_shortcut(trimmed, true)?;
         if trimmed.is_empty() {
             if let Some(prev) = self.active_open_hotkey.take() {
                 let _ = self.manager.unregister(prev);
@@ -70,19 +101,20 @@ impl GlobalHotkeyController {
         let hotkey = HotKey::from_str(trimmed)
             .map_err(|e| format!("无法解析全局快捷键 \"{trimmed}\": {e}"))?;
 
-        if self.active_open_hotkey == Some(hotkey) {
-            return Ok(());
-        }
-
-        if let Some(prev) = self.active_open_hotkey.take() {
-            let _ = self.manager.unregister(prev);
-        }
-
-        self.manager
-            .register(hotkey)
-            .map_err(|e| format!("注册全局快捷键 \"{trimmed}\" 失败（可能被系统或其他应用占用）: {e}"))?;
-        self.active_open_hotkey = Some(hotkey);
-        Ok(())
+        replace_registered_hotkey(
+            &mut self.active_open_hotkey,
+            hotkey,
+            |next| {
+                self.manager.register(next).map_err(|e| {
+                    format!("注册全局快捷键 \"{trimmed}\" 失败（可能被系统或其他应用占用）: {e}")
+                })
+            },
+            |old| {
+                self.manager
+                    .unregister(old)
+                    .map_err(|e| format!("注销旧快捷键失败: {e}"))
+            },
+        )
     }
 
     pub fn poll_open_triggered(&self) -> bool {
@@ -103,12 +135,70 @@ impl GlobalHotkeyController {
     }
 }
 
+fn replace_registered_hotkey(
+    active: &mut Option<HotKey>,
+    next: HotKey,
+    mut register: impl FnMut(HotKey) -> Result<(), String>,
+    mut unregister: impl FnMut(HotKey) -> Result<(), String>,
+) -> Result<(), String> {
+    if *active == Some(next) {
+        return Ok(());
+    }
+    // Register first: a conflict must never remove the working application entry.
+    register(next)?;
+    if let Some(previous) = *active
+        && let Err(error) = unregister(previous)
+    {
+        let rollback = unregister(next);
+        return Err(match rollback {
+            Ok(()) => error,
+            Err(rollback) => format!("{error}；回滚新快捷键也失败: {rollback}"),
+        });
+    }
+    *active = Some(next);
+    Ok(())
+}
+
+/// Shared validation for native and egui recorders, and for global registration.
+pub fn validate_shortcut(shortcut: &str, global: bool) -> Result<(), String> {
+    use global_hotkey::hotkey::{Code, Modifiers as HotkeyMods};
+    let hotkey = HotKey::from_str(shortcut).map_err(|e| format!("无法解析快捷键: {e}"))?;
+    let mods = hotkey.mods;
+    let key = hotkey.key;
+    let ctrl = HotkeyMods::CONTROL;
+    let cmd = HotkeyMods::META;
+    let alt = HotkeyMods::ALT;
+    let shift = HotkeyMods::SHIFT;
+    if mods.is_empty() || mods == shift {
+        return Err("快捷键需要配合 Ctrl / Alt / Command 等修饰键".to_string());
+    }
+    let reserved = (key == Code::Space && (mods == ctrl || mods == cmd))
+        || (key == Code::Tab && (mods == alt || mods == cmd))
+        || (key == Code::F4 && mods == alt)
+        || (key == Code::Escape && mods == (alt | cmd))
+        || (key == Code::Delete && mods == (ctrl | alt))
+        || (key == Code::KeyV && mods == cmd && !cfg!(target_os = "macos"));
+    let editing = matches!(
+        key,
+        Code::KeyC | Code::KeyV | Code::KeyX | Code::KeyA | Code::KeyZ | Code::KeyQ | Code::KeyW
+    ) && (mods == ctrl || mods == cmd);
+    let menu_accelerator = global && mods == alt && !cfg!(target_os = "macos");
+    if reserved || editing || menu_accelerator {
+        return Err("该组合被系统或常用编辑/菜单操作占用，请使用其他组合".to_string());
+    }
+    Ok(())
+}
+
 pub fn format_shortcut_display(shortcut: &str) -> String {
     let trimmed = shortcut.trim();
     if trimmed.is_empty() {
         return "未设置".to_string();
     }
-    let parts: Vec<&str> = trimmed.split('+').map(str::trim).filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = trimmed
+        .split('+')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
     if parts.is_empty() {
         return "未设置".to_string();
     }
@@ -231,27 +321,38 @@ pub fn parse_shortcut_to_egui(shortcut: &str) -> Option<(Modifiers, Key)> {
     Some((mods, key))
 }
 
-pub fn matches_egui_shortcut(input: &InputState, shortcut: &str) -> bool {
+pub fn consume_egui_shortcut(input: &mut InputState, shortcut: &str) -> bool {
     let Some((target_mods, target_key)) = parse_shortcut_to_egui(shortcut) else {
         return false;
     };
-    if !input.key_pressed(target_key) {
-        return false;
-    }
-
-    #[cfg(target_os = "macos")]
-    let actual_super = input.modifiers.mac_cmd || input.modifiers.command;
-    #[cfg(target_os = "macos")]
-    let target_super = target_mods.mac_cmd || target_mods.command;
-    #[cfg(not(target_os = "macos"))]
-    let actual_super = false;
-    #[cfg(not(target_os = "macos"))]
-    let target_super = target_mods.command;
-
-    input.modifiers.ctrl == target_mods.ctrl
-        && input.modifiers.alt == target_mods.alt
-        && input.modifiers.shift == target_mods.shift
-        && actual_super == target_super
+    let mut triggered = false;
+    input.events.retain(|event| {
+        let egui::Event::Key {
+            key,
+            pressed: true,
+            repeat,
+            modifiers,
+            ..
+        } = event
+        else {
+            return true;
+        };
+        #[cfg(target_os = "macos")]
+        let super_matches = (modifiers.mac_cmd || modifiers.command)
+            == (target_mods.mac_cmd || target_mods.command);
+        #[cfg(not(target_os = "macos"))]
+        let super_matches = !target_mods.command;
+        let matches = *key == target_key
+            && modifiers.ctrl == target_mods.ctrl
+            && modifiers.alt == target_mods.alt
+            && modifiers.shift == target_mods.shift
+            && super_matches;
+        if matches {
+            triggered |= !repeat;
+        }
+        !matches
+    });
+    triggered
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,7 +388,12 @@ pub fn assemble_shortcut_combo(
     Some(parts.join("+"))
 }
 
-pub fn format_live_modifiers(ctrl: bool, alt: bool, shift: bool, super_key: bool) -> Option<String> {
+pub fn format_live_modifiers(
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    super_key: bool,
+) -> Option<String> {
     if !ctrl && !alt && !shift && !super_key {
         return None;
     }
@@ -351,9 +457,15 @@ pub fn capture_egui_shortcut(input: &InputState) -> Option<ShortcutCapture> {
                 #[cfg(not(target_os = "macos"))]
                 let (ctrl, super_key) = (modifiers.ctrl || modifiers.command, false);
                 return Some(
-                    assemble_shortcut_combo(ctrl, modifiers.alt, modifiers.shift, super_key, &key_name)
-                        .map(ShortcutCapture::Combo)
-                        .unwrap_or(ShortcutCapture::NeedsModifier),
+                    assemble_shortcut_combo(
+                        ctrl,
+                        modifiers.alt,
+                        modifiers.shift,
+                        super_key,
+                        &key_name,
+                    )
+                    .map(ShortcutCapture::Combo)
+                    .unwrap_or(ShortcutCapture::NeedsModifier),
                 );
             }
             egui::Event::Cut => {
@@ -629,6 +741,87 @@ fn egui_key_to_token(key: Key) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_hotkey_replacement_preserves_working_registration() {
+        use std::cell::RefCell;
+        use std::collections::HashSet;
+        let old = HotKey::from_str("Ctrl+Shift+K").unwrap();
+        let new = HotKey::from_str("Ctrl+Shift+J").unwrap();
+        let mut active = Some(old);
+        let registered = RefCell::new(HashSet::from([old]));
+        let result = replace_registered_hotkey(
+            &mut active,
+            new,
+            |_| Err("occupied".into()),
+            |key| {
+                registered.borrow_mut().remove(&key);
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(active, Some(old));
+        assert_eq!(*registered.borrow(), HashSet::from([old]));
+
+        replace_registered_hotkey(
+            &mut active,
+            new,
+            |key| {
+                registered.borrow_mut().insert(key);
+                Ok(())
+            },
+            |key| {
+                registered.borrow_mut().remove(&key);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(active, Some(new));
+        assert_eq!(*registered.borrow(), HashSet::from([new]));
+    }
+
+    #[test]
+    fn shortcut_validation_blocks_reserved_aliases_but_accepts_new_defaults() {
+        for key in [
+            "Ctrl+Space",
+            "Command+Space",
+            "Alt+Tab",
+            "Alt+F4",
+            "Ctrl+C",
+            "Cmd+V",
+            "Super+Q",
+        ] {
+            assert!(validate_shortcut(key, true).is_err(), "accepted {key}");
+            assert!(validate_shortcut(key, false).is_err(), "accepted {key}");
+        }
+        let settings = crate::model::AppSettings::default();
+        assert!(validate_shortcut(&settings.hotkey_open, true).is_ok());
+        for key in [
+            &settings.hotkey_pin,
+            &settings.hotkey_delete,
+            &settings.hotkey_preview,
+        ] {
+            assert!(validate_shortcut(key, false).is_ok(), "rejected {key}");
+        }
+    }
+
+    #[test]
+    fn item_shortcut_consumes_only_matching_events_and_ignores_repeat() {
+        let mut input = InputState::default();
+        let event = |repeat| egui::Event::Key {
+            key: Key::Backspace,
+            physical_key: None,
+            pressed: true,
+            repeat,
+            modifiers: Modifiers::ALT,
+        };
+        input.events = vec![event(false), event(true), egui::Event::Text("keep".into())];
+        assert!(consume_egui_shortcut(&mut input, "Alt+Backspace"));
+        assert_eq!(input.events, vec![egui::Event::Text("keep".into())]);
+        input.events = vec![event(true)];
+        assert!(!consume_egui_shortcut(&mut input, "Alt+Backspace"));
+        assert!(input.events.is_empty());
+    }
 
     #[test]
     fn parses_default_shortcuts_for_global_hotkey_and_egui() {

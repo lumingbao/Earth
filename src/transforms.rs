@@ -1,5 +1,5 @@
 use crate::storage::sha256_hex;
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone, Utc};
 use regex::Regex;
 use std::collections::HashSet;
@@ -67,7 +67,8 @@ pub fn detect_hex_color(input: &str) -> Option<[u8; 4]> {
 ///   `255, 128, 0, 0.5`, `(255, 128, 0, 50%)`.
 pub fn detect_rgb_color(input: &str) -> Option<[u8; 4]> {
     let trimmed = input.trim();
-    if trimmed.is_empty() || trimmed.len() > 64 || trimmed.contains('\n') || trimmed.contains('\r') {
+    if trimmed.is_empty() || trimmed.len() > 64 || trimmed.contains('\n') || trimmed.contains('\r')
+    {
         return None;
     }
 
@@ -83,7 +84,8 @@ pub fn detect_rgb_color(input: &str) -> Option<[u8; 4]> {
 /// (e.g. `color: #0A84FF;` or `--accent: rgb(10, 132, 255);`).
 pub fn detect_color(input: &str) -> Option<[u8; 4]> {
     let trimmed = input.trim();
-    if trimmed.is_empty() || trimmed.len() > 96 || trimmed.contains('\n') || trimmed.contains('\r') {
+    if trimmed.is_empty() || trimmed.len() > 96 || trimmed.contains('\n') || trimmed.contains('\r')
+    {
         return None;
     }
 
@@ -103,7 +105,11 @@ pub fn detect_color(input: &str) -> Option<[u8; 4]> {
     // Single CSS declaration like `color: #0A84FF;` or `--primary: rgba(10, 132, 255, 0.8);`
     if let Some((prop, raw_val)) = cleaned.split_once(':') {
         let prop = prop.trim();
-        let val = raw_val.trim().strip_suffix(';').unwrap_or(raw_val.trim()).trim();
+        let val = raw_val
+            .trim()
+            .strip_suffix(';')
+            .unwrap_or(raw_val.trim())
+            .trim();
         let val = strip_matching_quotes(val).unwrap_or(val);
         let valid_prop = !prop.is_empty()
             && prop.len() <= 32
@@ -165,10 +171,7 @@ fn parse_functional_rgb(s: &str) -> Option<[u8; 4]> {
     }
 
     if has_comma {
-        let parts: Vec<&str> = inner
-            .split([',', '，'])
-            .map(str::trim)
-            .collect();
+        let parts: Vec<&str> = inner.split([',', '，']).map(str::trim).collect();
         match parts.as_slice() {
             [r, g, b] => Some([
                 parse_rgb_channel(r)?,
@@ -403,10 +406,7 @@ pub fn format_color_hsl(rgba: [u8; 4]) -> String {
     if rgba[3] == 255 {
         format!("hsl({h}, {s}%, {l}%)")
     } else {
-        format!(
-            "hsla({h}, {s}%, {l}%, {})",
-            format_alpha_decimal(rgba[3])
-        )
+        format!("hsla({h}, {s}%, {l}%, {})", format_alpha_decimal(rgba[3]))
     }
 }
 
@@ -743,25 +743,32 @@ pub fn convert_timestamp_smart(input: &str) -> Result<String, String> {
         ));
     }
 
-    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d"] {
+    for fmt in [
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y-%m-%d",
+    ] {
         if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, fmt)
-            && let Some(local_dt) = Local.from_local_datetime(&naive).single() {
-                return Ok(format!(
-                    "Unix 秒: {}\nUnix 毫秒: {}",
-                    local_dt.timestamp(),
-                    local_dt.timestamp_millis()
-                ));
-            }
+            && let Some(local_dt) = Local.from_local_datetime(&naive).single()
+        {
+            return Ok(format!(
+                "Unix 秒: {}\nUnix 毫秒: {}",
+                local_dt.timestamp(),
+                local_dt.timestamp_millis()
+            ));
+        }
         if fmt == "%Y-%m-%d"
             && let Ok(date) = chrono::NaiveDate::parse_from_str(trimmed, fmt)
-                && let Some(naive) = date.and_hms_opt(0, 0, 0)
-                    && let Some(local_dt) = Local.from_local_datetime(&naive).single() {
-                        return Ok(format!(
-                            "Unix 秒: {}\nUnix 毫秒: {}",
-                            local_dt.timestamp(),
-                            local_dt.timestamp_millis()
-                        ));
-                    }
+            && let Some(naive) = date.and_hms_opt(0, 0, 0)
+            && let Some(local_dt) = Local.from_local_datetime(&naive).single()
+        {
+            return Ok(format!(
+                "Unix 秒: {}\nUnix 毫秒: {}",
+                local_dt.timestamp(),
+                local_dt.timestamp_millis()
+            ));
+        }
     }
 
     Err("请输入 Unix 时间戳（秒/毫秒）或常见日期格式（如 2026-11-13 11:30:00）".to_string())
@@ -866,18 +873,12 @@ mod tests {
             detect_color("rgba(10, 132, 255, 128)"),
             Some([10, 132, 255, 128])
         );
-        assert_eq!(
-            detect_color("rgb(255 128 0)"),
-            Some([255, 128, 0, 255])
-        );
+        assert_eq!(detect_color("rgb(255 128 0)"), Some([255, 128, 0, 255]));
         assert_eq!(
             detect_color("rgb(255 128 0 / 50%)"),
             Some([255, 128, 0, 128])
         );
-        assert_eq!(
-            detect_color("rgb(100%, 50%, 0%)"),
-            Some([255, 128, 0, 255])
-        );
+        assert_eq!(detect_color("rgb(100%, 50%, 0%)"), Some([255, 128, 0, 255]));
         assert_eq!(
             detect_color("rgb（10，132，255）"),
             Some([10, 132, 255, 255])
@@ -891,7 +892,10 @@ mod tests {
         assert_eq!(detect_color("255, 128, 0"), Some([255, 128, 0, 255]));
         assert_eq!(detect_color("(10, 132, 255)"), Some([10, 132, 255, 255]));
         assert_eq!(detect_color("10, 132, 255, 0.5"), Some([10, 132, 255, 128]));
-        assert_eq!(detect_color("(10, 132, 255, 50%)"), Some([10, 132, 255, 128]));
+        assert_eq!(
+            detect_color("(10, 132, 255, 50%)"),
+            Some([10, 132, 255, 128])
+        );
 
         // Non-colors must NOT match
         assert_eq!(detect_color("hello!"), None);
@@ -937,7 +941,8 @@ mod tests {
 
     #[test]
     fn quick_actions_json_base64_timestamp() {
-        let pretty = apply_quick_action(QuickActionKind::JsonPretty, r#"{"a":1,"b":[2,3]}"#).unwrap();
+        let pretty =
+            apply_quick_action(QuickActionKind::JsonPretty, r#"{"a":1,"b":[2,3]}"#).unwrap();
         assert!(pretty.contains('\n'));
         let minified = apply_quick_action(QuickActionKind::JsonMinify, &pretty).unwrap();
         assert_eq!(minified, r#"{"a":1,"b":[2,3]}"#);

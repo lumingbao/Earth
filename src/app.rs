@@ -1,28 +1,26 @@
 use crate::clipboard::{
-    clear_system_clipboard, start_clipboard_watcher, write_custom_png_to_clipboard,
-    write_custom_text_to_clipboard, write_item_to_clipboard, ClipboardEvent, ClipboardHandle,
-    ClipboardSuppression,
+    ClipboardEvent, ClipboardHandle, ClipboardSuppression, clear_system_clipboard,
+    start_clipboard_watcher, write_custom_text_to_clipboard, write_item_to_clipboard,
+    write_managed_png,
 };
 use crate::hotkey::GlobalHotkeyController;
 use crate::model::{
-    truncate_chars, ActiveAppInfo, AppSettings, ClipItem, Collection, PasteBehavior, ThemeMode,
+    ActiveAppInfo, AppSettings, ClipItem, Collection, PasteBehavior, ThemeMode, truncate_chars,
 };
 use crate::platform;
-use crate::search::{filter_and_search, SearchResultItem};
+use crate::search::{SearchResultItem, filter_and_search};
 use crate::storage::Storage;
 use crate::tray::{EarthTray, TrayAction};
-use crate::ui::popup::{
-    render_popup_view, PopupAction, PopupState, PopupViewData, WorkbenchSide,
-};
+use crate::ui::popup::{PopupAction, PopupState, PopupViewData, WorkbenchSide, render_popup_view};
 use crate::ui::settings::{
-    render_settings_view, RecordingTarget, SettingsAction, SettingsState, SettingsViewData,
+    RecordingTarget, SettingsAction, SettingsState, SettingsViewData, render_settings_view,
 };
-use crate::ui::theme::{install_crisp_fonts, EarthPalette};
+use crate::ui::theme::{EarthPalette, install_crisp_fonts};
 use crate::updater::{
-    apply_staged_update_and_restart, spawn_update_check, spawn_update_download, UpdateCheckOutcome,
-    UpdateDownloadState, UpdaterEvent,
+    UpdateCheckOutcome, UpdateDownloadState, UpdaterEvent, apply_staged_update_and_restart,
+    spawn_update_check, spawn_update_download,
 };
-use egui::{pos2, vec2, CornerRadius, Stroke, ViewportCommand};
+use egui::{CornerRadius, Stroke, ViewportCommand, pos2, vec2};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex, RwLock};
@@ -93,17 +91,21 @@ pub enum ViewMode {
 
 pub struct EarthApp {
     storage: Storage,
+    instance: crate::instance::InstanceGuard,
+    paste_tx: Sender<Result<String, String>>,
+    paste_rx: Receiver<Result<String, String>>,
     shared_settings: Arc<RwLock<AppSettings>>,
     settings: AppSettings,
     suppression: Arc<Mutex<ClipboardSuppression>>,
-    clipboard_rx: Receiver<ClipboardEvent>,
+    clipboard_rx: crate::clipboard::ClipboardEvents,
     _clipboard_handle: Option<ClipboardHandle>,
     update_tx: Sender<UpdaterEvent>,
     update_rx: Receiver<UpdaterEvent>,
     hotkey_ctrl: Option<GlobalHotkeyController>,
     tray: Option<EarthTray>,
 
-    items: Vec<ClipItem>,
+    history: crate::storage::history::History,
+    items: Vec<Arc<ClipItem>>,
     collections: Vec<Collection>,
     storage_bytes: u64,
     cached_results: Vec<SearchResultItem>,
@@ -112,6 +114,7 @@ pub struct EarthApp {
     view_mode: ViewMode,
     popup_state: PopupState,
     settings_state: SettingsState,
+    pending_error: Option<String>,
 
     visible: bool,
     last_shown_at: Instant,
@@ -133,21 +136,43 @@ pub struct EarthApp {
 }
 
 impl EarthApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, start_hidden: bool) -> Self {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        start_hidden: bool,
+        storage: Storage,
+        mut instance_lock: crate::instance::InstanceGuard,
+    ) -> Self {
         egui_extras::install_image_loaders(&cc.egui_ctx);
         install_crisp_fonts(&cc.egui_ctx);
         platform::configure_macos_accessory_mode();
         platform::configure_main_window(cc);
         platform::install_shortcut_repaint_ctx(&cc.egui_ctx);
 
-        let storage = Storage::open_default().expect("无法初始化 Earth 本地数据库");
-        let settings = storage.load_settings();
-        if settings.launch_at_login {
-            let _ = platform::refresh_autostart_if_enabled();
+        let (mut settings, settings_warning) = storage.load_settings_with_warning();
+        if settings.hotkey_preview == "Ctrl+Space" {
+            settings.hotkey_preview = AppSettings::default().hotkey_preview;
         }
-        let items = storage.list_items().unwrap_or_default();
-        let collections = storage.list_collections().unwrap_or_default();
-        let storage_bytes = storage.total_storage_bytes();
+        let mut startup_errors: Vec<String> = settings_warning.into_iter().collect();
+        if let Err(error) = instance_lock.attach_context(cc.egui_ctx.clone()) {
+            startup_errors.push(error);
+        }
+        let (paste_tx, paste_rx) = std::sync::mpsc::channel();
+        if settings.launch_at_login
+            && let Err(error) = platform::refresh_autostart_if_enabled()
+        {
+            startup_errors.push(error);
+        }
+        let items = storage.first_page().unwrap_or_else(|err| {
+            startup_errors.push(err);
+            Vec::new()
+        });
+        let history = crate::storage::history::History::start(&storage, cc.egui_ctx.clone());
+        history.refresh(false);
+        let collections = storage.list_collections().unwrap_or_else(|err| {
+            startup_errors.push(err);
+            Vec::new()
+        });
+        let storage_bytes = 0;
 
         let shared_settings = Arc::new(RwLock::new(settings.clone()));
         let suppression = Arc::new(Mutex::new(ClipboardSuppression {
@@ -155,14 +180,19 @@ impl EarthApp {
             ..Default::default()
         }));
 
-        let (clip_tx, clipboard_rx) = std::sync::mpsc::channel();
-        let clipboard_handle = start_clipboard_watcher(
+        let (clip_tx, clipboard_rx) = crate::clipboard::clipboard_event_channel();
+        let clipboard_handle = match start_clipboard_watcher(
             Arc::clone(&shared_settings),
             Arc::clone(&suppression),
             clip_tx,
             cc.egui_ctx.clone(),
-        )
-        .ok();
+        ) {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                startup_errors.push(error);
+                None
+            }
+        };
 
         let (update_tx, update_rx) = std::sync::mpsc::channel();
         if settings.check_updates {
@@ -174,24 +204,52 @@ impl EarthApp {
                 Ok((ctrl, warn)) => (Some(ctrl), warn),
                 Err(err) => (None, Some(err)),
             };
+        if let Some(error) = hotkey_warn {
+            startup_errors.push(error);
+        }
+        if let Some(ctrl) = &hotkey_ctrl
+            && ctrl.is_available()
+        {
+            settings.hotkey_open = ctrl.open_shortcut().to_string();
+        } else {
+            // A hidden tray is unsafe when the other entry point did not register.
+            settings.show_tray_icon = true;
+        }
+        if let Ok(mut shared) = shared_settings.write() {
+            *shared = settings.clone();
+        }
+        if let Err(error) = storage.save_settings(&settings) {
+            startup_errors.push(error);
+        }
 
-        let tray = EarthTray::new(
+        let tray = match EarthTray::new(
             cc.egui_ctx.clone(),
             settings.show_tray_icon,
             settings.paused,
             settings.ignore_next_event,
-        )
-        .ok();
+        ) {
+            Ok(tray) => Some(tray),
+            Err(error) => {
+                startup_errors.push(error);
+                None
+            }
+        };
 
         let mut popup_state = PopupState::default();
-        if let Some(warn) = hotkey_warn {
-            popup_state.set_status_banner(warn, true);
-        }
+        let service_error = (!startup_errors.is_empty()).then(|| startup_errors.join("\n"));
+        popup_state.service_error = service_error.clone();
+        let settings_state = SettingsState {
+            service_error,
+            ..Default::default()
+        };
+        let start_hidden = start_hidden && startup_errors.is_empty();
 
         let initial_size = (COMPACT_WIDTH, WINDOW_HEIGHT);
         let prev_app = if start_hidden {
             None
         } else {
+            cc.egui_ctx
+                .send_viewport_cmd(ViewportCommand::Visible(true));
             platform::capture_frontmost_app()
         };
         let (x, y) = platform::compute_popup_origin(
@@ -200,11 +258,15 @@ impl EarthApp {
             prev_app.as_ref(),
             None,
             cc.egui_ctx.pixels_per_point(),
+            cc.egui_ctx.zoom_factor(),
         );
         cc.egui_ctx
             .send_viewport_cmd(ViewportCommand::OuterPosition(pos2(x, y)));
         cc.egui_ctx
-            .send_viewport_cmd(ViewportCommand::InnerSize(vec2(initial_size.0, initial_size.1)));
+            .send_viewport_cmd(ViewportCommand::InnerSize(vec2(
+                initial_size.0,
+                initial_size.1,
+            )));
         if start_hidden {
             cc.egui_ctx
                 .send_viewport_cmd(ViewportCommand::Visible(false));
@@ -217,6 +279,9 @@ impl EarthApp {
         let cached_accessibility = platform::has_accessibility_permission();
         let mut app = Self {
             storage,
+            instance: instance_lock,
+            paste_tx,
+            paste_rx,
             shared_settings,
             settings,
             suppression,
@@ -226,6 +291,7 @@ impl EarthApp {
             update_rx,
             hotkey_ctrl,
             tray,
+            history,
             items,
             collections,
             storage_bytes,
@@ -233,7 +299,8 @@ impl EarthApp {
             search_dirty: true,
             view_mode: ViewMode::Launcher,
             popup_state,
-            settings_state: SettingsState::default(),
+            settings_state,
+            pending_error: None,
             visible: !start_hidden,
             last_shown_at: Instant::now(),
             was_focused_since_shown: false,
@@ -258,29 +325,51 @@ impl EarthApp {
     }
 
     fn reload_items(&mut self) {
-        self.items = self.storage.list_items().unwrap_or_default();
-        self.collections = self.storage.list_collections().unwrap_or_default();
-        self.storage_bytes = self.storage.total_storage_bytes();
-        self.popup_state.preview_cache = None;
-        self.search_dirty = true;
-        self.sync_tray();
+        self.popup_state.release_images();
+        self.history.refresh(self.view_mode == ViewMode::Settings);
     }
 
     fn persist_settings(&mut self) {
+        if !self.settings.show_tray_icon
+            && !self
+                .hotkey_ctrl
+                .as_ref()
+                .is_some_and(|ctrl| ctrl.is_available())
+        {
+            self.settings.show_tray_icon = true;
+            self.record_service_error(
+                "全局唤醒快捷键不可用，已保留托盘入口；请在通用设置中重置快捷键",
+            );
+        }
+        if self.shared_settings.read().is_ok_and(|previous| {
+            previous.enable_privacy_masking != self.settings.enable_privacy_masking
+        }) {
+            self.popup_state.clear_sensitive_context();
+        }
         if let Ok(mut guard) = self.shared_settings.write() {
+            if guard.ignore_next_event != self.settings.ignore_next_event
+                && let Ok(mut sup) = self.suppression.lock()
+            {
+                sup.ignore_next_once = self.settings.ignore_next_event;
+                sup.ignore_generation = sup.ignore_generation.wrapping_add(1);
+            }
             *guard = self.settings.clone();
         }
-        if let Ok(mut sup) = self.suppression.lock() {
-            sup.ignore_next_once = self.settings.ignore_next_event;
+        if let Err(err) = self.storage.save_settings(&self.settings) {
+            self.report_error(format!("设置未保存：{err}"));
         }
-        let _ = self.storage.save_settings(&self.settings);
         let unpinned_count = self
             .items
             .iter()
             .filter(|it| !it.pinned && it.collection_id.is_none())
             .count();
         if unpinned_count > self.settings.max_history {
-            let _ = self.storage.enforce_history_limit(self.settings.max_history);
+            if let Err(err) = self
+                .storage
+                .enforce_history_limit(self.settings.max_history)
+            {
+                self.report_error(err);
+            }
             self.reload_items();
         } else {
             self.search_dirty = true;
@@ -290,18 +379,73 @@ impl EarthApp {
 
     fn sync_tray(&mut self) {
         let preview = if self.settings.show_clipboard_in_menubar {
-            self.items.first().map(|it| truncate_chars(&it.summary_line(24), 22))
+            self.items.first().map(|it| {
+                if self.settings.enable_privacy_masking && it.is_sensitive() {
+                    "••••".to_owned()
+                } else {
+                    truncate_chars(&it.summary_line(24), 22)
+                }
+            })
         } else {
             None
         };
         if let Some(tray) = &mut self.tray {
-            tray.sync_state(
+            let result = tray.sync_state(
                 self.settings.show_tray_icon,
                 self.settings.paused,
                 self.settings.ignore_next_event,
                 preview.as_deref(),
             );
+            if let Err(error) = result {
+                self.record_service_error(&error);
+            }
         }
+    }
+
+    fn record_service_error(&mut self, error: &str) {
+        let message = self
+            .popup_state
+            .service_error
+            .get_or_insert_with(String::new);
+        if !message.contains(error) {
+            if !message.is_empty() {
+                message.push('\n');
+            }
+            message.push_str(error);
+        }
+        self.settings_state.service_error = self.popup_state.service_error.clone();
+    }
+
+    /// Do not let a background operation's error toast expire while Earth is hidden.
+    fn report_error(&mut self, message: String) {
+        if !self.visible {
+            self.pending_error = Some(message);
+        } else if self.view_mode == ViewMode::Settings {
+            self.settings_state.set_status_message(message, true);
+        } else {
+            self.popup_state.set_status_banner(message, true);
+        }
+    }
+
+    fn finish_history_write(&mut self, result: Result<(), String>) -> bool {
+        self.reload_items();
+        if let Err(err) = result {
+            self.report_error(err);
+            false
+        } else {
+            true
+        }
+    }
+
+    fn clear_history(&mut self, include_pinned: bool) -> Result<(), String> {
+        let result = self.storage.clear_history(include_pinned);
+        self.reload_items();
+        result?;
+        if self.settings.clear_system_clipboard_too {
+            clear_system_clipboard()
+                .map_err(|err| format!("历史已清理，但系统剪贴板清理失败：{err}"))?;
+        }
+        Ok(())
     }
 
     fn advance_workbench_animation(&mut self, ctx: &egui::Context, panel_rect: egui::Rect) -> bool {
@@ -466,9 +610,7 @@ impl EarthApp {
                 self.last_window_size = (EXPANDED_WIDTH, WINDOW_HEIGHT);
                 self.last_window_pos = (target_x, target_y);
                 if (target_x - cur_x).abs() > 0.5 || (target_y - cur_y).abs() > 0.5 {
-                    ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2(
-                        target_x, target_y,
-                    )));
+                    ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2(target_x, target_y)));
                 }
                 ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(
                     EXPANDED_WIDTH,
@@ -508,7 +650,11 @@ impl EarthApp {
         #[cfg(not(target_os = "macos"))]
         {
             ctx.send_viewport_cmd(ViewportCommand::WindowLevel(
-                egui::viewport::WindowLevel::AlwaysOnTop,
+                if self.popup_state.window_pinned {
+                    egui::viewport::WindowLevel::AlwaysOnTop
+                } else {
+                    egui::viewport::WindowLevel::Normal
+                },
             ));
         }
         #[cfg(target_os = "macos")]
@@ -532,20 +678,26 @@ impl EarthApp {
                 ctx.request_repaint();
                 return;
             }
-            if self.popup_state.window_pinned {
-                if let Some(ref prev) = self.prev_app {
-                    platform::restore_frontmost_app(prev);
-                }
-                self.apply_window_pinned_state(ctx);
-                self.popup_state.set_status_banner(pinned_paste_msg, false);
-                ctx.request_repaint();
-            } else {
-                self.hide_popup(ctx, true);
+            let Some(target) = self.prev_app.clone() else {
+                self.popup_state
+                    .set_status_banner("已复制；没有可确认的目标窗口，请手动粘贴", true);
+                return;
+            };
+            if !self.popup_state.window_pinned {
+                self.hide_popup(ctx, false);
+                platform::hide_self_app();
             }
-            std::thread::spawn(|| {
-                if let Err(err) = platform::simulate_paste() {
-                    eprintln!("自动粘贴失败: {err}");
-                }
+            if !platform::restore_frontmost_app(&target) {
+                self.report_error("已复制；无法恢复目标窗口，请手动粘贴".to_owned());
+                return;
+            }
+            let tx = self.paste_tx.clone();
+            let ctx = ctx.clone();
+            let message = pinned_paste_msg.to_owned();
+            std::thread::spawn(move || {
+                let result = platform::paste_into(&target).map(|()| message);
+                let _ = tx.send(result);
+                ctx.request_repaint();
             });
         } else if self.popup_state.window_pinned {
             self.popup_state.set_status_banner(pinned_copy_msg, false);
@@ -555,14 +707,24 @@ impl EarthApp {
         }
     }
 
-    fn show_popup(&mut self, ctx: &egui::Context, mode: ViewMode, tray_pos: Option<(f32, f32)>) {
-        if let Some(active) = platform::capture_frontmost_app() {
+    fn show_popup(
+        &mut self,
+        ctx: &egui::Context,
+        mode: ViewMode,
+        tray_pos: Option<platform::TrayPosition>,
+    ) {
+        if !self.visible {
+            self.prev_app = platform::capture_frontmost_app();
+        } else if let Some(active) = platform::capture_frontmost_app() {
             self.prev_app = Some(active);
         }
         if !self.visible {
             self.popup_state.window_pinned = false;
         }
         self.view_mode = mode;
+        if mode == ViewMode::Settings {
+            self.history.refresh(true);
+        }
         self.workbench_anim = None;
         self.workbench_collapse_pending = false;
         self.workbench_os_expanded = false;
@@ -573,7 +735,6 @@ impl EarthApp {
             self.popup_state.request_search_focus = true;
             self.popup_state.ime_composing = false;
             self.popup_state.selection_changed_at = Instant::now();
-            self.popup_state.preview_manually_toggled = false;
             self.popup_state.preview_open = false;
             self.popup_state.active_transform = None;
             self.popup_state.inline_edit_text = None;
@@ -591,10 +752,14 @@ impl EarthApp {
             self.prev_app.as_ref(),
             resolved_tray,
             ctx.pixels_per_point(),
+            ctx.zoom_factor(),
         );
         self.last_window_pos = (x, y);
 
-        ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(target_size.0, target_size.1)));
+        ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(
+            target_size.0,
+            target_size.1,
+        )));
         ctx.send_viewport_cmd(ViewportCommand::OuterPosition(pos2(x, y)));
         ctx.send_viewport_cmd(ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(ViewportCommand::Focus);
@@ -602,6 +767,9 @@ impl EarthApp {
         self.apply_window_pinned_state(ctx);
 
         self.visible = true;
+        if let Some(message) = self.pending_error.take() {
+            self.report_error(message);
+        }
         self.last_shown_at = Instant::now();
         self.was_focused_since_shown = false;
         self.last_known_focused = false;
@@ -609,10 +777,22 @@ impl EarthApp {
     }
 
     fn hide_popup(&mut self, ctx: &egui::Context, restore_focus: bool) {
-        self.visible = false;
-        self.popup_state.show_about_modal = false;
+        self.popup_state.clear_sensitive_context();
+        self.popup_state.release_images();
         self.settings_state.recording = None;
         self.sync_shortcut_recording_guards();
+        if !has_reopen_entry(
+            self.hotkey_ctrl
+                .as_ref()
+                .is_some_and(|ctrl| ctrl.is_available()),
+            self.tray.as_ref().is_some_and(|tray| tray.is_visible()),
+        ) {
+            self.record_service_error("唤醒快捷键和托盘入口均不可用，窗口将保持显示；请在设置中恢复默认快捷键或重启 Earth");
+            ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+            return;
+        }
+        self.visible = false;
+        self.popup_state.show_about_modal = false;
         self.workbench_anim = None;
         self.workbench_collapse_pending = false;
         self.workbench_os_expanded = false;
@@ -641,26 +821,40 @@ impl EarthApp {
             recording_target.is_some(),
             recording_target == Some(RecordingTarget::Open),
         );
-        if let Some(ctrl) = &mut self.hotkey_ctrl {
-            ctrl.set_suspended(recording_target.is_some());
+        if let Some(ctrl) = &mut self.hotkey_ctrl
+            && let Err(error) = ctrl.set_suspended(recording_target.is_some())
+        {
+            self.settings_state.hotkey_error = Some(error.clone());
+            self.popup_state.service_error = Some(error);
         }
     }
 
     fn recompute_search(&mut self) {
-        self.cached_results = filter_and_search(
+        self.cached_results = match filter_and_search(
             &self.items,
             &self.popup_state.search_query,
             self.popup_state.filter,
             self.settings.search_mode,
             self.settings.sort_order,
             self.settings.pin_position,
-        );
+            self.settings.show_special_symbols,
+        ) {
+            Ok(results) => results,
+            Err(err) => {
+                self.popup_state.set_status_banner(err, true);
+                Vec::new()
+            }
+        };
         self.search_dirty = false;
     }
 
     fn handle_paste_item(&mut self, ctx: &egui::Context, id: i64, behavior: PasteBehavior) {
-        let Some(item) = self.items.iter().find(|it| it.id == id).cloned() else {
-            return;
+        let item = match self.storage.item(id) {
+            Ok(it) => it,
+            Err(err) => {
+                self.popup_state.set_status_banner(err, true);
+                return;
+            }
         };
 
         let (do_paste, plain_only) = match behavior {
@@ -676,10 +870,13 @@ impl EarthApp {
             return;
         }
 
-        let _ = self.storage.mark_copied(id);
+        let marked = self.storage.mark_copied(id);
         self.reload_items();
 
         self.complete_copy_or_paste(ctx, do_paste, "✓ 已复制到剪贴板", "✓ 已粘贴到当前目标窗口");
+        if let Err(err) = marked {
+            self.report_error(format!("内容已复制，但历史计数未保存：{err}"));
+        }
     }
 
     fn handle_paste_transformed(&mut self, ctx: &egui::Context, text: String, paste_now: bool) {
@@ -703,33 +900,120 @@ impl EarthApp {
     }
 
     fn request_quit(&mut self, ctx: &egui::Context) {
-        if self.settings.clear_on_exit {
-            let _ = self.storage.clear_history(false);
-            if self.settings.clear_system_clipboard_too {
-                let _ = clear_system_clipboard();
-            }
+        if self.settings.clear_on_exit
+            && let Err(err) = self.clear_history(false)
+        {
+            rfd::MessageDialog::new()
+                .set_title("Earth 退出清理未完成")
+                .set_description(err)
+                .set_level(rfd::MessageLevel::Error)
+                .show();
         }
         self.quitting = true;
         ctx.send_viewport_cmd(ViewportCommand::Close);
     }
 
+    fn finish_qr_export(&mut self, ctx: &egui::Context, action: PopupAction) {
+        match action {
+            PopupAction::CopyQrImage(png_bytes) => {
+                match write_managed_png(&png_bytes) {
+                    Ok(()) => {
+                        self.popup_state
+                            .set_status_banner("✓ 已复制二维码图片到剪贴板", false);
+                    }
+                    Err(e) => {
+                        self.popup_state.set_status_banner(e, true);
+                    }
+                }
+                ctx.request_repaint();
+            }
+            PopupAction::SaveQrImageAs(png_bytes) => {
+                self.dialog_open = true;
+                if let Some(dest) = rfd::FileDialog::new()
+                    .set_file_name("earth_qrcode.png")
+                    .add_filter("PNG Image", &["png"])
+                    .save_file()
+                {
+                    if let Err(e) = std::fs::write(&dest, &png_bytes) {
+                        self.popup_state
+                            .set_status_banner(format!("保存二维码失败: {e}"), true);
+                    } else {
+                        self.popup_state.set_status_banner(
+                            format!("✓ 二维码已保存到 {}", dest.display()),
+                            false,
+                        );
+                    }
+                    ctx.request_repaint();
+                }
+                self.dialog_open = false;
+            }
+            _ => {}
+        }
+    }
+
     fn process_background_events(&mut self, ctx: &egui::Context) {
+        if let Some(action) = self.popup_state.poll_qr_export() {
+            self.finish_qr_export(ctx, action);
+        }
+        while let Ok(result) = self.paste_rx.try_recv() {
+            match result {
+                Ok(message) if self.visible => self.popup_state.set_status_banner(message, false),
+                Err(err) => self.report_error(format!("已复制，请手动粘贴：{err}")),
+                _ => (),
+            }
+        }
+        while let Ok(result) = self.history.rx.try_recv() {
+            match result {
+                Ok(delta) => {
+                    delta.apply(
+                        &mut self.items,
+                        &mut self.collections,
+                        &mut self.storage_bytes,
+                    );
+                    self.search_dirty = true;
+                    self.sync_tray();
+                }
+                Err(err) => self.report_error(format!("无法读取历史：{err}")),
+            }
+        }
         let mut captured_any = false;
         while let Ok(ev) = self.clipboard_rx.try_recv() {
             match ev {
                 ClipboardEvent::NewCapture(payload) => {
-                    let _ = self
+                    match self
                         .storage
-                        .upsert_item(*payload, self.settings.max_history);
-                    captured_any = true;
+                        .upsert_item(*payload, self.settings.max_history)
+                    {
+                        Ok(_) => captured_any = true,
+                        Err(err) => self.report_error(format!("历史未保存：{err}")),
+                    }
                 }
-                ClipboardEvent::ConsumedIgnoreNext => {
+                ClipboardEvent::Skipped(reason) => self.report_error(reason.to_owned()),
+                ClipboardEvent::ConsumedIgnoreNext(generation) => {
+                    if self
+                        .suppression
+                        .lock()
+                        .is_ok_and(|s| s.ignore_generation != generation)
+                    {
+                        continue;
+                    }
+                    self.popup_state.set_status_banner("已忽略本次复制", false);
                     self.settings.ignore_next_event = false;
-                    let _ = self.storage.save_settings(&self.settings);
+                    if let Err(err) = self.storage.save_settings(&self.settings) {
+                        self.report_error(format!("设置未保存：{err}"));
+                    }
                     if let Ok(mut guard) = self.shared_settings.write() {
                         guard.ignore_next_event = false;
                     }
                     self.sync_tray();
+                }
+                ClipboardEvent::WatcherStopped => {
+                    self.record_service_error(
+                        "剪贴板监听已停止，无法保存新记录。请重启 Earth 以恢复监听。",
+                    );
+                    if !self.visible && !self.quitting {
+                        self.show_popup(ctx, ViewMode::Settings, None);
+                    }
                 }
             }
         }
@@ -866,11 +1150,9 @@ impl EarthApp {
                     self.show_popup(ctx, ViewMode::Settings, None);
                 }
                 TrayAction::ClearHistory => {
-                    let _ = self.storage.clear_history(false);
-                    if self.settings.clear_system_clipboard_too {
-                        let _ = clear_system_clipboard();
+                    if let Err(err) = self.clear_history(false) {
+                        self.report_error(err);
                     }
-                    self.reload_items();
                 }
                 TrayAction::Quit => {
                     self.request_quit(ctx);
@@ -882,6 +1164,14 @@ impl EarthApp {
 
 impl eframe::App for EarthApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.instance.take_activation() && !self.quitting {
+            if self.visible {
+                ctx.send_viewport_cmd(ViewportCommand::Focus);
+                platform::activate_self_window();
+            } else {
+                self.show_popup(ctx, self.view_mode, None);
+            }
+        }
         self.process_background_events(ctx);
 
         // Convert OS close button into hide unless user explicitly clicked Quit
@@ -1042,24 +1332,19 @@ impl eframe::App for EarthApp {
                                         }
                                         PopupAction::TogglePin(id) => {
                                             if let Some(it) = self.items.iter().find(|x| x.id == id) {
-                                                let _ = self.storage.set_pinned(id, !it.pinned);
-                                                self.reload_items();
+                                                self.finish_history_write(self.storage.set_pinned(id, !it.pinned));
                                             }
                                         }
                                         PopupAction::SetCollection {
                                             item_id,
                                             collection_id,
                                         } => {
-                                            let _ = self
-                                                .storage
-                                                .set_collection(item_id, collection_id);
-                                            self.reload_items();
+                                            self.finish_history_write(self.storage.set_collection(item_id, collection_id));
                                         }
                                         PopupAction::SetItemNote { item_id, note } => {
-                                            let _ = self
-                                                .storage
-                                                .set_item_note(item_id, note.as_deref());
-                                            self.reload_items();
+                                            if !self.finish_history_write(self.storage.set_item_note(item_id, note.as_deref())) {
+                                                self.popup_state.inline_edit_note = Some((item_id, note.unwrap_or_default()));
+                                            }
                                         }
                                         PopupAction::UpdateItemText {
                                             item_id,
@@ -1085,24 +1370,22 @@ impl eframe::App for EarthApp {
                                                     }
                                                 }
                                                 Err(err) => {
+                                                    self.popup_state.inline_edit_text =
+                                                        Some((item_id, new_text));
                                                     self.popup_state.set_status_banner(err, true);
                                                     ctx.request_repaint();
                                                 }
                                             }
                                         }
                                         PopupAction::DeleteItem(id) => {
-                                            let _ = self.storage.delete_item(id);
-                                            self.reload_items();
+                                            self.finish_history_write(self.storage.delete_item(id));
                                         }
                                         PopupAction::ClearUnpinned => {
-                                            let _ = self.storage.clear_history(false);
-                                            if self.settings.clear_system_clipboard_too {
-                                                let _ = clear_system_clipboard();
-                                            }
-                                            self.reload_items();
+                                            if let Err(err) = self.clear_history(false) { self.report_error(err); }
                                         }
                                         PopupAction::OpenSettings => {
                                             self.view_mode = ViewMode::Settings;
+                                            self.history.refresh(true);
                                             ctx.request_repaint();
                                         }
                                         PopupAction::TogglePause => {
@@ -1142,41 +1425,8 @@ impl eframe::App for EarthApp {
                                             }
                                             self.dialog_open = false;
                                         }
-                                        PopupAction::CopyQrImage(png_bytes) => {
-                                            match write_custom_png_to_clipboard(&png_bytes) {
-                                                Ok(()) => {
-                                                    self.popup_state.set_status_banner(
-                                                        "✓ 已复制二维码图片到剪贴板",
-                                                        false,
-                                                    );
-                                                }
-                                                Err(e) => {
-                                                    self.popup_state.set_status_banner(e, true);
-                                                }
-                                            }
-                                            ctx.request_repaint();
-                                        }
-                                        PopupAction::SaveQrImageAs(png_bytes) => {
-                                            self.dialog_open = true;
-                                            if let Some(dest) = rfd::FileDialog::new()
-                                                .set_file_name("earth_qrcode.png")
-                                                .add_filter("PNG Image", &["png"])
-                                                .save_file()
-                                            {
-                                                if let Err(e) = std::fs::write(&dest, &png_bytes) {
-                                                    self.popup_state.set_status_banner(
-                                                        format!("保存二维码失败: {e}"),
-                                                        true,
-                                                    );
-                                                } else {
-                                                    self.popup_state.set_status_banner(
-                                                        format!("✓ 二维码已保存到 {}", dest.display()),
-                                                        false,
-                                                    );
-                                                }
-                                                ctx.request_repaint();
-                                            }
-                                            self.dialog_open = false;
+                                        action @ (PopupAction::CopyQrImage(_) | PopupAction::SaveQrImageAs(_)) => {
+                                            self.finish_qr_export(&ctx, action);
                                         }
                                         PopupAction::RevealFile(path) => {
                                             platform::reveal_in_file_manager(&path);
@@ -1245,21 +1495,24 @@ impl eframe::App for EarthApp {
                                             self.persist_settings();
                                         }
                                         SettingsAction::OpenHotkeyChanged(new_combo) => {
-                                            if let Some(ctrl) = &mut self.hotkey_ctrl {
-                                                match ctrl.set_open_shortcut(&new_combo) {
+                                            let result = match &mut self.hotkey_ctrl {
+                                                Some(ctrl) => ctrl.set_open_shortcut(&new_combo),
+                                                None => Err("全局快捷键服务不可用，请重启 Earth 后重试".to_string()),
+                                            };
+                                                match result {
                                                     Ok(()) => {
+                                                        self.settings.hotkey_open = new_combo;
+                                                        self.settings_state.hotkey_error = None;
                                                         self.settings_state.set_status_message(
                                                             "✓ 全局唤醒快捷键已生效",
                                                             false,
                                                         );
+                                                        self.persist_settings();
                                                     }
                                                     Err(e) => {
-                                                        self.settings_state
-                                                            .set_status_message(e, true);
+                                                        self.settings_state.hotkey_error = Some(e);
                                                     }
                                                 }
-                                            }
-                                            self.persist_settings();
                                         }
                                         SettingsAction::ToggleAutostart(enabled) => {
                                             match platform::sync_autostart(enabled) {
@@ -1282,13 +1535,10 @@ impl eframe::App for EarthApp {
                                             self.persist_settings();
                                         }
                                         SettingsAction::ClearHistory(include_pinned) => {
-                                            let _ = self.storage.clear_history(include_pinned);
-                                            if self.settings.clear_system_clipboard_too {
-                                                let _ = clear_system_clipboard();
+                                            match self.clear_history(include_pinned) {
+                                                Ok(()) => self.settings_state.set_status_message("✓ 历史记录已清理", false),
+                                                Err(err) => self.report_error(err),
                                             }
-                                            self.reload_items();
-                                            self.settings_state
-                                                .set_status_message("✓ 历史记录已清理", false);
                                         }
                                         SettingsAction::ExportJson => {
                                             self.dialog_open = true;
@@ -1297,12 +1547,7 @@ impl eframe::App for EarthApp {
                                                 .add_filter("JSON", &["json"])
                                                 .save_file()
                                             {
-                                                let res = serde_json::to_string_pretty(&self.items)
-                                                    .map_err(|e| e.to_string())
-                                                    .and_then(|json| {
-                                                        std::fs::write(&dest, json)
-                                                            .map_err(|e| e.to_string())
-                                                    });
+                                                let res = self.storage.export_backup(&dest);
                                                 match res {
                                                     Ok(()) => {
                                                         self.settings_state.set_status_message(
@@ -1329,28 +1574,28 @@ impl eframe::App for EarthApp {
                                                 .add_filter("JSON", &["json"])
                                                 .pick_file()
                                             {
-                                                let res = std::fs::read_to_string(&src)
-                                                    .map_err(|e| format!("读取文件失败: {e}"))
-                                                    .and_then(|raw| {
-                                                        serde_json::from_str::<Vec<ClipItem>>(&raw)
-                                                            .map_err(|e| {
-                                                                format!("解析 JSON 失败: {e}")
-                                                            })
-                                                    })
-                                                    .and_then(|parsed| {
-                                                        self.storage.import_items(
-                                                            &parsed,
-                                                            self.settings.max_history,
-                                                        )
-                                                    });
+                                                let res = self.storage.import_backup(
+                                                    &src,
+                                                    self.settings.max_history,
+                                                );
                                                 match res {
-                                                    Ok(count) => {
+                                                    Ok(summary) => {
                                                         self.reload_items();
+                                                        let image_warning = if summary.missing_images > 0 {
+                                                            format!("；{} 条旧图片未包含图片文件，无法恢复预览", summary.missing_images)
+                                                        } else if summary.legacy_format {
+                                                            "；已兼容读取旧版 JSON（该格式不内嵌图片）".to_string()
+                                                        } else {
+                                                            String::new()
+                                                        };
                                                         self.settings_state.set_status_message(
                                                             format!(
-                                                                "✓ 导入完成，新增 {count} 条记录（重复记录已自动跳过）"
+                                                                "✓ 导入完成，新增 {} 条，跳过 {} 条重复记录{}",
+                                                                summary.imported,
+                                                                summary.skipped_duplicates,
+                                                                image_warning,
                                                             ),
-                                                            false,
+                                                            summary.missing_images > 0,
                                                         );
                                                     }
                                                     Err(e) => {
@@ -1393,14 +1638,12 @@ impl eframe::App for EarthApp {
                                             }
                                         }
                                         SettingsAction::DeleteCollection(id) => {
-                                            let _ = self.storage.delete_collection(id);
-                                            if self.popup_state.filter
+                                            if self.finish_history_write(self.storage.delete_collection(id)) && self.popup_state.filter
                                                 == crate::model::CategoryFilter::Collection(id)
                                             {
                                                 self.popup_state.filter =
                                                     crate::model::CategoryFilter::All;
                                             }
-                                            self.reload_items();
                                         }
                                         SettingsAction::OpenAccessibilitySettings => {
                                             platform::open_accessibility_settings();
@@ -1471,6 +1714,10 @@ pub(crate) struct FocusBlurCheck {
     pub since_shown: Duration,
 }
 
+fn has_reopen_entry(hotkey_available: bool, tray_visible: bool) -> bool {
+    hotkey_available || tray_visible
+}
+
 pub(crate) fn should_auto_hide_on_blur(s: &FocusBlurCheck) -> bool {
     s.visible
         && !s.focused
@@ -1494,8 +1741,8 @@ pub(crate) fn compute_animated_card_rect(
     {
         // Keep the compact card anchored at its screen X even if OS OuterPosition moves
         // before WindowEvent::Resized shrinks panel_rect.
-        let local_x = (target_screen_x - ox)
-            .clamp(0.0, (panel_rect.width() - COMPACT_WIDTH).max(0.0));
+        let local_x =
+            (target_screen_x - ox).clamp(0.0, (panel_rect.width() - COMPACT_WIDTH).max(0.0));
         return egui::Rect::from_min_size(
             pos2(panel_rect.min.x + local_x, panel_rect.min.y),
             vec2(COMPACT_WIDTH, panel_rect.height()),
@@ -1555,7 +1802,10 @@ pub(crate) fn plan_workbench_expansion(
         (WorkbenchSide::Left, (target_x, clamped_y))
     } else {
         let max_x = (mon_right - expanded_width).max(mon_left);
-        (WorkbenchSide::Right, (win_x.clamp(mon_left, max_x), clamped_y))
+        (
+            WorkbenchSide::Right,
+            (win_x.clamp(mon_left, max_x), clamped_y),
+        )
     }
 }
 
@@ -1608,7 +1858,15 @@ pub(crate) fn handle_background_window_drag(
 #[cfg(test)]
 mod tests {
     use super::handle_background_window_drag;
-    use egui::{pos2, vec2, Modifiers, ViewportCommand, ViewportId};
+    use egui::{Modifiers, ViewportCommand, ViewportId, pos2, vec2};
+
+    #[test]
+    fn hiding_requires_at_least_one_working_entry() {
+        assert!(!super::has_reopen_entry(false, false));
+        assert!(super::has_reopen_entry(false, true));
+        assert!(super::has_reopen_entry(true, false));
+        assert!(super::has_reopen_entry(true, true));
+    }
 
     fn run_drag_sequence(
         ctx: &egui::Context,
@@ -1648,7 +1906,10 @@ mod tests {
         for (t, events) in steps {
             let raw = egui::RawInput {
                 time: Some(*base_time + t),
-                screen_rect: Some(egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(424.0, 520.0))),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    pos2(0.0, 0.0),
+                    vec2(424.0, 520.0),
+                )),
                 events,
                 ..Default::default()
             };
@@ -1696,7 +1957,10 @@ mod tests {
                 }
             },
         );
-        assert!(started_blank, "dragging empty space should start window drag");
+        assert!(
+            started_blank,
+            "dragging empty space should start window drag"
+        );
         assert_eq!(clicked_count, 0);
 
         // 2. Normal click on a button activates it without starting window drag.
@@ -1713,7 +1977,10 @@ mod tests {
                 }
             },
         );
-        assert!(!started_click, "normal button click must not trigger StartDrag");
+        assert!(
+            !started_click,
+            "normal button click must not trigger StartDrag"
+        );
         assert_eq!(clicked_count, 1);
 
         // 3. Pressing and dragging (> 6px) starting on a button drags the window and cancels the click.
@@ -1730,7 +1997,10 @@ mod tests {
                 }
             },
         );
-        assert!(started_btn_drag, "dragging across a button should start window drag");
+        assert!(
+            started_btn_drag,
+            "dragging across a button should start window drag"
+        );
         assert_eq!(clicked_count, 1);
 
         // 4. Dragging inside a TextEdit selects text rather than dragging the window.
@@ -1806,22 +2076,30 @@ mod tests {
 
         // 1. OS viewport still at expanded left origin (1144), target compact X = 1480:
         //    card stays at local [336..760], which maps to screen [1480..1904].
-        let rect_before_move =
-            compute_animated_card_rect(panel_760, WorkbenchSide::Left, 0.0, Some((1480.0, Some(1144.0))));
+        let rect_before_move = compute_animated_card_rect(
+            panel_760,
+            WorkbenchSide::Left,
+            0.0,
+            Some((1480.0, Some(1144.0))),
+        );
         assert!((rect_before_move.min.x - 336.0).abs() < 0.5);
         assert!((rect_before_move.width() - 424.0).abs() < 0.5);
 
         // 2. If OS OuterPosition jumped to 1480 before WindowEvent::Resized shrunk panel_rect:
         //    card pins to local [0..424] so screen position stays [1480..1904] without jumping right.
-        let rect_after_move =
-            compute_animated_card_rect(panel_760, WorkbenchSide::Left, 0.0, Some((1480.0, Some(1480.0))));
+        let rect_after_move = compute_animated_card_rect(
+            panel_760,
+            WorkbenchSide::Left,
+            0.0,
+            Some((1480.0, Some(1480.0))),
+        );
         assert!((rect_after_move.min.x - 0.0).abs() < 0.5);
         assert!((rect_after_move.width() - 424.0).abs() < 0.5);
     }
 
     #[test]
     fn pinned_window_never_auto_hides_on_blur() {
-        use super::{should_auto_hide_on_blur, FocusBlurCheck, ViewMode};
+        use super::{FocusBlurCheck, ViewMode, should_auto_hide_on_blur};
         use std::time::Duration;
 
         // Unpinned: clicking another window hides Earth after grace period.
@@ -1851,7 +2129,7 @@ mod tests {
 
     #[test]
     fn workbench_animation_clamps_os_resize_stall_and_never_skips_opening_frames() {
-        use super::{WorkbenchAnimation, WORKBENCH_OPEN_DURATION};
+        use super::{WORKBENCH_OPEN_DURATION, WorkbenchAnimation};
         use std::time::{Duration, Instant};
 
         let t0 = Instant::now();
@@ -1876,7 +2154,10 @@ mod tests {
         // prevents teleporting straight to completion.
         let (r_hitch, done_hitch) =
             anim.step(t_ready + Duration::from_millis(90), 1.0 / 60.0, true);
-        assert!(r_hitch > r_first && r_hitch < 0.70, "hitch frame reveal={r_hitch}");
+        assert!(
+            r_hitch > r_first && r_hitch < 0.70,
+            "hitch frame reveal={r_hitch}"
+        );
         assert!(!done_hitch);
 
         // Subsequent normal 60Hz frames glide smoothly to completion (1.0)

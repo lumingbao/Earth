@@ -2,142 +2,242 @@ name: Build & Release (Windows + macOS)
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       platform:
-        description: "选择构建平台"
+        description: "Build platform (official publication requires all)"
         required: true
         default: "all"
         type: choice
-        options:
-          - all
-          - windows
-          - macos
+        options: [all, windows, macos]
       publish_release:
-        description: "是否发布到 GitHub Releases（仅手动触发时生效；推送 v* 标签会自动发布）"
+        description: "Publish a signed release from the matching version tag (requires all platforms)"
         required: false
         default: false
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  EARTH_RELEASE_CHANNEL: ${{ ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || inputs.publish_release) && 'official' || 'development' }}
 
 jobs:
+  validate-version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check installer version guards
+        run: node packaging/semver.test.js
+      - name: Validate release tag against Cargo metadata
+        id: meta
+        shell: bash
+        env:
+          SELECTED_PLATFORM: ${{ inputs.platform }}
+          PUBLISH_RELEASE: ${{ inputs.publish_release }}
+        run: |
+          set -euo pipefail
+          if [[ "$PUBLISH_RELEASE" == "true" && "$SELECTED_PLATFORM" != "all" ]]; then
+            echo "Official publication requires all platforms so SHA256SUMS covers the complete release." >&2
+            exit 1
+          fi
+          if [[ "$PUBLISH_RELEASE" == "true" && "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "Select the matching version tag when manually publishing an official release." >&2
+            exit 1
+          fi
+          VERSION="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "earth"))')"
+          TAG="v${VERSION}"
+          if [[ "$GITHUB_REF" == refs/tags/* && "${GITHUB_REF#refs/tags/}" != "$TAG" ]]; then
+            echo "Tag must match Cargo version: expected $TAG" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [[ "${VERSION%%+*}" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-windows:
     name: Build Windows (x64)
+    needs: validate-version
     if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'windows'
     runs-on: windows-latest
+    env:
+      EARTH_UPDATE_WINDOWS_CERT_SHA256: ${{ vars.EARTH_UPDATE_WINDOWS_CERT_SHA256 }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust stable (MSVC)
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-          components: clippy
-
-      - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@v2
-
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Run unit tests
+        run: cargo test --locked
       - name: Ensure NSIS is available
         shell: pwsh
         run: |
           if (-not (Get-Command makensis -ErrorAction SilentlyContinue) -and -not (Test-Path "${env:ProgramFiles(x86)}\NSIS\makensis.exe")) {
             choco install nsis -y
+            if ($LASTEXITCODE -ne 0) { throw "NSIS installation failed" }
           }
-
-      - name: Run Clippy & Unit Tests
+      - name: Import official signing certificate
+        if: env.EARTH_RELEASE_CHANNEL == 'official'
         shell: pwsh
+        env:
+          CERTIFICATE: ${{ secrets.EARTH_WINDOWS_PFX_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.EARTH_WINDOWS_PFX_PASSWORD }}
         run: |
-          cargo clippy --all-targets -- -D warnings
-          cargo test
-
-      - name: Build & Package Windows (.exe installer + portable .zip)
+          if (-not $env:CERTIFICATE -or -not $env:CERTIFICATE_PASSWORD -or $env:EARTH_UPDATE_WINDOWS_CERT_SHA256 -notmatch '^[0-9A-Fa-f]{64}$') {
+            throw "Official Windows releases require signing credentials and a pinned certificate SHA-256"
+          }
+          $Pfx = Join-Path $env:RUNNER_TEMP 'earth-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($Pfx, [Convert]::FromBase64String($env:CERTIFICATE))
+            $Password = ConvertTo-SecureString $env:CERTIFICATE_PASSWORD -AsPlainText -Force
+            $Cert = Import-PfxCertificate -FilePath $Pfx -Password $Password -CertStoreLocation Cert:\CurrentUser\My | Where-Object HasPrivateKey | Select-Object -First 1
+            if (-not $Cert) { throw "No signing key was imported" }
+            $Hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Cert.RawData))
+            if ($Hash -ne $env:EARTH_UPDATE_WINDOWS_CERT_SHA256) { throw "Imported publisher does not match the pinned certificate" }
+            "EARTH_WINDOWS_SIGN_THUMBPRINT=$($Cert.Thumbprint)" >> $env:GITHUB_ENV
+          } finally {
+            Remove-Item $Pfx -Force -ErrorAction SilentlyContinue
+          }
+      - name: Build, sign and verify Windows packages
         shell: pwsh
         run: ./scripts/package-windows.ps1
-
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
+      - name: Remove signing key
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:EARTH_WINDOWS_SIGN_THUMBPRINT) {
+            Remove-Item "Cert:\CurrentUser\My\$env:EARTH_WINDOWS_SIGN_THUMBPRINT" -DeleteKey -ErrorAction SilentlyContinue
+          }
+      - uses: actions/upload-artifact@v4
         with:
-          name: earth-windows-x64
+          name: earth-windows-x64-${{ env.EARTH_RELEASE_CHANNEL }}
           path: |
-            dist/Earth-*-Windows-x64-Setup.exe
-            dist/Earth-*-Windows-x64-Portable.zip
+            dist/Earth-*-Windows-x64-Setup*.exe
+            dist/Earth-*-Windows-x64-Portable*.zip
           if-no-files-found: error
 
   build-macos:
     name: Build macOS (Universal)
+    needs: validate-version
     if: github.event_name != 'workflow_dispatch' || inputs.platform == 'all' || inputs.platform == 'macos'
     runs-on: macos-15
+    env:
+      EARTH_UPDATE_MACOS_TEAM_ID: ${{ vars.EARTH_UPDATE_MACOS_TEAM_ID }}
+      EARTH_MACOS_SIGN_IDENTITY: ${{ vars.EARTH_MACOS_SIGN_IDENTITY }}
+      EARTH_MACOS_INSTALLER_IDENTITY: ${{ vars.EARTH_MACOS_INSTALLER_IDENTITY }}
+      EARTH_NOTARY_PROFILE: earth-release
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust stable (arm64 + x86_64)
-        uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
-          components: clippy
-
-      - name: Cache Cargo artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Run Clippy & Unit Tests
+          components: clippy,rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Run unit tests
+        run: cargo test --locked
+      - name: Import official signing and notarization credentials
+        if: env.EARTH_RELEASE_CHANNEL == 'official'
+        env:
+          APPLICATION_CERTIFICATE: ${{ secrets.EARTH_MACOS_APP_P12_BASE64 }}
+          INSTALLER_CERTIFICATE: ${{ secrets.EARTH_MACOS_INSTALLER_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.EARTH_MACOS_P12_PASSWORD }}
+          APPLE_ID: ${{ secrets.EARTH_APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.EARTH_APPLE_APP_PASSWORD }}
         run: |
-          cargo clippy --all-targets -- -D warnings
-          cargo test
-
-      - name: Build & Package macOS Universal (.dmg + .pkg)
+          set -euo pipefail
+          : "${APPLICATION_CERTIFICATE:?Missing Developer ID Application certificate}"
+          : "${INSTALLER_CERTIFICATE:?Missing Developer ID Installer certificate}"
+          : "${CERTIFICATE_PASSWORD:?Missing certificate password}"
+          : "${APPLE_ID:?Missing notarization account}"
+          : "${APPLE_PASSWORD:?Missing notarization password}"
+          [[ "$EARTH_UPDATE_MACOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]
+          : "${EARTH_MACOS_SIGN_IDENTITY:?Missing application identity}"
+          : "${EARTH_MACOS_INSTALLER_IDENTITY:?Missing installer identity}"
+          KEYCHAIN="$RUNNER_TEMP/earth-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          trap 'rm -f "$RUNNER_TEMP/earth-app.p12" "$RUNNER_TEMP/earth-installer.p12"' EXIT
+          printf '%s' "$APPLICATION_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/earth-app.p12"
+          printf '%s' "$INSTALLER_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/earth-installer.p12"
+          for cert in "$RUNNER_TEMP/earth-app.p12" "$RUNNER_TEMP/earth-installer.p12"; do
+            security import "$cert" -k "$KEYCHAIN" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/productsign
+          done
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          xcrun notarytool store-credentials "$EARTH_NOTARY_PROFILE" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$EARTH_UPDATE_MACOS_TEAM_ID" --keychain "$KEYCHAIN"
+      - name: Build, sign, notarize and verify macOS packages
         run: ./scripts/package-macos.sh universal
-
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
+      - name: Remove signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/earth-signing.keychain-db" || true
+      - uses: actions/upload-artifact@v4
         with:
-          name: earth-macos-universal
+          name: earth-macos-universal-${{ env.EARTH_RELEASE_CHANNEL }}
           path: |
-            dist/Earth-*-macOS-universal.dmg
-            dist/Earth-*-macOS-universal.pkg
+            dist/Earth-*-macOS-universal*.dmg
+            dist/Earth-*-macOS-universal*.pkg
           if-no-files-found: error
 
   release:
-    name: Publish GitHub Release
-    needs: [build-windows, build-macos]
+    name: Publish verified official release
+    needs: [validate-version, build-windows, build-macos]
     if: |
       always() &&
-      (startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) &&
-      needs.build-windows.result != 'failure' && needs.build-windows.result != 'cancelled' &&
-      needs.build-macos.result != 'failure' && needs.build-macos.result != 'cancelled'
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (github.event_name == 'workflow_dispatch' && inputs.publish_release)) &&
+      needs.validate-version.result == 'success' &&
+      needs.build-windows.result == 'success' &&
+      needs.build-macos.result == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download all platform artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
+          pattern: '*-official'
           path: release-artifacts
           merge-multiple: true
-
-      - name: Determine release tag & checksums
-        id: meta
+      - name: Verify official artifact set and generate checksums
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.validate-version.outputs.tag }}
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-          else
-            VER="$(python3 -c 'import re, pathlib; m = re.search(r"^version\s*=\s*\"([^\"]+)\"", pathlib.Path("Cargo.toml").read_text(), re.M); print(m.group(1))')"
-            TAG="v${VER}"
-          fi
-          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
-          (cd release-artifacts && sha256sum * > SHA256SUMS.txt)
-          ls -lh release-artifacts
-
+          set -euo pipefail
+          cd release-artifacts
+          shopt -s nullglob
+          artifacts=(Earth-*)
+          (( ${#artifacts[@]} > 0 ))
+          for artifact in "${artifacts[@]}"; do
+            [[ "$artifact" == "Earth-${RELEASE_TAG#v}-"* && "$artifact" != *UNSIGNED* && -f "$artifact" ]]
+          done
+          sha256sum "${artifacts[@]}" > SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.meta.outputs.tag }}
-          name: Earth ${{ steps.meta.outputs.tag }}
+          tag_name: ${{ needs.validate-version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Earth ${{ needs.validate-version.outputs.tag }}
+          prerelease: ${{ needs.validate-version.outputs.prerelease == 'true' }}
           generate_release_notes: true
           files: release-artifacts/*

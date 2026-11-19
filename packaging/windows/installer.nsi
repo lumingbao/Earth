@@ -2,12 +2,16 @@
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+!include "LogicLib.nsh"
 
 !ifndef VERSION
-  !define VERSION "0.4.0"
+  !error "VERSION must be supplied from Cargo metadata"
 !endif
 !ifndef VI_VERSION
-  !define VI_VERSION "0.4.0.0"
+  !error "VI_VERSION must be supplied from Cargo metadata"
+!endif
+!ifndef VERSION_CHECK_SCRIPT
+  !error "VERSION_CHECK_SCRIPT must point to the shared SemVer checker"
 !endif
 !ifndef EXE_PATH
   !define EXE_PATH "..\..\dist\Earth.exe"
@@ -55,8 +59,43 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 !insertmacro MUI_LANGUAGE "SimpChinese"
 !insertmacro MUI_LANGUAGE "English"
 
+Function .onInit
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File "/oname=earth-semver.js" "${VERSION_CHECK_SCRIPT}"
+  Call CheckInstalledVersion
+FunctionEnd
+
+Function CheckInstalledVersion
+  ; The script reads the fixed registration key itself. Registry text is never
+  ; interpolated into a command line, and only Cargo's validated version is passed.
+  nsExec::ExecToStack /TIMEOUT=15000 '"$SYSDIR\cscript.exe" //B //NoLogo "$PLUGINSDIR\earth-semver.js" "${VERSION}"'
+  Pop $0
+  Pop $1
+  ${If} $0 == 2
+    MessageBox MB_OK|MB_ICONSTOP "A newer Earth version is already installed, including prerelease precedence. Downgrade cancelled."
+    Abort
+  ${ElseIf} $0 != 0
+    MessageBox MB_OK|MB_ICONSTOP "Earth could not safely verify the installed version. Installation cancelled; check Windows Script Host availability and the existing installation."
+    Abort
+  ${EndIf}
+FunctionEnd
+
 Section "${APP_NAME} (必选)" SecMain
   SectionIn RO
+
+  ; Recheck after directory selection and before terminating or replacing Earth.
+  ; An unregistered existing executable has no reliable full SemVer metadata.
+  IfFileExists "$INSTDIR\${APP_EXE}" 0 version_check
+  ReadRegStr $0 HKCU "${UNINSTALL_KEY}" "InstallLocation"
+  StrCmp $0 "$INSTDIR" 0 unregistered_install
+  ReadRegStr $0 HKCU "${UNINSTALL_KEY}" "DisplayVersion"
+  StrCmp $0 "" unregistered_install version_check
+  unregistered_install:
+    MessageBox MB_OK|MB_ICONSTOP "This directory contains an Earth installation whose version cannot be verified. Choose an empty directory or explicitly remove the existing installation first."
+    Abort
+  version_check:
+  Call CheckInstalledVersion
 
   ; Gracefully close any running Earth instance before replacing the binary
   nsExec::ExecToStack 'taskkill /F /IM ${APP_EXE}'
@@ -83,6 +122,7 @@ Section "${APP_NAME} (必选)" SecMain
   IntFmt $0 "0x%08X" $0
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "${APP_NAME}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayVersion" "${VERSION}"
+  WriteRegStr HKCU "${UNINSTALL_KEY}" "VersionQuad" "${VI_VERSION}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "Publisher" "${APP_PUBLISHER}"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayIcon" "$INSTDIR\${APP_EXE},0"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "InstallLocation" "$INSTDIR"

@@ -1,17 +1,18 @@
 use crate::hotkey::{
-    capture_egui_shortcut, format_live_modifiers, format_shortcut_display, ShortcutCapture,
+    ShortcutCapture, capture_egui_shortcut, format_live_modifiers, format_shortcut_display,
+    validate_shortcut,
 };
 use crate::model::{
-    format_bytes, AppSettings, Collection, CopyTriggerMode, MatchHighlight, PinPosition,
-    PopupPosition, SearchBoxVisibility, SearchMode, SortOrder, ThemeMode,
+    AppSettings, Collection, CopyTriggerMode, MatchHighlight, PinPosition, PopupPosition,
+    SearchBoxVisibility, SearchMode, SortOrder, ThemeMode, format_bytes,
 };
 use crate::platform::{self, NativeShortcutEvent};
 use crate::ui::theme::{
-    card_shadow, compact_button, desktop_scroll_source, dismiss_button, padded_button,
-    parse_hex_color32, EarthPalette, StatusToast,
+    EarthPalette, StatusToast, card_shadow, compact_button, desktop_scroll_source, dismiss_button,
+    padded_button, parse_hex_color32,
 };
 use crate::updater::{ReleaseInfo, UpdateDownloadState};
-use egui::{vec2, Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui};
+use egui::{Align, CornerRadius, Layout, RichText, ScrollArea, Stroke, Ui, vec2};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,8 +51,14 @@ pub enum SettingsAction {
     ClearHistory(bool),
     ExportJson,
     ImportJson,
-    CreateCollection { name: String, color_hex: String },
-    RenameCollection { id: i64, name: String },
+    CreateCollection {
+        name: String,
+        color_hex: String,
+    },
+    RenameCollection {
+        id: i64,
+        name: String,
+    },
     DeleteCollection(i64),
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     OpenAccessibilitySettings,
@@ -70,6 +77,8 @@ pub struct SettingsState {
     pub editing_collection_id: Option<i64>,
     pub editing_collection_name: String,
     pub status_message: Option<StatusToast>,
+    pub hotkey_error: Option<String>,
+    pub service_error: Option<String>,
     pub checking_updates: bool,
     pub available_update: Option<ReleaseInfo>,
     pub update_download: UpdateDownloadState,
@@ -90,6 +99,8 @@ impl Default for SettingsState {
             editing_collection_id: None,
             editing_collection_name: String::new(),
             status_message: None,
+            hotkey_error: None,
+            service_error: None,
             checking_updates: false,
             available_update: None,
             update_download: UpdateDownloadState::Idle,
@@ -164,9 +175,13 @@ pub fn render_settings_view(
                 state.set_status_message("请配合 Ctrl / Alt / Shift 等修饰键组合使用", true);
             }
             CapturePoll::Combo(combo) => {
+                if let Err(error) = validate_shortcut(&combo, target == RecordingTarget::Open) {
+                    state.hotkey_error = Some(error);
+                    return actions;
+                }
+                state.hotkey_error = None;
                 match target {
                     RecordingTarget::Open => {
-                        settings.hotkey_open = combo.clone();
                         actions.push(SettingsAction::OpenHotkeyChanged(combo));
                     }
                     RecordingTarget::Pin => {
@@ -232,6 +247,13 @@ pub fn render_settings_view(
 
     ui.add_space(6.0);
 
+    for error in [&state.service_error, &state.hotkey_error]
+        .into_iter()
+        .flatten()
+    {
+        ui.label(RichText::new(error).size(11.5).color(palette.danger));
+    }
+
     // GOSTOCK Segmented Pill Tabs (#F1F4F9 track with #456EFD active pill)
     egui::Frame::NONE
         .fill(palette.card_bg)
@@ -253,17 +275,11 @@ pub fn render_settings_view(
                     let (rect, resp) =
                         ui.allocate_exact_size(vec2(tab_width, 28.0), egui::Sense::click());
                     if active {
-                        ui.painter().rect_filled(
-                            rect,
-                            CornerRadius::same(13),
-                            palette.accent,
-                        );
+                        ui.painter()
+                            .rect_filled(rect, CornerRadius::same(13), palette.accent);
                     } else if resp.hovered() {
-                        ui.painter().rect_filled(
-                            rect,
-                            CornerRadius::same(13),
-                            palette.accent_soft,
-                        );
+                        ui.painter()
+                            .rect_filled(rect, CornerRadius::same(13), palette.accent_soft);
                     }
                     let text_color = if active {
                         palette.on_accent
@@ -342,10 +358,24 @@ pub fn render_settings_view(
         .auto_shrink([false, false])
         .show(ui, |ui| match state.active_tab {
             SettingsTab::General => {
-                render_general_tab(ui, settings, state, palette, has_accessibility, &mut actions);
+                render_general_tab(
+                    ui,
+                    settings,
+                    state,
+                    palette,
+                    has_accessibility,
+                    &mut actions,
+                );
             }
             SettingsTab::Storage => {
-                render_storage_tab(ui, settings, palette, storage_bytes, item_count, &mut actions);
+                render_storage_tab(
+                    ui,
+                    settings,
+                    palette,
+                    storage_bytes,
+                    item_count,
+                    &mut actions,
+                );
             }
             SettingsTab::Appearance => {
                 render_appearance_tab(ui, settings, palette, &mut actions);
@@ -413,7 +443,8 @@ fn render_general_tab(
                                 .stroke(Stroke::NONE)
                                 .corner_radius(CornerRadius::same(255));
                                 if padded_button(ui, restart_btn, vec2(10.0, 3.5)).clicked() {
-                                    actions.push(SettingsAction::ApplyUpdateAndRestart(staged_path));
+                                    actions
+                                        .push(SettingsAction::ApplyUpdateAndRestart(staged_path));
                                 }
                             }
                             UpdateDownloadState::Downloading { version }
@@ -505,18 +536,17 @@ fn render_general_tab(
         let default_del = AppSettings::default().hotkey_delete;
         let default_prev = AppSettings::default().hotkey_preview;
 
+        let mut new_open = settings.hotkey_open.clone();
         if shortcut_row(
             ui,
             "打开 Earth：",
-            &mut settings.hotkey_open,
+            &mut new_open,
             &default_open,
             RecordingTarget::Open,
             state,
             palette,
         ) {
-            actions.push(SettingsAction::OpenHotkeyChanged(
-                settings.hotkey_open.clone(),
-            ));
+            actions.push(SettingsAction::OpenHotkeyChanged(new_open));
         }
         if shortcut_row(
             ui,
@@ -572,14 +602,16 @@ fn render_general_tab(
         });
 
         let click_hint = match settings.copy_trigger_mode {
-            CopyTriggerMode::DoubleClick => {
-                "单击记录展开右侧工作台预览，双击记录执行复制/粘贴。"
-            }
+            CopyTriggerMode::DoubleClick => "单击记录展开右侧工作台预览，双击记录执行复制/粘贴。",
             CopyTriggerMode::SingleClick => {
                 "工作台收起时单击记录直接复制/粘贴（不自动展开工作台）；可通过顶部栏分栏按钮、快捷键或右键菜单打开工作台，工作台展开时单击其他记录可切换预览，再次点击当前选中记录即可复制。"
             }
         };
-        ui.label(RichText::new(click_hint).size(11.0).color(palette.text_muted));
+        ui.label(
+            RichText::new(click_hint)
+                .size(11.0)
+                .color(palette.text_muted),
+        );
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -606,7 +638,10 @@ fn render_general_tab(
             actions.push(SettingsAction::SettingsChanged);
         }
         if ui
-            .checkbox(&mut settings.plain_text_paste, "默认以纯文本格式粘贴（去除富文本样式）")
+            .checkbox(
+                &mut settings.plain_text_paste,
+                "默认以纯文本格式粘贴（去除富文本样式）",
+            )
             .changed()
         {
             actions.push(SettingsAction::SettingsChanged);
@@ -674,15 +709,11 @@ fn shortcut_row(
         } else {
             Stroke::new(1.0, palette.border)
         };
-        let btn = egui::Button::new(
-            RichText::new(text)
-                .size(12.0)
-                .color(if is_recording {
-                    palette.accent_text
-                } else {
-                    palette.text_primary
-                }),
-        )
+        let btn = egui::Button::new(RichText::new(text).size(12.0).color(if is_recording {
+            palette.accent_text
+        } else {
+            palette.text_primary
+        }))
         .min_size(vec2(170.0, 26.0))
         .fill(fill)
         .stroke(stroke)
@@ -726,9 +757,11 @@ fn render_storage_tab(
             actions.push(SettingsAction::SettingsChanged);
         }
         ui.label(
-            RichText::new("仅记录勾选类型的复制内容（已固定和已加入收藏分组的记录不会被自动淘汰）。")
-                .size(11.5)
-                .color(palette.text_muted),
+            RichText::new(
+                "仅记录勾选类型的复制内容（已固定和已加入收藏分组的记录不会被自动淘汰）。",
+            )
+            .size(11.5)
+            .color(palette.text_muted),
         );
     });
 
@@ -757,6 +790,33 @@ fn render_storage_tab(
             );
         });
 
+        ui.horizontal_wrapped(|ui| {
+            ui.label("单条上限（超限跳过）：");
+            if ui
+                .add(
+                    egui::DragValue::new(&mut settings.max_text_mib)
+                        .range(1..=16)
+                        .prefix("文本 ")
+                        .suffix(" MiB"),
+                )
+                .changed()
+                | ui.add(
+                    egui::DragValue::new(&mut settings.max_image_mib)
+                        .range(1..=64)
+                        .prefix("图片 ")
+                        .suffix(" MiB"),
+                )
+                .changed()
+                | ui.add(
+                    egui::DragValue::new(&mut settings.max_image_megapixels)
+                        .range(1..=64)
+                        .suffix(" 百万像素"),
+                )
+                .changed()
+            {
+                actions.push(SettingsAction::SettingsChanged);
+            }
+        });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label("默认排序方式：");
@@ -801,6 +861,11 @@ fn render_storage_tab(
                 actions.push(SettingsAction::ImportJson);
             }
         });
+        ui.label(
+            RichText::new("本地历史与备份未加密；敏感内容遮罩仅影响显示。新版 JSON 备份包含图片，单图上限 64 MiB、备份上限 128 MiB。")
+                .size(11.5)
+                .color(palette.text_muted),
+        );
     });
 }
 
@@ -889,7 +954,10 @@ fn render_appearance_tab(
     section_card(ui, palette, |ui| {
         let mut changed = false;
         changed |= ui
-            .checkbox(&mut settings.show_special_symbols, "显示特殊空白符号（· ⇥ ↵）")
+            .checkbox(
+                &mut settings.show_special_symbols,
+                "显示特殊空白符号（· ⇥ ↵）",
+            )
             .changed();
         changed |= ui
             .checkbox(&mut settings.show_tray_icon, "显示菜单栏 / 系统托盘图标")
@@ -924,7 +992,10 @@ fn render_appearance_tab(
             .checkbox(&mut settings.show_source_app_badge, "显示来源应用程序标签")
             .changed();
         changed |= ui
-            .checkbox(&mut settings.show_hex_color_swatch, "显示颜色色块（HEX / RGB）")
+            .checkbox(
+                &mut settings.show_hex_color_swatch,
+                "显示颜色色块（HEX / RGB）",
+            )
             .changed();
         changed |= ui
             .checkbox(&mut settings.show_footer_menu, "显示底部操作栏")
@@ -995,7 +1066,7 @@ fn render_ignore_tab(
             }
             IgnoreSubTab::ClipboardTypes => {
                 ui.label(
-                    RichText::new("匹配系统剪贴板格式标识（macOS UTI / Windows Clipboard Format）时自动跳过：")
+                    RichText::new("精确匹配格式名。text、html、rtf、image、files 只忽略该表示；隐私标记和其他自定义格式忽略整条复制。")
                         .size(11.5)
                         .color(palette.text_muted),
                 );
@@ -1113,7 +1184,10 @@ fn render_advanced_tab(
         }
         ui.separator();
         if ui
-            .checkbox(&mut settings.clear_on_exit, "退出 Earth 时清除未固定历史记录")
+            .checkbox(
+                &mut settings.clear_on_exit,
+                "退出 Earth 时清除未固定历史记录",
+            )
             .changed()
         {
             actions.push(SettingsAction::SettingsChanged);
@@ -1151,19 +1225,20 @@ fn render_advanced_tab(
                 let (rect, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), egui::Sense::click());
                 ui.painter().circle_filled(rect.center(), 7.0, c);
                 if selected {
-                    ui.painter()
-                        .circle_stroke(rect.center(), 9.0, Stroke::new(1.5, palette.text_primary));
+                    ui.painter().circle_stroke(
+                        rect.center(),
+                        9.0,
+                        Stroke::new(1.5, palette.text_primary),
+                    );
                 }
                 if resp.clicked() {
                     state.new_collection_color = hex.to_string();
                 }
             }
-            let create_btn = egui::Button::new(
-                RichText::new("创建分组").color(palette.on_accent),
-            )
-            .fill(palette.accent)
-            .stroke(Stroke::NONE)
-            .corner_radius(CornerRadius::same(255));
+            let create_btn = egui::Button::new(RichText::new("创建分组").color(palette.on_accent))
+                .fill(palette.accent)
+                .stroke(Stroke::NONE)
+                .corner_radius(CornerRadius::same(255));
             if ui.add(create_btn).clicked() && !state.new_collection_name.trim().is_empty() {
                 actions.push(SettingsAction::CreateCollection {
                     name: state.new_collection_name.trim().to_string(),
@@ -1294,7 +1369,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_recorder_captures_clipboard_and_space_combos_and_cancels_on_escape() {
+    fn settings_recorder_rejects_reserved_combos_preserves_old_value_and_accepts_safe_combos() {
         let ctx = egui::Context::default();
         let mut settings = AppSettings::default();
         let mut state = SettingsState {
@@ -1303,47 +1378,30 @@ mod tests {
             ..Default::default()
         };
 
-        let expected_paste = if cfg!(target_os = "macos") {
-            "Super+V"
-        } else {
-            "Ctrl+V"
-        };
-        let expected_copy = if cfg!(target_os = "macos") {
-            "Super+C"
-        } else {
-            "Ctrl+C"
-        };
+        let previous_open = settings.hotkey_open.clone();
+        let previous_pin = settings.hotkey_pin.clone();
+        let previous_preview = settings.hotkey_preview.clone();
 
-        // Frame 1: Ctrl/Cmd+V arrives from egui-winit as Event::Paste while recording Open shortcut.
+        // Clipboard shortcuts remain available for normal text editing.
         let actions = run_settings_frame(
             &ctx,
             &mut settings,
             &mut state,
             vec![egui::Event::Paste("copied text".into())],
         );
-        assert_eq!(settings.hotkey_open, expected_paste);
-        assert!(state.recording.is_none());
-        assert!(matches!(
-            actions.as_slice(),
-            [SettingsAction::OpenHotkeyChanged(combo)] if combo == expected_paste
-        ));
+        assert_eq!(settings.hotkey_open, previous_open);
+        assert_eq!(state.recording, Some(RecordingTarget::Open));
+        assert!(state.hotkey_error.is_some());
+        assert!(actions.is_empty());
 
-        // Frame 2: Ctrl/Cmd+C arrives as Event::Copy while recording Pin shortcut.
         state.recording = Some(RecordingTarget::Pin);
-        let actions = run_settings_frame(
-            &ctx,
-            &mut settings,
-            &mut state,
-            vec![egui::Event::Copy],
-        );
-        assert_eq!(settings.hotkey_pin, expected_copy);
-        assert!(state.recording.is_none());
-        assert!(matches!(
-            actions.as_slice(),
-            [SettingsAction::SettingsChanged]
-        ));
+        let actions = run_settings_frame(&ctx, &mut settings, &mut state, vec![egui::Event::Copy]);
+        assert_eq!(settings.hotkey_pin, previous_pin);
+        assert_eq!(state.recording, Some(RecordingTarget::Pin));
+        assert!(state.hotkey_error.is_some());
+        assert!(actions.is_empty());
 
-        // Frame 3: Ctrl+Space updates Preview shortcut cleanly.
+        // The input-method shortcut is also rejected without replacing the old value.
         state.recording = Some(RecordingTarget::Preview);
         let actions = run_settings_frame(
             &ctx,
@@ -1357,14 +1415,60 @@ mod tests {
                 modifiers: egui::Modifiers::CTRL,
             }],
         );
-        assert_eq!(settings.hotkey_preview, "Ctrl+Space");
+        assert_eq!(settings.hotkey_preview, previous_preview);
+        assert_eq!(state.recording, Some(RecordingTarget::Preview));
+        assert!(state.hotkey_error.is_some());
+        assert!(actions.is_empty());
+
+        // An accepted global shortcut is emitted for registration before settings change.
+        let safe_modifiers = egui::Modifiers {
+            ctrl: true,
+            shift: true,
+            ..Default::default()
+        };
+        state.recording = Some(RecordingTarget::Open);
+        let actions = run_settings_frame(
+            &ctx,
+            &mut settings,
+            &mut state,
+            vec![egui::Event::Key {
+                key: egui::Key::F6,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: safe_modifiers,
+            }],
+        );
+        assert_eq!(settings.hotkey_open, previous_open);
+        assert!(state.hotkey_error.is_none());
+        assert!(state.recording.is_none());
+        assert!(matches!(
+            actions.as_slice(),
+            [SettingsAction::OpenHotkeyChanged(combo)] if combo == "Ctrl+Shift+F6"
+        ));
+
+        state.recording = Some(RecordingTarget::Preview);
+        let actions = run_settings_frame(
+            &ctx,
+            &mut settings,
+            &mut state,
+            vec![egui::Event::Key {
+                key: egui::Key::P,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: safe_modifiers,
+            }],
+        );
+        assert_eq!(settings.hotkey_preview, "Ctrl+Shift+P");
+        assert!(state.hotkey_error.is_none());
         assert!(state.recording.is_none());
         assert!(matches!(
             actions.as_slice(),
             [SettingsAction::SettingsChanged]
         ));
 
-        // Frame 4: Escape while recording cancels recording without closing Settings.
+        // Escape while recording cancels capture without closing Settings.
         state.recording = Some(RecordingTarget::Delete);
         let actions = run_settings_frame(
             &ctx,

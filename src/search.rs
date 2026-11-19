@@ -2,11 +2,13 @@ use crate::model::{CategoryFilter, ClipItem, ClipKind, PinPosition, SearchMode, 
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use regex::RegexBuilder;
+use std::borrow::Cow;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct SearchResultItem {
-    pub item: ClipItem,
+    pub item: Arc<ClipItem>,
     pub score: u32,
     /// Character indices (in the item's `display_text`) matched by the current query.
     pub matched_indices: HashSet<usize>,
@@ -23,15 +25,30 @@ pub fn matches_filter(item: &ClipItem, filter: CategoryFilter) -> bool {
     }
 }
 
+pub fn display_line(item: &ClipItem, symbols: bool) -> String {
+    match item.kind {
+        ClipKind::Text => crate::model::truncate_chars(
+            &crate::transforms::format_display_line(
+                item.text_content.as_deref().unwrap_or_default(),
+                symbols,
+            ),
+            88,
+        ),
+        ClipKind::Files => item.summary_line(60),
+        ClipKind::Image => item.summary_line(40),
+    }
+}
+
 pub fn filter_and_search(
-    items: &[ClipItem],
+    items: &[Arc<ClipItem>],
     query: &str,
     filter: CategoryFilter,
     search_mode: SearchMode,
     sort_order: SortOrder,
     pin_position: PinPosition,
-) -> Vec<SearchResultItem> {
-    let mut filtered: Vec<&ClipItem> = items
+    symbols: bool,
+) -> Result<Vec<SearchResultItem>, String> {
+    let mut filtered: Vec<&Arc<ClipItem>> = items
         .iter()
         .filter(|item| matches_filter(item, filter))
         .collect();
@@ -67,32 +84,49 @@ pub fn filter_and_search(
 
     let trimmed_query = query.trim();
     if trimmed_query.is_empty() {
-        return filtered
+        return Ok(filtered
             .into_iter()
             .map(|item| SearchResultItem {
-                item: item.clone(),
+                item: Arc::clone(item),
                 score: 0,
                 matched_indices: HashSet::new(),
             })
-            .collect();
+            .collect());
     }
-
+    if trimmed_query.len() > 4096 {
+        return Err("搜索内容超过 4096 字节".into());
+    }
     match search_mode {
-        SearchMode::Exact => exact_search(&filtered, trimmed_query),
-        SearchMode::Fuzzy => fuzzy_search(&filtered, trimmed_query),
-        SearchMode::Regex => regex_search(&filtered, trimmed_query),
+        SearchMode::Exact => Ok(exact_search(&filtered, trimmed_query, symbols)),
+        SearchMode::Fuzzy => Ok(fuzzy_search(&filtered, trimmed_query, symbols)),
+        SearchMode::Regex => regex_search(&filtered, trimmed_query, symbols),
     }
 }
 
-fn exact_search(items: &[&ClipItem], query: &str) -> Vec<SearchResultItem> {
+fn searchable_text(item: &ClipItem) -> Cow<'_, str> {
+    if item.kind == ClipKind::Text
+        && item
+            .note
+            .as_deref()
+            .is_none_or(|note| note.trim().is_empty())
+    {
+        Cow::Borrowed(item.text_content.as_deref().unwrap_or_default())
+    } else {
+        Cow::Owned(item.searchable_text())
+    }
+}
+
+fn exact_search(items: &[&Arc<ClipItem>], query: &str, symbols: bool) -> Vec<SearchResultItem> {
     let lower_query = query.to_lowercase();
     let mut results = Vec::new();
 
     for item in items {
-        let haystack = item.searchable_text();
-        if let Some(matched) = find_substring_char_indices(&haystack, &lower_query) {
+        let haystack = searchable_text(item);
+        if haystack.to_lowercase().contains(&lower_query) {
+            let matched = find_substring_char_indices(&display_line(item, symbols), &lower_query)
+                .unwrap_or_default();
             results.push(SearchResultItem {
-                item: (*item).clone(),
+                item: Arc::clone(item),
                 score: 100,
                 matched_indices: matched,
             });
@@ -101,7 +135,7 @@ fn exact_search(items: &[&ClipItem], query: &str) -> Vec<SearchResultItem> {
     results
 }
 
-fn fuzzy_search(items: &[&ClipItem], query: &str) -> Vec<SearchResultItem> {
+fn fuzzy_search(items: &[&Arc<ClipItem>], query: &str, symbols: bool) -> Vec<SearchResultItem> {
     let mut matcher = Matcher::new(Config::DEFAULT);
     let pattern = Pattern::new(
         query,
@@ -114,14 +148,20 @@ fn fuzzy_search(items: &[&ClipItem], query: &str) -> Vec<SearchResultItem> {
     let mut results = Vec::new();
 
     for item in items {
-        let haystack = item.searchable_text();
+        let haystack = searchable_text(item);
         utf32_buf.clear();
         indices_buf.clear();
         let u32_haystack = Utf32Str::new(&haystack, &mut utf32_buf);
-        if let Some(score) = pattern.indices(u32_haystack, &mut matcher, &mut indices_buf) {
+        if let Some(score) = pattern.score(u32_haystack, &mut matcher) {
+            let label = display_line(item, symbols);
+            let _ = pattern.indices(
+                Utf32Str::new(&label, &mut utf32_buf),
+                &mut matcher,
+                &mut indices_buf,
+            );
             let matched_indices = indices_buf.iter().map(|&idx| idx as usize).collect();
             results.push(SearchResultItem {
-                item: (*item).clone(),
+                item: Arc::clone(item),
                 score,
                 matched_indices,
             });
@@ -136,33 +176,39 @@ fn fuzzy_search(items: &[&ClipItem], query: &str) -> Vec<SearchResultItem> {
     results
 }
 
-fn regex_search(items: &[&ClipItem], query: &str) -> Vec<SearchResultItem> {
-    let Ok(re) = RegexBuilder::new(query).case_insensitive(true).build() else {
-        return Vec::new();
-    };
-
+fn regex_search(
+    items: &[&Arc<ClipItem>],
+    query: &str,
+    symbols: bool,
+) -> Result<Vec<SearchResultItem>, String> {
+    let re = RegexBuilder::new(query)
+        .case_insensitive(true)
+        .size_limit(1024 * 1024)
+        .build()
+        .map_err(|e| format!("正则语法错误：{e}"))?;
     let mut results = Vec::new();
     for item in items {
-        let haystack = item.searchable_text();
-        let mut matched_indices = HashSet::new();
-        let mut any_match = false;
-        for m in re.find_iter(&haystack) {
-            any_match = true;
-            let start_char = haystack[..m.start()].chars().count();
-            let match_char_len = haystack[m.start()..m.end()].chars().count();
-            for offset in 0..match_char_len {
-                matched_indices.insert(start_char + offset);
-            }
+        if !re.is_match(&searchable_text(item)) {
+            continue;
         }
-        if any_match {
-            results.push(SearchResultItem {
-                item: (*item).clone(),
-                score: 100,
-                matched_indices,
-            });
+        let label = display_line(item, symbols);
+        let mut indices = HashSet::new();
+        let mut last = 0;
+        let mut pos = 0;
+        for m in re.find_iter(&label) {
+            pos += label[last..m.start()].chars().count();
+            let end = pos + m.as_str().chars().count();
+            indices.extend(pos..end);
+            pos = end;
+            last = m.end();
         }
+        results.push(SearchResultItem {
+            item: Arc::clone(item),
+            score: 100,
+            matched_indices: indices,
+        });
     }
-    results
+    Ok(results)
 }
 
 pub fn find_substring_char_indices(haystack: &str, lower_query: &str) -> Option<HashSet<usize>> {
@@ -204,8 +250,8 @@ pub fn find_substring_char_indices(haystack: &str, lower_query: &str) -> Option<
 mod tests {
     use super::*;
 
-    fn sample_text_item(id: i64, text: &str, pinned: bool, ts: i64) -> ClipItem {
-        ClipItem {
+    fn sample_text_item(id: i64, text: &str, pinned: bool, ts: i64) -> Arc<ClipItem> {
+        Arc::new(ClipItem {
             id,
             content_hash: format!("hash-{id}"),
             kind: ClipKind::Text,
@@ -229,7 +275,65 @@ mod tests {
             detected_color: None,
             is_url: false,
             note: None,
+        })
+    }
+
+    #[test]
+    fn every_search_mode_shares_immutable_payloads_with_the_history_snapshot() {
+        let items = vec![sample_text_item(
+            1,
+            &format!("needle {}", "x".repeat(8192)),
+            false,
+            1,
+        )];
+        for mode in [SearchMode::Exact, SearchMode::Fuzzy, SearchMode::Regex] {
+            for query in ["", "needle"] {
+                let results = filter_and_search(
+                    &items,
+                    query,
+                    CategoryFilter::All,
+                    mode,
+                    SortOrder::LastCopiedAt,
+                    PinPosition::Top,
+                    false,
+                )
+                .unwrap();
+                assert_eq!(results.len(), 1);
+                assert!(Arc::ptr_eq(&results[0].item, &items[0]));
+                assert_eq!(
+                    results[0].item.text_content.as_ref().unwrap().as_ptr(),
+                    items[0].text_content.as_ref().unwrap().as_ptr()
+                );
+            }
         }
+        assert!(matches!(searchable_text(&items[0]), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn regex_highlights_only_visible_text_and_reports_syntax_errors() {
+        let mut items = [sample_text_item(1, "    一\n   两 ", false, 1)];
+        Arc::make_mut(&mut items[0]).note = Some("notes".into());
+        let run = |query| {
+            filter_and_search(
+                &items,
+                query,
+                CategoryFilter::All,
+                SearchMode::Regex,
+                SortOrder::LastCopiedAt,
+                PinPosition::Top,
+                false,
+            )
+        };
+        assert_eq!(run("两").unwrap()[0].matched_indices, HashSet::from([2]));
+        assert!(run("notes").unwrap()[0].matched_indices.is_empty());
+        assert!(run("(").is_err());
+        let big = sample_text_item(2, &"a".repeat(1_000_000), false, 2);
+        assert!(
+            regex_search(&[&big], ".", false).unwrap()[0]
+                .matched_indices
+                .len()
+                <= 89
+        );
     }
 
     #[test]
@@ -246,7 +350,9 @@ mod tests {
             SearchMode::Exact,
             SortOrder::LastCopiedAt,
             PinPosition::Top,
-        );
+            false,
+        )
+        .unwrap();
         assert_eq!(top[0].item.id, 2);
 
         let bottom = filter_and_search(
@@ -256,7 +362,9 @@ mod tests {
             SearchMode::Exact,
             SortOrder::LastCopiedAt,
             PinPosition::Bottom,
-        );
+            false,
+        )
+        .unwrap();
         assert_eq!(bottom[0].item.id, 1);
     }
 
@@ -275,7 +383,9 @@ mod tests {
             SearchMode::Exact,
             SortOrder::LastCopiedAt,
             PinPosition::Top,
-        );
+            false,
+        )
+        .unwrap();
         assert_eq!(exact.len(), 1);
         assert_eq!(exact[0].item.id, 1);
 
@@ -286,7 +396,9 @@ mod tests {
             SearchMode::Fuzzy,
             SortOrder::LastCopiedAt,
             PinPosition::Top,
-        );
+            false,
+        )
+        .unwrap();
         assert_eq!(fuzzy[0].item.id, 2);
 
         let regex = filter_and_search(
@@ -296,7 +408,9 @@ mod tests {
             SearchMode::Regex,
             SortOrder::LastCopiedAt,
             PinPosition::Top,
-        );
+            false,
+        )
+        .unwrap();
         assert_eq!(regex.len(), 1);
         assert_eq!(regex[0].item.id, 3);
     }

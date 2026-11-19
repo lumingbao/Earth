@@ -2,10 +2,24 @@ use crate::model::{AppSettings, ClipItem, ClipKind, Collection, FileEntry};
 use crate::transforms::{detect_color, detect_sensitive_label, detect_url};
 use chrono::Utc;
 use directories::ProjectDirs;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+mod backup;
+mod files;
+pub mod history;
+#[cfg(test)]
+mod regression_tests;
+
+use files::{
+    PendingMedia, atomic_private_write, ensure_private_file, managed_media_path, private_dir,
+    private_file,
+};
+
+const SCHEMA_VERSION: i64 = 1;
+type MediaPaths = (Option<String>, Option<String>);
 
 #[derive(Debug, Clone)]
 pub struct NewClipPayload {
@@ -35,21 +49,53 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub fn open_default() -> Result<Self, String> {
-        let proj = ProjectDirs::from("io", "earth", "Earth")
-            .ok_or_else(|| "无法解析系统应用数据目录".to_string())?;
-        Self::open_in_dir(proj.data_dir())
+    pub fn open_primary() -> Result<Option<(Self, crate::instance::InstanceGuard)>, String> {
+        let proj = ProjectDirs::from("io", "earth", "Earth").ok_or("无法解析系统应用数据目录")?;
+        let dir = proj.data_dir();
+        let open = || -> Result<_, String> {
+            private_dir(dir).map_err(|e| e.to_string())?;
+            let path = dir.join("instance.lock");
+            ensure_private_file(&path).map_err(|e| e.to_string())?;
+            let lock = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .map_err(|e| e.to_string())?;
+            let Some(instance) = crate::instance::InstanceGuard::claim(dir, lock)? else {
+                return Ok(None);
+            };
+            Ok(Some((Self::open_in_dir(dir)?, instance)))
+        };
+        open().map_err(|e| format!("{e}\n\n数据目录：{}\n请确认有足够的磁盘空间和读写权限。需要恢复时，请先备份整个数据目录。", dir.display()))
     }
 
     pub fn open_in_dir(base_dir: &Path) -> Result<Self, String> {
-        fs::create_dir_all(base_dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
+        private_dir(base_dir).map_err(|e| format!("保护数据目录失败: {e}"))?;
+        let base_dir = base_dir
+            .canonicalize()
+            .map_err(|e| format!("解析数据目录失败: {e}"))?;
         let images_dir = base_dir.join("images");
         let thumbs_dir = base_dir.join("thumbs");
-        fs::create_dir_all(&images_dir).map_err(|e| format!("创建图片目录失败: {e}"))?;
-        fs::create_dir_all(&thumbs_dir).map_err(|e| format!("创建缩略图目录失败: {e}"))?;
+        private_dir(&images_dir).map_err(|e| format!("保护图片目录失败: {e}"))?;
+        private_dir(&thumbs_dir).map_err(|e| format!("保护缩略图目录失败: {e}"))?;
 
         let db_path = base_dir.join("earth.db");
+        ensure_private_file(&db_path).map_err(|e| format!("保护数据库文件失败: {e}"))?;
+        for name in [
+            "earth.db-wal",
+            "earth.db-shm",
+            "earth.db-journal",
+            "settings.json",
+            "settings.json.bak",
+        ] {
+            let path = base_dir.join(name);
+            if fs::symlink_metadata(&path).is_ok() {
+                private_file(&path).map_err(|e| format!("保护本地数据文件失败: {e}"))?;
+            }
+        }
         let conn = Connection::open(&db_path).map_err(|e| format!("打开数据库失败: {e}"))?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| format!("配置数据库等待时间失败: {e}"))?;
         conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
@@ -58,19 +104,52 @@ impl Storage {
         .map_err(|e| format!("配置 SQLite PRAGMA 失败: {e}"))?;
 
         let storage = Self {
-            base_dir: base_dir.to_path_buf(),
+            base_dir,
             images_dir,
             thumbs_dir,
             conn,
         };
         storage.init_schema()?;
+        storage.protect_existing_files()?;
+        storage.cleanup_orphaned_media()?;
         Ok(storage)
     }
 
     fn init_schema(&self) -> Result<(), String> {
-        self.conn
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS collections (
+        let version: i64 = self
+            .conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .map_err(|e| format!("读取数据库版本失败: {e}"))?;
+        if version > SCHEMA_VERSION {
+            return Err(format!(
+                "数据库版本 {version} 高于本版本支持的 {SCHEMA_VERSION}，请升级 Earth"
+            ));
+        }
+        if version == SCHEMA_VERSION {
+            // Fail visibly if a supposedly migrated database is incomplete.
+            self.conn
+                .prepare("SELECT note FROM items LIMIT 0")
+                .map_err(|e| format!("数据库结构校验失败: {e}"))?;
+            return Ok(());
+        }
+        let existing: bool = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'items')",
+            [], |r| r.get(0),
+        ).map_err(|e| format!("检查已有数据库失败: {e}"))?;
+        if existing {
+            let backup = self.base_dir.join(format!(
+                "earth.db.before-v{SCHEMA_VERSION}-{}.bak",
+                Utc::now().timestamp_nanos_opt().unwrap_or(0)
+            ));
+            ensure_private_file(&backup).map_err(|e| format!("创建迁移备份失败: {e}"))?;
+            self.conn
+                .execute("VACUUM main INTO ?1", params![backup.to_string_lossy()])
+                .map_err(|e| format!("备份数据库失败，未执行迁移: {e}"))?;
+            private_file(&backup).map_err(|e| format!("保护迁移备份失败: {e}"))?;
+        }
+        let tx = self.begin_write()?;
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS collections (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
                     color_hex TEXT NOT NULL,
@@ -103,71 +182,118 @@ impl Storage {
                 );
                 CREATE INDEX IF NOT EXISTS idx_items_last_copied ON items(last_copied_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_items_pinned ON items(pinned);",
-            )
-            .map_err(|e| format!("初始化数据库结构失败: {e}"))?;
+        )
+        .map_err(|e| format!("初始化数据库结构失败: {e}"))?;
 
-        // Idempotent migration for existing databases created before v0.2.0 note column
-        let _ = self
-            .conn
-            .execute("ALTER TABLE items ADD COLUMN note TEXT", []);
-
-        // Seed starter collections only once on empty table
-        let existing_count: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM collections", [], |r| r.get(0))
-            .unwrap_or(0);
-        if existing_count == 0 {
+        let has_note = {
+            let mut columns = tx
+                .prepare("PRAGMA table_info(items)")
+                .map_err(|e| format!("检查数据库字段失败: {e}"))?;
+            let names = columns
+                .query_map([], |row| row.get::<_, String>(1))
+                .map_err(|e| format!("读取数据库字段失败: {e}"))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("读取数据库字段失败: {e}"))?;
+            names.iter().any(|name| name == "note")
+        };
+        if !has_note {
+            tx.execute("ALTER TABLE items ADD COLUMN note TEXT", [])
+                .map_err(|e| format!("迁移备注字段失败，原数据库未修改: {e}"))?;
+        }
+        // Only a genuinely new database receives starter collections. An empty
+        // legacy table is a valid user choice and must remain empty.
+        if !existing {
             let now = Utc::now().timestamp_millis();
-            let _ = self.conn.execute(
+            tx.execute(
                 "INSERT OR IGNORE INTO collections (name, color_hex, created_at) VALUES (?1, ?2, ?3)",
                 params!["常用指令", "#456EFD", now],
-            );
-            let _ = self.conn.execute(
+            ).map_err(|e| format!("创建初始收藏分组失败: {e}"))?;
+            tx.execute(
                 "INSERT OR IGNORE INTO collections (name, color_hex, created_at) VALUES (?1, ?2, ?3)",
                 params!["代码片段", "#22C55E", now],
-            );
-        } else {
-            // Upgrade untouched legacy starter colors to GOSTOCK Electric Royal Blue / Emerald
-            let _ = self.conn.execute(
-                "UPDATE collections SET color_hex = '#456EFD' WHERE name = '常用指令' AND color_hex IN ('#52525B', '#1677FF')",
-                [],
-            );
-            let _ = self.conn.execute(
-                "UPDATE collections SET color_hex = '#22C55E' WHERE name = '代码片段' AND color_hex IN ('#71717A', '#13C2C2')",
-                [],
-            );
+            ).map_err(|e| format!("创建初始收藏分组失败: {e}"))?;
         }
-        Ok(())
+        tx.pragma_update(None, "user_version", SCHEMA_VERSION)
+            .map_err(|e| format!("更新数据库版本失败: {e}"))?;
+        tx.commit().map_err(|e| format!("提交数据库迁移失败: {e}"))
     }
 
     pub fn settings_path(&self) -> PathBuf {
         self.base_dir.join("settings.json")
     }
 
-    pub fn load_settings(&self) -> AppSettings {
+    pub fn load_settings_with_warning(&self) -> (AppSettings, Option<String>) {
         let path = self.settings_path();
-        if let Ok(raw) = fs::read_to_string(&path)
-            && let Ok(parsed) = serde_json::from_str::<AppSettings>(&raw) {
-                return parsed;
+        match fs::read(&path) {
+            Ok(raw) => {
+                if let Ok(parsed) = serde_json::from_slice::<AppSettings>(&raw) {
+                    return (parsed, None);
+                }
+                let corrupt = self.base_dir.join(format!(
+                    "settings.json.corrupt-{}",
+                    Utc::now().timestamp_nanos_opt().unwrap_or(0)
+                ));
+                if let Err(err) = atomic_private_write(&corrupt, &raw) {
+                    let defaults = AppSettings {
+                        paused: true,
+                        ..Default::default()
+                    };
+                    return (
+                        defaults,
+                        Some(format!("设置损坏且无法保留副本，已暂停监听: {err}")),
+                    );
+                }
             }
-        AppSettings::default()
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return (AppSettings::default(), None);
+            }
+            Err(err) => {
+                let defaults = AppSettings {
+                    paused: true,
+                    ..Default::default()
+                };
+                return (defaults, Some(format!("无法读取设置，已暂停监听: {err}")));
+            }
+        }
+        let backup = self.base_dir.join("settings.json.bak");
+        if let Ok(raw) = fs::read(&backup)
+            && let Ok(settings) = serde_json::from_slice::<AppSettings>(&raw)
+        {
+            let restored = atomic_private_write(&path, &raw);
+            return (
+                settings,
+                Some(if restored.is_ok() {
+                    "设置文件损坏，已保留副本并恢复上一次有效设置".to_string()
+                } else {
+                    "设置文件损坏，已加载备份，但无法写回设置文件".to_string()
+                }),
+            );
+        }
+        let defaults = AppSettings {
+            paused: true,
+            ..Default::default()
+        };
+        (defaults, Some("设置文件损坏且无有效备份，已保留副本并恢复默认设置；监听已暂停，请检查隐私规则后恢复".to_string()))
     }
 
     pub fn save_settings(&self, settings: &AppSettings) -> Result<(), String> {
-        let json = serde_json::to_string_pretty(settings)
-            .map_err(|e| format!("序列化设置失败: {e}"))?;
-        fs::write(self.settings_path(), json).map_err(|e| format!("写入设置失败: {e}"))
+        let json =
+            serde_json::to_string_pretty(settings).map_err(|e| format!("序列化设置失败: {e}"))?;
+        if let Ok(previous) = fs::read(self.settings_path())
+            && serde_json::from_slice::<AppSettings>(&previous).is_ok()
+        {
+            atomic_private_write(&self.base_dir.join("settings.json.bak"), &previous)
+                .map_err(|e| format!("备份设置失败: {e}"))?;
+        }
+        atomic_private_write(&self.settings_path(), json.as_bytes())
+            .map_err(|e| format!("写入设置失败: {e}"))
     }
 
-    pub fn upsert_item(
-        &self,
-        payload: NewClipPayload,
-        max_history: usize,
-    ) -> Result<i64, String> {
+    pub fn upsert_item(&self, payload: NewClipPayload, max_history: usize) -> Result<i64, String> {
         let now = Utc::now().timestamp_millis();
+        let tx = self.begin_write()?;
 
-        let existing_id: Option<i64> = self
-            .conn
+        let existing_id: Option<i64> = tx
             .query_row(
                 "SELECT id FROM items WHERE content_hash = ?1",
                 params![&payload.content_hash],
@@ -177,57 +303,57 @@ impl Storage {
             .map_err(|e| format!("查询重复记录失败: {e}"))?;
 
         if let Some(id) = existing_id {
-            self.conn
-                .execute(
-                    "UPDATE items
+            tx.execute(
+                "UPDATE items
                      SET last_copied_at = ?1,
                          copy_count = copy_count + 1,
                          source_app = COALESCE(?2, source_app),
                          source_bundle_id = COALESCE(?3, source_bundle_id),
-                         html_content = COALESCE(?4, html_content),
-                         rtf_content = COALESCE(?5, rtf_content)
-                     WHERE id = ?6",
-                    params![
-                        now,
-                        payload.source_app,
-                        payload.source_bundle_id,
-                        payload.html_content,
-                        payload.rtf_content,
-                        id
-                    ],
-                )
-                .map_err(|e| format!("更新剪贴板记录失败: {e}"))?;
+                         html_content = ?4,
+                         rtf_content = ?5,
+                         sensitive_label = CASE WHEN kind = 'text' THEN ?6 ELSE sensitive_label END
+                     WHERE id = ?7",
+                params![
+                    now,
+                    payload.source_app,
+                    payload.source_bundle_id,
+                    payload.html_content,
+                    payload.rtf_content,
+                    detect_sensitive_label(payload.text_content.as_deref().unwrap_or("")),
+                    id
+                ],
+            )
+            .map_err(|e| format!("更新剪贴板记录失败: {e}"))?;
+            tx.commit()
+                .map_err(|e| format!("提交剪贴板记录失败: {e}"))?;
             return Ok(id);
         }
 
+        let mut pending_media = PendingMedia::default();
         let (image_path, thumb_path) = if payload.kind == ClipKind::Image {
-            let file_stem = &payload.content_hash[..16.min(payload.content_hash.len())];
-            let img_file = self.images_dir.join(format!("{file_stem}.png"));
-            let thumb_file = self.thumbs_dir.join(format!("{file_stem}_thumb.png"));
-
-            if let Some(bytes) = &payload.image_png {
-                fs::write(&img_file, bytes).map_err(|e| format!("保存图片失败: {e}"))?;
-            }
-            if let Some(bytes) = &payload.thumb_png {
-                fs::write(&thumb_file, bytes).map_err(|e| format!("保存缩略图失败: {e}"))?;
-            }
             (
-                payload.image_png.as_ref().map(|_| img_file.to_string_lossy().into_owned()),
-                payload.thumb_png.as_ref().map(|_| thumb_file.to_string_lossy().into_owned()),
+                payload
+                    .image_png
+                    .as_deref()
+                    .map(|bytes| pending_media.write(&self.images_dir, bytes, ""))
+                    .transpose()?,
+                payload
+                    .thumb_png
+                    .as_deref()
+                    .map(|bytes| pending_media.write(&self.thumbs_dir, bytes, "_thumb"))
+                    .transpose()?,
             )
         } else {
             (None, None)
         };
 
-        let files_json =
-            serde_json::to_string(&payload.files).unwrap_or_else(|_| "[]".to_string());
+        let files_json = serde_json::to_string(&payload.files).unwrap_or_else(|_| "[]".to_string());
         let color_str = payload
             .detected_color
             .map(|c| format!("{},{},{},{}", c[0], c[1], c[2], c[3]));
 
-        self.conn
-            .execute(
-                "INSERT INTO items (
+        tx.execute(
+            "INSERT INTO items (
                     content_hash, kind, text_content, html_content, rtf_content,
                     image_path, thumb_path, image_width, image_height,
                     files_json, byte_size, source_app, source_bundle_id,
@@ -240,48 +366,66 @@ impl Storage {
                     0, NULL, ?14, ?14,
                     1, ?15, ?16, ?17
                 )",
-                params![
-                    payload.content_hash,
-                    payload.kind.as_str(),
-                    payload.text_content,
-                    payload.html_content,
-                    payload.rtf_content,
-                    image_path,
-                    thumb_path,
-                    payload.image_width.map(|v| v as i64),
-                    payload.image_height.map(|v| v as i64),
-                    files_json,
-                    payload.byte_size as i64,
-                    payload.source_app,
-                    payload.source_bundle_id,
-                    now,
-                    payload.sensitive_label,
-                    color_str,
-                    payload.is_url as i64,
-                ],
-            )
-            .map_err(|e| format!("写入新剪贴板记录失败: {e}"))?;
+            params![
+                payload.content_hash,
+                payload.kind.as_str(),
+                payload.text_content,
+                payload.html_content,
+                payload.rtf_content,
+                image_path,
+                thumb_path,
+                payload.image_width.map(|v| v as i64),
+                payload.image_height.map(|v| v as i64),
+                files_json,
+                payload.byte_size as i64,
+                payload.source_app,
+                payload.source_bundle_id,
+                now,
+                payload.sensitive_label,
+                color_str,
+                payload.is_url as i64,
+            ],
+        )
+        .map_err(|e| format!("写入新剪贴板记录失败: {e}"))?;
 
-        let new_id = self.conn.last_insert_rowid();
-        self.enforce_history_limit(max_history)?;
+        let new_id = tx.last_insert_rowid();
+        let removed = Self::prune_rows_protecting(&tx, max_history, new_id)?;
+        tx.commit()
+            .map_err(|e| format!("提交剪贴板记录失败: {e}"))?;
+        pending_media.commit();
+        self.remove_unreferenced_media(&removed)?;
         Ok(new_id)
     }
 
     pub fn enforce_history_limit(&self, max_history: usize) -> Result<(), String> {
+        let tx = self.begin_write()?;
+        let removed = Self::prune_rows(&tx, max_history)?;
+        tx.commit().map_err(|e| format!("提交历史清理失败: {e}"))?;
+        self.remove_unreferenced_media(&removed)
+    }
+
+    fn prune_rows(conn: &Connection, max_history: usize) -> Result<Vec<MediaPaths>, String> {
+        Self::prune_rows_protecting(conn, max_history, 0)
+    }
+
+    fn prune_rows_protecting(
+        conn: &Connection,
+        max_history: usize,
+        protected_id: i64,
+    ) -> Result<Vec<MediaPaths>, String> {
         let limit = max_history.max(1) as i64;
-        let mut stmt = self
-            .conn
+        let mut stmt = conn
             .prepare(
                 "SELECT id, image_path, thumb_path
                  FROM items
                  WHERE pinned = 0 AND collection_id IS NULL
-                 ORDER BY last_copied_at DESC
+                 ORDER BY (id = ?2) DESC, last_copied_at DESC, id DESC
                  LIMIT -1 OFFSET ?1",
             )
             .map_err(|e| format!("查询超限历史失败: {e}"))?;
 
         let rows = stmt
-            .query_map(params![limit], |row| {
+            .query_map(params![limit, protected_id], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, Option<String>>(1)?,
@@ -291,52 +435,62 @@ impl Storage {
             .map_err(|e| format!("读取超限历史失败: {e}"))?;
 
         let mut to_delete = Vec::new();
-        for tuple in rows.flatten() {
-            to_delete.push(tuple);
+        for tuple in rows {
+            to_delete.push(tuple.map_err(|e| format!("读取超限历史失败: {e}"))?);
         }
         drop(stmt);
 
+        let mut removed = Vec::new();
         for (id, img, thumb) in to_delete {
-            self.conn
-                .execute("DELETE FROM items WHERE id = ?1", params![id])
+            conn.execute("DELETE FROM items WHERE id = ?1", params![id])
                 .map_err(|e| format!("清理超限历史失败: {e}"))?;
-            remove_file_if_exists(img.as_deref());
-            remove_file_if_exists(thumb.as_deref());
+            removed.push((img, thumb));
         }
-        Ok(())
+        Ok(removed)
     }
 
+    #[cfg(test)]
     pub fn list_items(&self) -> Result<Vec<ClipItem>, String> {
+        self.query_items(
+            "html_content, rtf_content",
+            "ORDER BY last_copied_at DESC, id DESC",
+            [],
+        )
+    }
+
+    pub fn item(&self, id: i64) -> Result<ClipItem, String> {
+        self.query_items("html_content, rtf_content", "WHERE id = ?", [id])?
+            .pop()
+            .ok_or_else(|| "记录已不存在".into())
+    }
+
+    fn query_items<const N: usize>(
+        &self,
+        rich: &str,
+        clause: &str,
+        args: [i64; N],
+    ) -> Result<Vec<ClipItem>, String> {
+        let sql = format!(
+            "SELECT id, content_hash, kind, text_content, {rich}, image_path, thumb_path, image_width, image_height, files_json, byte_size, source_app, source_bundle_id, pinned, collection_id, first_copied_at, last_copied_at, copy_count, sensitive_label, detected_color, is_url, note FROM items {clause}"
+        );
         let mut stmt = self
             .conn
-            .prepare(
-                "SELECT id, content_hash, kind, text_content, html_content, rtf_content,
-                        image_path, thumb_path, image_width, image_height,
-                        files_json, byte_size, source_app, source_bundle_id,
-                        pinned, collection_id, first_copied_at, last_copied_at,
-                        copy_count, sensitive_label, detected_color, is_url, note
-                 FROM items
-                 ORDER BY last_copied_at DESC",
-            )
+            .prepare(&sql)
             .map_err(|e| format!("查询记录失败: {e}"))?;
 
         let rows = stmt
-            .query_map([], |row| {
+            .query_map(rusqlite::params_from_iter(args), |row| {
                 let kind_str: String = row.get(2)?;
                 let kind = ClipKind::from_db_str(&kind_str);
                 let text_content: Option<String> = row.get(3)?;
                 let files_json: String = row.get(10)?;
-                let files: Vec<FileEntry> =
-                    serde_json::from_str(&files_json).unwrap_or_default();
+                let files: Vec<FileEntry> = serde_json::from_str(&files_json).unwrap_or_default();
                 let color_str: Option<String> = row.get(20)?;
-                let detected_color = color_str
-                    .as_deref()
-                    .and_then(parse_rgba_csv)
-                    .or_else(|| {
-                        (kind == ClipKind::Text)
-                            .then(|| text_content.as_deref().and_then(detect_color))
-                            .flatten()
-                    });
+                let detected_color = color_str.as_deref().and_then(parse_rgba_csv).or_else(|| {
+                    (kind == ClipKind::Text)
+                        .then(|| text_content.as_deref().and_then(detect_color))
+                        .flatten()
+                });
 
                 Ok(ClipItem {
                     id: row.get(0)?,
@@ -368,7 +522,18 @@ impl Storage {
 
         let mut items = Vec::new();
         for item in rows {
-            items.push(item.map_err(|e| format!("解析记录行失败: {e}"))?);
+            let mut item = item.map_err(|e| format!("解析记录行失败: {e}"))?;
+            item.image_path = item
+                .image_path
+                .as_deref()
+                .and_then(|p| managed_media_path(&self.images_dir, p))
+                .map(|p| p.to_string_lossy().into_owned());
+            item.thumb_path = item
+                .thumb_path
+                .as_deref()
+                .and_then(|p| managed_media_path(&self.thumbs_dir, p))
+                .map(|p| p.to_string_lossy().into_owned());
+            items.push(item);
         }
         Ok(items)
     }
@@ -468,22 +633,39 @@ impl Storage {
         if new_text.trim().is_empty() {
             return Err("文本内容不能为空".to_string());
         }
-        let new_hash = sha256_hex(new_text.as_bytes());
+        let tx = self.begin_write()?;
+        let kind: Option<String> = tx
+            .query_row("SELECT kind FROM items WHERE id = ?1", [id], |r| r.get(0))
+            .optional()
+            .map_err(|e| format!("读取待编辑记录失败: {e}"))?;
+        if kind.as_deref() != Some("text") {
+            return Err("仅可编辑仍然存在的文本记录".to_string());
+        }
+        let new_hash = content_hash_for_text(new_text);
         let byte_size = new_text.len() as i64;
         let sensitive_label = detect_sensitive_label(new_text);
         let detected_color = detect_color(new_text);
         let color_str = detected_color.map(|c| format!("{},{},{},{}", c[0], c[1], c[2], c[3]));
         let is_url = detect_url(new_text) as i64;
 
-        // Avoid UNIQUE(content_hash) collision if another item already had the exact same text
-        let _ = self.conn.execute(
-            "DELETE FROM items WHERE content_hash = ?1 AND id != ?2",
-            params![&new_hash, id],
-        );
+        // A collision is not permission to delete or merge someone else's
+        // annotations, pin state or collection membership.
+        let collision: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM items WHERE id != ?1
+             AND (content_hash = ?2 OR (kind = 'text' AND text_content = ?3)))",
+                params![id, &new_hash, new_text],
+                |r| r.get(0),
+            )
+            .map_err(|e| format!("检查重复文本失败: {e}"))?;
+        if collision {
+            return Err(
+                "相同文本已存在，未保存修改；两条记录及其备注、固定和收藏均已保留".to_string(),
+            );
+        }
 
-        self.conn
-            .execute(
-                "UPDATE items
+        tx.execute(
+            "UPDATE items
                  SET content_hash = ?1,
                      text_content = ?2,
                      html_content = NULL,
@@ -493,89 +675,18 @@ impl Storage {
                      detected_color = ?5,
                      is_url = ?6
                  WHERE id = ?7",
-                params![
-                    new_hash,
-                    new_text,
-                    byte_size,
-                    sensitive_label,
-                    color_str,
-                    is_url,
-                    id
-                ],
-            )
-            .map_err(|e| format!("保存修改后的文本失败: {e}"))?;
-        Ok(())
-    }
-
-    pub fn import_items(&self, items: &[ClipItem], max_history: usize) -> Result<usize, String> {
-        let mut imported = 0usize;
-        for item in items {
-            let hash = if item.content_hash.trim().is_empty() {
-                if let Some(txt) = &item.text_content {
-                    sha256_hex(txt.as_bytes())
-                } else {
-                    continue;
-                }
-            } else {
-                item.content_hash.clone()
-            };
-
-            let files_json =
-                serde_json::to_string(&item.files).unwrap_or_else(|_| "[]".to_string());
-            let resolved_color = item.detected_color.or_else(|| {
-                (item.kind == ClipKind::Text)
-                    .then(|| item.text_content.as_deref().and_then(detect_color))
-                    .flatten()
-            });
-            let color_str = resolved_color.map(|c| format!("{},{},{},{}", c[0], c[1], c[2], c[3]));
-
-            let changed = self
-                .conn
-                .execute(
-                    "INSERT OR IGNORE INTO items (
-                        content_hash, kind, text_content, html_content, rtf_content,
-                        image_path, thumb_path, image_width, image_height,
-                        files_json, byte_size, source_app, source_bundle_id,
-                        pinned, collection_id, first_copied_at, last_copied_at,
-                        copy_count, sensitive_label, detected_color, is_url, note
-                    ) VALUES (
-                        ?1, ?2, ?3, ?4, ?5,
-                        ?6, ?7, ?8, ?9,
-                        ?10, ?11, ?12, ?13,
-                        ?14, NULL, ?15, ?16,
-                        ?17, ?18, ?19, ?20, ?21
-                    )",
-                    params![
-                        hash,
-                        item.kind.as_str(),
-                        item.text_content,
-                        item.html_content,
-                        item.rtf_content,
-                        item.image_path,
-                        item.thumb_path,
-                        item.image_width.map(|v| v as i64),
-                        item.image_height.map(|v| v as i64),
-                        files_json,
-                        item.byte_size as i64,
-                        item.source_app,
-                        item.source_bundle_id,
-                        item.pinned as i64,
-                        item.first_copied_at,
-                        item.last_copied_at,
-                        item.copy_count.max(1) as i64,
-                        item.sensitive_label,
-                        color_str,
-                        item.is_url as i64,
-                        item.note,
-                    ],
-                )
-                .map_err(|e| format!("导入记录失败: {e}"))?;
-            if changed > 0 {
-                imported += 1;
-            }
-        }
-        self.enforce_history_limit(max_history)?;
-        Ok(imported)
+            params![
+                new_hash,
+                new_text,
+                byte_size,
+                sensitive_label,
+                color_str,
+                is_url,
+                id
+            ],
+        )
+        .map_err(|e| format!("保存修改后的文本失败: {e}"))?;
+        tx.commit().map_err(|e| format!("提交文本修改失败: {e}"))
     }
 
     pub fn mark_copied(&self, id: i64) -> Result<(), String> {
@@ -590,8 +701,8 @@ impl Storage {
     }
 
     pub fn delete_item(&self, id: i64) -> Result<(), String> {
-        let paths: Option<(Option<String>, Option<String>)> = self
-            .conn
+        let tx = self.begin_write()?;
+        let paths: Option<(Option<String>, Option<String>)> = tx
             .query_row(
                 "SELECT image_path, thumb_path FROM items WHERE id = ?1",
                 params![id],
@@ -600,55 +711,151 @@ impl Storage {
             .optional()
             .map_err(|e| format!("查询删除项失败: {e}"))?;
 
-        self.conn
-            .execute("DELETE FROM items WHERE id = ?1", params![id])
+        tx.execute("DELETE FROM items WHERE id = ?1", params![id])
             .map_err(|e| format!("删除记录失败: {e}"))?;
-
+        tx.commit().map_err(|e| format!("提交记录删除失败: {e}"))?;
         if let Some((img, thumb)) = paths {
-            remove_file_if_exists(img.as_deref());
-            remove_file_if_exists(thumb.as_deref());
+            self.remove_unreferenced_media(&[(img, thumb)])?;
         }
         Ok(())
     }
 
     pub fn clear_history(&self, include_pinned_and_collections: bool) -> Result<(), String> {
+        let tx = self.begin_write()?;
         let sql_select = if include_pinned_and_collections {
             "SELECT image_path, thumb_path FROM items"
         } else {
             "SELECT image_path, thumb_path FROM items WHERE pinned = 0 AND collection_id IS NULL"
         };
 
-        let mut stmt = self
-            .conn
+        let mut stmt = tx
             .prepare(sql_select)
             .map_err(|e| format!("查询清理图片失败: {e}"))?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?)))
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                ))
+            })
             .map_err(|e| format!("读取清理图片失败: {e}"))?;
         let mut to_remove = Vec::new();
-        for pair in rows.flatten() {
-            to_remove.push(pair);
+        for pair in rows {
+            to_remove.push(pair.map_err(|e| format!("读取清理图片失败: {e}"))?);
         }
         drop(stmt);
 
         if include_pinned_and_collections {
-            self.conn
-                .execute("DELETE FROM items", [])
+            tx.execute("DELETE FROM items", [])
                 .map_err(|e| format!("清空所有历史失败: {e}"))?;
         } else {
-            self.conn
-                .execute(
-                    "DELETE FROM items WHERE pinned = 0 AND collection_id IS NULL",
-                    [],
-                )
-                .map_err(|e| format!("清空历史失败: {e}"))?;
+            tx.execute(
+                "DELETE FROM items WHERE pinned = 0 AND collection_id IS NULL",
+                [],
+            )
+            .map_err(|e| format!("清空历史失败: {e}"))?;
         }
 
-        for (img, thumb) in to_remove {
-            remove_file_if_exists(img.as_deref());
-            remove_file_if_exists(thumb.as_deref());
+        tx.commit().map_err(|e| format!("提交历史清理失败: {e}"))?;
+        self.remove_unreferenced_media(&to_remove)
+    }
+
+    fn begin_write(&self) -> Result<Transaction<'_>, String> {
+        Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)
+            .map_err(|e| format!("开始数据库事务失败: {e}"))
+    }
+
+    fn protect_existing_files(&self) -> Result<(), String> {
+        for entry in fs::read_dir(&self.base_dir).map_err(|e| format!("检查数据权限失败: {e}"))?
+        {
+            let entry = entry.map_err(|e| format!("检查数据权限失败: {e}"))?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("earth.db") || name.starts_with("settings.json") {
+                private_file(&entry.path()).map_err(|e| format!("保护已有数据失败: {e}"))?;
+            }
+        }
+        for dir in [&self.images_dir, &self.thumbs_dir] {
+            for entry in fs::read_dir(dir).map_err(|e| format!("检查图片权限失败: {e}"))? {
+                let entry = entry.map_err(|e| format!("检查图片权限失败: {e}"))?;
+                if let Some(path) = managed_media_path(dir, &entry.path().to_string_lossy()) {
+                    private_file(&path).map_err(|e| format!("保护已有图片失败: {e}"))?;
+                }
+            }
         }
         Ok(())
+    }
+
+    fn referenced_media(&self) -> Result<std::collections::HashSet<PathBuf>, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT image_path, thumb_path FROM items")
+            .map_err(|e| format!("读取图片引用失败: {e}"))?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, Option<String>>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                ))
+            })
+            .map_err(|e| format!("读取图片引用失败: {e}"))?;
+        let mut refs = std::collections::HashSet::new();
+        for row in rows {
+            let (image, thumb) = row.map_err(|e| format!("读取图片引用失败: {e}"))?;
+            for (dir, path) in [(&self.images_dir, image), (&self.thumbs_dir, thumb)] {
+                if let Some(path) = path.and_then(|p| managed_media_path(dir, &p)) {
+                    refs.insert(path);
+                }
+            }
+        }
+        Ok(refs)
+    }
+
+    fn remove_unreferenced_media(
+        &self,
+        paths: &[(Option<String>, Option<String>)],
+    ) -> Result<(), String> {
+        if paths.iter().all(|(i, t)| i.is_none() && t.is_none()) {
+            return Ok(());
+        }
+        // Keep the write lock through deletion so another import cannot attach
+        // a path between the reference check and file cleanup.
+        let tx = self.begin_write()?;
+        let referenced = self.referenced_media()?;
+        for (image, thumb) in paths {
+            for (dir, raw) in [(&self.images_dir, image), (&self.thumbs_dir, thumb)] {
+                if let Some(path) = raw.as_deref().and_then(|p| managed_media_path(dir, p))
+                    && !referenced.contains(&path)
+                {
+                    fs::remove_file(&path).map_err(|e| format!("清理图片失败: {e}"))?;
+                }
+            }
+        }
+        tx.commit().map_err(|e| format!("完成图片清理失败: {e}"))
+    }
+
+    fn cleanup_orphaned_media(&self) -> Result<(), String> {
+        let tx = self.begin_write()?;
+        let referenced = self.referenced_media()?;
+        for dir in [&self.images_dir, &self.thumbs_dir] {
+            for entry in fs::read_dir(dir).map_err(|e| format!("检查遗留图片失败: {e}"))? {
+                let entry = entry.map_err(|e| format!("检查遗留图片失败: {e}"))?;
+                let path = entry.path();
+                // Only Earth-generated names are eligible for startup cleanup.
+                let stem = path.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+                let hash = stem.strip_suffix("_thumb").unwrap_or(stem);
+                if !matches!(hash.len(), 16 | 64) || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    continue;
+                }
+                if let Some(path) = managed_media_path(dir, &path.to_string_lossy())
+                    && !referenced.contains(&path)
+                {
+                    fs::remove_file(path).map_err(|e| format!("清理遗留图片失败: {e}"))?;
+                }
+            }
+        }
+        tx.commit()
+            .map_err(|e| format!("完成遗留图片清理失败: {e}"))
     }
 
     pub fn total_storage_bytes(&self) -> u64 {
@@ -688,10 +895,8 @@ fn parse_rgba_csv(s: &str) -> Option<[u8; 4]> {
     }
 }
 
-fn remove_file_if_exists(path: Option<&str>) {
-    if let Some(p) = path {
-        let _ = fs::remove_file(p);
-    }
+fn content_hash_for_text(text: &str) -> String {
+    sha256_hex(&[b"text:".as_slice(), text.as_bytes()].concat())
 }
 
 fn dir_size(path: &Path) -> u64 {
@@ -701,9 +906,10 @@ fn dir_size(path: &Path) -> u64 {
     let mut sum = 0u64;
     for entry in entries.flatten() {
         if let Ok(meta) = entry.metadata()
-            && meta.is_file() {
-                sum += meta.len();
-            }
+            && meta.is_file()
+        {
+            sum += meta.len();
+        }
     }
     sum
 }
@@ -714,7 +920,11 @@ mod tests {
 
     fn temp_dir(name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("earth_test_{}_{}", name, Utc::now().timestamp_nanos_opt().unwrap_or(0)));
+        p.push(format!(
+            "earth_test_{}_{}",
+            name,
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
         p
     }
 
@@ -805,7 +1015,10 @@ mod tests {
         // 1 pinned + max 2 unpinned = 3 items
         assert_eq!(items.len(), 3);
         assert!(items.iter().any(|it| it.id == id1 && it.pinned));
-        let item3 = items.iter().find(|it| it.text_content.as_deref() == Some("item-3")).unwrap();
+        let item3 = items
+            .iter()
+            .find(|it| it.text_content.as_deref() == Some("item-3"))
+            .unwrap();
         assert_eq!(item3.copy_count, 2);
 
         let _ = fs::remove_dir_all(&dir);
@@ -841,9 +1054,7 @@ mod tests {
             .unwrap();
 
         storage.set_item_note(id, Some("生产数据库跳板机")).unwrap();
-        storage
-            .update_item_text(id, "ssh root@10.0.0.2")
-            .unwrap();
+        storage.update_item_text(id, "ssh root@10.0.0.2").unwrap();
 
         let items = storage.list_items().unwrap();
         assert_eq!(items.len(), 1);

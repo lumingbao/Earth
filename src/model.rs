@@ -112,7 +112,12 @@ impl ClipItem {
                 )
             }
         };
-        if let Some(note) = self.note.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        if let Some(note) = self
+            .note
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
             format!("{base}\n{note}")
         } else {
             base
@@ -336,21 +341,20 @@ pub struct AppSettings {
     pub save_images: bool,
     pub save_text: bool,
     pub max_history: usize,
+    pub max_text_mib: usize,
+    pub max_image_mib: usize,
+    pub max_image_megapixels: u64,
     pub sort_order: SortOrder,
 
     // Appearance
     pub theme_mode: ThemeMode,
     pub popup_position: PopupPosition,
     pub pin_position: PinPosition,
-    pub image_height: f32,
-    pub auto_open_preview: bool,
-    pub preview_delay_ms: u64,
     pub match_highlight: MatchHighlight,
     pub show_special_symbols: bool,
     pub show_tray_icon: bool,
     pub show_clipboard_in_menubar: bool,
     pub search_box_visibility: SearchBoxVisibility,
-    pub show_app_name_in_search: bool,
     pub show_source_app_badge: bool,
     pub show_hex_color_swatch: bool,
     pub show_footer_menu: bool,
@@ -372,9 +376,14 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         #[cfg(target_os = "macos")]
-        let (hotkey_open, hotkey_delete) = ("Shift+Super+C".to_string(), "Alt+Backspace".to_string());
+        let (hotkey_open, hotkey_delete) =
+            ("Shift+Super+C".to_string(), "Alt+Backspace".to_string());
         #[cfg(not(target_os = "macos"))]
-        let (hotkey_open, hotkey_delete) = ("Alt+V".to_string(), "Alt+Delete".to_string());
+        let (hotkey_open, hotkey_delete) = ("Shift+Alt+V".to_string(), "Alt+Delete".to_string());
+        #[cfg(target_os = "macos")]
+        let hotkey_preview = "Shift+Super+P".to_string();
+        #[cfg(not(target_os = "macos"))]
+        let hotkey_preview = "Ctrl+Shift+P".to_string();
 
         Self {
             launch_at_login: false,
@@ -382,7 +391,7 @@ impl Default for AppSettings {
             hotkey_open,
             hotkey_pin: "Alt+P".to_string(),
             hotkey_delete,
-            hotkey_preview: "Ctrl+Space".to_string(),
+            hotkey_preview,
             search_mode: SearchMode::Fuzzy,
             copy_trigger_mode: CopyTriggerMode::DoubleClick,
             auto_paste: true,
@@ -392,20 +401,19 @@ impl Default for AppSettings {
             save_images: true,
             save_text: true,
             max_history: 200,
+            max_text_mib: 2,
+            max_image_mib: 20,
+            max_image_megapixels: 40,
             sort_order: SortOrder::LastCopiedAt,
 
             theme_mode: ThemeMode::Light,
             popup_position: PopupPosition::Cursor,
             pin_position: PinPosition::Bottom,
-            image_height: 40.0,
-            auto_open_preview: false,
-            preview_delay_ms: 1200,
             match_highlight: MatchHighlight::Bold,
             show_special_symbols: true,
             show_tray_icon: true,
             show_clipboard_in_menubar: false,
             search_box_visibility: SearchBoxVisibility::Always,
-            show_app_name_in_search: true,
             show_source_app_badge: true,
             show_hex_color_swatch: true,
             show_footer_menu: true,
@@ -477,5 +485,30 @@ pub fn format_bytes(bytes: u64) -> String {
         format!("{:.1} KB", b / KB)
     } else {
         format!("{} B", bytes)
+    }
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn obsolete_settings_are_ignored_without_losing_supported_values() {
+        let settings: AppSettings = serde_json::from_str(
+            r#"{"auto_open_preview":true,"preview_delay_ms":50,"image_height":80,"show_app_name_in_search":false,"max_history":321}"#,
+        ).unwrap();
+        assert_eq!(settings.max_history, 321);
+        let serialized = serde_json::to_value(settings).unwrap();
+        for field in [
+            "auto_open_preview",
+            "preview_delay_ms",
+            "image_height",
+            "show_app_name_in_search",
+        ] {
+            assert!(
+                serialized.get(field).is_none(),
+                "obsolete field retained: {field}"
+            );
+        }
     }
 }

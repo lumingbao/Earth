@@ -1,7 +1,12 @@
 use crate::ui::theme::EarthPalette;
-use egui::{pos2, vec2, Color32, CornerRadius, Rect, Sense, Stroke, Ui};
+use egui::{Color32, CornerRadius, Rect, Sense, Stroke, Ui, pos2, vec2};
 
-pub fn draw_earth_emblem(ui: &mut Ui, size: f32, palette: &EarthPalette, paused: bool) -> egui::Response {
+pub fn draw_earth_emblem(
+    ui: &mut Ui,
+    size: f32,
+    palette: &EarthPalette,
+    paused: bool,
+) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(size, size), Sense::drag());
     if ui.is_rect_visible(rect) {
         let p = ui.painter();
@@ -29,11 +34,17 @@ pub fn draw_earth_emblem(ui: &mut Ui, size: f32, palette: &EarthPalette, paused:
 
         // Meridian arc inside globe
         p.line_segment(
-            [pos2(center.x, center.y - r * 0.85), pos2(center.x, center.y + r * 0.85)],
+            [
+                pos2(center.x, center.y - r * 0.85),
+                pos2(center.x, center.y + r * 0.85),
+            ],
             Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 175)),
         );
         p.line_segment(
-            [pos2(center.x - r * 0.85, center.y), pos2(center.x + r * 0.85, center.y)],
+            [
+                pos2(center.x - r * 0.85, center.y),
+                pos2(center.x + r * 0.85, center.y),
+            ],
             Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 155)),
         );
 
@@ -110,9 +121,17 @@ pub fn icon_button(
 }
 
 pub fn draw_split_pane_glyph(p: &egui::Painter, r: Rect, color: Color32) {
-    p.rect_stroke(r, CornerRadius::same(2), Stroke::new(1.4, color), egui::StrokeKind::Inside);
+    p.rect_stroke(
+        r,
+        CornerRadius::same(2),
+        Stroke::new(1.4, color),
+        egui::StrokeKind::Inside,
+    );
     let split_x = r.left() + r.width() * 0.44;
-    p.line_segment([pos2(split_x, r.top()), pos2(split_x, r.bottom())], Stroke::new(1.4, color));
+    p.line_segment(
+        [pos2(split_x, r.top()), pos2(split_x, r.bottom())],
+        Stroke::new(1.4, color),
+    );
 }
 
 pub fn draw_gear_glyph(p: &egui::Painter, r: Rect, color: Color32) {
@@ -145,8 +164,14 @@ pub fn draw_gear_glyph(p: &egui::Painter, r: Rect, color: Color32) {
 
 pub fn draw_pause_glyph(p: &egui::Painter, r: Rect, color: Color32) {
     let w = r.width() * 0.26;
-    let left_bar = Rect::from_min_max(pos2(r.left() + r.width() * 0.18, r.top()), pos2(r.left() + r.width() * 0.18 + w, r.bottom()));
-    let right_bar = Rect::from_min_max(pos2(r.right() - r.width() * 0.18 - w, r.top()), pos2(r.right() - r.width() * 0.18, r.bottom()));
+    let left_bar = Rect::from_min_max(
+        pos2(r.left() + r.width() * 0.18, r.top()),
+        pos2(r.left() + r.width() * 0.18 + w, r.bottom()),
+    );
+    let right_bar = Rect::from_min_max(
+        pos2(r.right() - r.width() * 0.18 - w, r.top()),
+        pos2(r.right() - r.width() * 0.18, r.bottom()),
+    );
     p.rect_filled(left_bar, CornerRadius::same(1), color);
     p.rect_filled(right_bar, CornerRadius::same(1), color);
 }
@@ -164,9 +189,15 @@ pub fn draw_shield_glyph(p: &egui::Painter, r: Rect, color: Color32) {
     let pts = vec![
         pos2(r.center().x, r.top()),
         pos2(r.right(), r.top() + r.height() * 0.24),
-        pos2(r.right() - r.width() * 0.12, r.center().y + r.height() * 0.15),
+        pos2(
+            r.right() - r.width() * 0.12,
+            r.center().y + r.height() * 0.15,
+        ),
         pos2(r.center().x, r.bottom()),
-        pos2(r.left() + r.width() * 0.12, r.center().y + r.height() * 0.15),
+        pos2(
+            r.left() + r.width() * 0.12,
+            r.center().y + r.height() * 0.15,
+        ),
         pos2(r.left(), r.top() + r.height() * 0.24),
     ];
     p.add(egui::Shape::closed_line(pts, Stroke::new(1.4, color)));
@@ -190,7 +221,10 @@ pub fn draw_pin_badge(p: &egui::Painter, r: Rect, color: Color32) {
     let c = r.center();
     p.circle_filled(pos2(c.x, c.y - r.height() * 0.18), r.width() * 0.24, color);
     p.line_segment(
-        [pos2(c.x, c.y + r.height() * 0.05), pos2(c.x, r.bottom() - 1.0)],
+        [
+            pos2(c.x, c.y + r.height() * 0.05),
+            pos2(c.x, r.bottom() - 1.0),
+        ],
         Stroke::new(1.6, color),
     );
 }
@@ -213,7 +247,10 @@ pub fn draw_window_pin_glyph(p: &egui::Painter, r: Rect, color: Color32, pinned:
             color,
         );
         p.rect_filled(
-            Rect::from_min_max(pos2(cx - body_half, cap_bottom - 0.5), pos2(cx + body_half, collar_top + 0.5)),
+            Rect::from_min_max(
+                pos2(cx - body_half, cap_bottom - 0.5),
+                pos2(cx + body_half, collar_top + 0.5),
+            ),
             CornerRadius::ZERO,
             color,
         );
@@ -257,11 +294,17 @@ pub fn draw_file_badge(p: &egui::Painter, r: Rect, color: Color32) {
     ];
     p.add(egui::Shape::closed_line(pts, Stroke::new(1.4, color)));
     p.line_segment(
-        [pos2(r.right() - fold, r.top()), pos2(r.right() - fold, r.top() + fold)],
+        [
+            pos2(r.right() - fold, r.top()),
+            pos2(r.right() - fold, r.top() + fold),
+        ],
         Stroke::new(1.2, color),
     );
     p.line_segment(
-        [pos2(r.right() - fold, r.top() + fold), pos2(r.right(), r.top() + fold)],
+        [
+            pos2(r.right() - fold, r.top() + fold),
+            pos2(r.right(), r.top() + fold),
+        ],
         Stroke::new(1.2, color),
     );
 }
@@ -275,6 +318,16 @@ pub fn draw_link_badge(p: &egui::Painter, r: Rect, color: Color32) {
         pos2(r.center().x - 1.5, r.center().y - r.height() * 0.25),
         pos2(r.right(), r.center().y + r.height() * 0.25),
     );
-    p.rect_stroke(left_box, CornerRadius::same(3), Stroke::new(1.3, color), egui::StrokeKind::Inside);
-    p.rect_stroke(right_box, CornerRadius::same(3), Stroke::new(1.3, color), egui::StrokeKind::Inside);
+    p.rect_stroke(
+        left_box,
+        CornerRadius::same(3),
+        Stroke::new(1.3, color),
+        egui::StrokeKind::Inside,
+    );
+    p.rect_stroke(
+        right_box,
+        CornerRadius::same(3),
+        Stroke::new(1.3, color),
+        egui::StrokeKind::Inside,
+    );
 }

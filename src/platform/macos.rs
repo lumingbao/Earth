@@ -1,14 +1,14 @@
 use crate::model::ActiveAppInfo;
 use crate::platform::{PreferredSystemFonts, ScreenRect, SystemFontCandidate};
+use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
-use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationOptions, NSApplicationActivationPolicy, NSEvent,
     NSFloatingWindowLevel, NSRunningApplication, NSScreen, NSViewLayerContentsPlacement, NSWindow,
     NSWindowCollectionBehavior, NSWindowLevel, NSWorkspace,
 };
-use objc2_foundation::{ns_string, NSDictionary, NSNull};
+use objc2_foundation::{NSDictionary, NSNull, ns_string};
 use objc2_quartz_core::{CAAction, CATransaction, kCAGravityLeft, kCAGravityRight};
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
@@ -17,12 +17,10 @@ use std::process::Command;
 type CGEventSourceRef = *mut c_void;
 type CGEventRef = *mut c_void;
 type CGEventSourceStateID = i32;
-type CGEventTapLocation = u32;
 type CGEventFlags = u64;
 type CGKeyCode = u16;
 
 const K_CG_EVENT_SOURCE_STATE_PRIVATE: CGEventSourceStateID = -1;
-const K_CG_HID_EVENT_TAP: CGEventTapLocation = 0;
 const K_CG_EVENT_FLAG_MASK_COMMAND: CGEventFlags = 0x0010_0000;
 const K_VK_ANSI_V: CGKeyCode = 0x09;
 
@@ -42,7 +40,7 @@ unsafe extern "C" {
         key_down: bool,
     ) -> CGEventRef;
     fn CGEventSetFlags(event: CGEventRef, flags: CGEventFlags);
-    fn CGEventPost(tap: CGEventTapLocation, event: CGEventRef);
+    fn CGEventPostToPid(pid: i32, event: CGEventRef);
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -77,11 +75,8 @@ unsafe extern "C" {
 
 #[link(name = "CoreText", kind = "framework")]
 unsafe extern "C" {
-    fn CTFontCreateWithName(
-        name: *const c_void,
-        size: f64,
-        matrix: *const c_void,
-    ) -> *const c_void;
+    fn CTFontCreateWithName(name: *const c_void, size: f64, matrix: *const c_void)
+    -> *const c_void;
     fn CTFontCopyPostScriptName(font: *const c_void) -> *const c_void;
     fn CTFontCopyAttribute(font: *const c_void, attribute: *const c_void) -> *const c_void;
     static kCTFontURLAttribute: *const c_void;
@@ -131,7 +126,12 @@ pub fn capture_frontmost_app() -> Option<ActiveAppInfo> {
     let mut info = capture_frontmost_app_identity()?;
     info.window_rect = active_win_pos_rs::get_position().ok().and_then(|pos| {
         if pos.width > 10.0 && pos.height > 10.0 {
-            Some((pos.x as f32, pos.y as f32, pos.width as f32, pos.height as f32))
+            Some((
+                pos.x as f32,
+                pos.y as f32,
+                pos.width as f32,
+                pos.height as f32,
+            ))
         } else {
             None
         }
@@ -178,16 +178,18 @@ fn build_paste_command_v_events() -> Result<(CfOwned, CfOwned, CfOwned), String>
     Ok((source, key_down, key_up))
 }
 
-pub fn simulate_paste() -> Result<(), String> {
+pub fn simulate_paste(target: &ActiveAppInfo) -> Result<(), String> {
     if !has_accessibility_permission() {
         return Err("需要「辅助功能」权限才能自动粘贴（已复制，请按 ⌘V 粘贴）".to_string());
     }
-    std::thread::sleep(std::time::Duration::from_millis(85));
     let (_source, key_down, key_up) = build_paste_command_v_events()?;
+    if !super::is_paste_target(target) {
+        return Err("前台窗口已改变".into());
+    }
     unsafe {
-        CGEventPost(K_CG_HID_EVENT_TAP, key_down.0);
+        CGEventPostToPid(target.pid as i32, key_down.0);
         std::thread::sleep(std::time::Duration::from_millis(5));
-        CGEventPost(K_CG_HID_EVENT_TAP, key_up.0);
+        CGEventPostToPid(target.pid as i32, key_up.0);
     }
     Ok(())
 }
@@ -245,7 +247,10 @@ pub fn hide_self_app() {
     }
 }
 
-fn screen_bounds_at_cocoa_point(mtm: MainThreadMarker, pt: objc2_foundation::NSPoint) -> ScreenRect {
+fn screen_bounds_at_cocoa_point(
+    mtm: MainThreadMarker,
+    pt: objc2_foundation::NSPoint,
+) -> ScreenRect {
     let fallback_rect = ScreenRect {
         x: 0.0,
         y: 0.0,
@@ -303,7 +308,10 @@ pub fn get_cursor_and_monitor_bounds(_dpi_scale: f32) -> ((f32, f32), ScreenRect
     let primary_height = screens.objectAtIndex(0).frame().size.height;
     let cursor_x = mouse.x as f32;
     let cursor_y = (primary_height - mouse.y) as f32;
-    ((cursor_x, cursor_y), screen_bounds_at_cocoa_point(mtm, mouse))
+    (
+        (cursor_x, cursor_y),
+        screen_bounds_at_cocoa_point(mtm, mouse),
+    )
 }
 
 pub fn monitor_bounds_for_point(x: f32, y: f32, _dpi_scale: f32) -> ScreenRect {
@@ -517,10 +525,7 @@ pub fn preferred_system_fonts() -> PreferredSystemFonts {
             "ArialUnicodeMS",
             Some("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
         ),
-        (
-            "ArialUnicodeMS",
-            Some("/Library/Fonts/Arial Unicode.ttf"),
-        ),
+        ("ArialUnicodeMS", Some("/Library/Fonts/Arial Unicode.ttf")),
     ] {
         let resolved = resolve_font_path_by_postscript_name(ps)
             .filter(|p| crate::ui::theme::font_file_supports_face(p, ps))
@@ -542,8 +547,9 @@ pub fn preferred_system_fonts() -> PreferredSystemFonts {
     if let Some(path) = resolve_font_path_by_postscript_name("Menlo-Regular")
         .filter(|p| crate::ui::theme::font_file_supports_face(p, "Menlo-Regular"))
         .or_else(|| {
-            Some(PathBuf::from("/System/Library/Fonts/Menlo.ttc"))
-                .filter(|p| p.is_file() && crate::ui::theme::font_file_supports_face(p, "Menlo-Regular"))
+            Some(PathBuf::from("/System/Library/Fonts/Menlo.ttc")).filter(|p| {
+                p.is_file() && crate::ui::theme::font_file_supports_face(p, "Menlo-Regular")
+            })
         })
     {
         monospace.push(SystemFontCandidate {
@@ -559,7 +565,9 @@ pub fn autostart_entry_needs_refresh(expected_app_path: &str, autostart_arg: &st
     let Some(base_dirs) = directories::BaseDirs::new() else {
         return false;
     };
-    let plist_path = base_dirs.home_dir().join("Library/LaunchAgents/Earth.plist");
+    let plist_path = base_dirs
+        .home_dir()
+        .join("Library/LaunchAgents/Earth.plist");
     let Ok(contents) = std::fs::read_to_string(&plist_path) else {
         return false;
     };
@@ -600,7 +608,10 @@ mod tests {
         let fonts = preferred_system_fonts();
         assert!(!fonts.ui.is_empty(), "expected macOS UI font candidate");
         assert!(fonts.ui[0].path.is_file());
-        assert!(!fonts.monospace.is_empty(), "expected macOS Menlo font candidate");
+        assert!(
+            !fonts.monospace.is_empty(),
+            "expected macOS Menlo font candidate"
+        );
         assert!(fonts.monospace[0].path.is_file());
     }
 }

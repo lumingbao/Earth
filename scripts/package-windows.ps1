@@ -1,12 +1,33 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RootDir = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 Set-Location $RootDir
 
-$CargoToml = Get-Content (Join-Path $RootDir "Cargo.toml") -Raw
-$VersionMatch = [regex]::Match($CargoToml, '(?m)^version\s*=\s*"([^"]+)"')
-$Version = if ($VersionMatch.Success) { $VersionMatch.Groups[1].Value } else { "0.4.0" }
+$MetadataJson = cargo metadata --locked --no-deps --format-version 1
+if ($LASTEXITCODE -ne 0) { throw "cargo metadata failed" }
+$Version = (($MetadataJson | ConvertFrom-Json).packages | Where-Object name -eq "earth" | Select-Object -First 1).version
+if (-not $Version) { throw "Cargo metadata does not contain Earth version" }
+$Channel = if ($env:EARTH_RELEASE_CHANNEL) { $env:EARTH_RELEASE_CHANNEL } else { "development" }
+if ($Channel -notin @("official", "development")) { throw "Invalid EARTH_RELEASE_CHANNEL" }
+if ($Channel -eq "official") {
+    if ($env:EARTH_UPDATE_WINDOWS_CERT_SHA256 -notmatch '^[0-9A-Fa-f]{64}$' -or -not $env:EARTH_WINDOWS_SIGN_THUMBPRINT) {
+        throw "Official releases require a certificate and pinned publisher SHA-256"
+    }
+}
+function Sign-AndVerify([string]$Path) {
+    if ($Channel -ne "official") { return }
+    $SignTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+    if (-not $SignTool) { throw "Windows SDK signtool.exe is required" }
+    & $SignTool.FullName sign /sha1 $env:EARTH_WINDOWS_SIGN_THUMBPRINT /s My /fd SHA256 /tr https://timestamp.digicert.com /td SHA256 $Path
+    if ($LASTEXITCODE -ne 0) { throw "Code signing failed: $Path" }
+    & $SignTool.FullName verify /pa /all $Path
+    if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed: $Path" }
+    $Signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($Signature.Status -ne 'Valid' -or -not $Signature.SignerCertificate) { throw "Untrusted signature: $Path" }
+    $Hash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($Signature.SignerCertificate.RawData))
+    if ($Hash -ne $env:EARTH_UPDATE_WINDOWS_CERT_SHA256) { throw "Publisher certificate does not match pinned identity" }
+}
 
 # Normalize to 4 numeric segments for Windows VIProductVersion (e.g. 0.4.0 -> 0.4.0.0)
 $CoreVersion = ($Version -split '[-+]')[0]
@@ -35,6 +56,13 @@ New-Item -ItemType Directory -Path $DistDir | Out-Null
 
 $StagedExe = Join-Path $DistDir "Earth.exe"
 Copy-Item $BuiltExe $StagedExe -Force
+$ResourceVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($StagedExe)
+if ($ResourceVersion.ProductName -ne "Earth" -or $ResourceVersion.ProductVersion -ne $Version -or $ResourceVersion.FileVersion -ne $Version) {
+    throw "Earth.exe is missing the expected target Windows version resources"
+}
+Sign-AndVerify $StagedExe
+$ArtifactSuffix = if ($Channel -eq "official") { "" } else { "-UNSIGNED" }
+if ($Channel -ne "official") { Write-Warning "Development artifacts are unsigned and are not eligible for automatic updates or official releases." }
 
 # Verify CRT is statically linked so Earth.exe runs on clean Windows without VCRUNTIME140.dll
 function Get-PeImportedDlls([string]$ExePath) {
@@ -96,7 +124,7 @@ if ($BadRuntime) {
 }
 
 # 1. Portable ZIP package
-$ZipPath = Join-Path $DistDir "Earth-$Version-Windows-x64-Portable.zip"
+$ZipPath = Join-Path $DistDir "Earth-$Version-Windows-x64-Portable$ArtifactSuffix.zip"
 Write-Host "==> Creating portable archive: $ZipPath"
 Compress-Archive -Path $StagedExe -DestinationPath $ZipPath -CompressionLevel Optimal -Force
 
@@ -119,9 +147,10 @@ if (-not $Makensis) {
     throw "makensis.exe not found. Please install NSIS (e.g. choco install nsis -y)."
 }
 
-$SetupPath = Join-Path $DistDir "Earth-$Version-Windows-x64-Setup.exe"
+$SetupPath = Join-Path $DistDir "Earth-$Version-Windows-x64-Setup$ArtifactSuffix.exe"
 $NsiScript = Join-Path $RootDir "packaging\windows\installer.nsi"
 $IconPath = Join-Path $RootDir "packaging\windows\earth.ico"
+$VersionCheckScript = Join-Path $RootDir "packaging\semver.js"
 
 Write-Host "==> Building NSIS installer: $SetupPath"
 & $Makensis `
@@ -129,12 +158,15 @@ Write-Host "==> Building NSIS installer: $SetupPath"
     "/DVI_VERSION=$ViVersion" `
     "/DEXE_PATH=$StagedExe" `
     "/DICON_PATH=$IconPath" `
+    "/DVERSION_CHECK_SCRIPT=$VersionCheckScript" `
     "/DOUT_FILE=$SetupPath" `
     $NsiScript
 
 if ($LASTEXITCODE -ne 0) {
     throw "makensis failed with exit code $LASTEXITCODE"
 }
+
+Sign-AndVerify $SetupPath
 
 Write-Host "==> Windows packaging complete! Artifacts:"
 Get-ChildItem $DistDir | Format-Table Name, Length, LastWriteTime -AutoSize

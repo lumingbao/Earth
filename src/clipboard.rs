@@ -1,110 +1,112 @@
+mod bounds;
+mod events;
+mod formats;
+#[cfg(windows)]
+mod windows;
 use crate::model::{AppSettings, ClipItem, ClipKind, FileEntry};
 use crate::platform;
-use crate::storage::{sha256_hex, NewClipPayload};
+use crate::storage::{NewClipPayload, sha256_hex};
 use crate::transforms::{detect_color, detect_sensitive_label, detect_url};
-use clipboard_rs::common::RustImage;
 use clipboard_rs::{
     Clipboard, ClipboardContent, ClipboardContext, ClipboardHandler, ClipboardWatcher,
-    ClipboardWatcherContext, ContentFormat, RustImageData, WatcherShutdown,
+    ClipboardWatcherContext, ContentFormat, WatcherShutdown,
 };
+use events::ClipboardEventSender;
+pub use events::{ClipboardEvents, channel as clipboard_event_channel};
+use formats::{FormatRules, source_allowed};
 use image::imageops::FilterType;
 use image::{DynamicImage, ImageFormat};
 use regex::Regex;
 use std::io::Cursor;
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Debug, Default)]
 pub struct ClipboardSuppression {
-    pub suppressed_hash: Option<String>,
-    pub suppress_until: Option<Instant>,
+    pub own_write: Option<(i64, String)>,
     pub ignore_next_once: bool,
+    pub ignore_generation: u64,
 }
 
 impl ClipboardSuppression {
-    pub fn suppress_hash(&mut self, hash: String, duration: Duration) {
-        self.suppressed_hash = Some(hash);
-        self.suppress_until = Some(Instant::now() + duration);
+    fn consume_ignore(&mut self, generation: u64) -> bool {
+        self.ignore_generation == generation && std::mem::take(&mut self.ignore_next_once)
     }
-
-    pub fn should_skip(&mut self, hash: &str) -> bool {
-        if self.ignore_next_once {
-            self.ignore_next_once = false;
-            return true;
-        }
-        if let (Some(expected), Some(until)) = (&self.suppressed_hash, self.suppress_until) {
-            if Instant::now() <= until && expected == hash {
-                self.suppressed_hash = None;
-                self.suppress_until = None;
-                return true;
-            }
-            if Instant::now() > until {
-                self.suppressed_hash = None;
-                self.suppress_until = None;
-            }
-        }
-        false
+    fn is_own(&self, sequence: i64, hash: &str) -> bool {
+        self.own_write
+            .as_ref()
+            .is_some_and(|(seq, content)| *seq == sequence && content == hash)
     }
 }
 
 pub enum ClipboardEvent {
     NewCapture(Box<NewClipPayload>),
-    ConsumedIgnoreNext,
+    ConsumedIgnoreNext(u64),
+    Skipped(&'static str),
+    WatcherStopped,
 }
 
 struct EarthClipboardHandler {
     ctx: ClipboardContext,
     settings: Arc<RwLock<AppSettings>>,
+    work: std::sync::mpsc::SyncSender<(Candidate, u64)>,
     suppression: Arc<Mutex<ClipboardSuppression>>,
-    tx: Sender<ClipboardEvent>,
+    tx: ClipboardEventSender,
     repaint_ctx: egui::Context,
 }
 
 impl ClipboardHandler for EarthClipboardHandler {
     fn on_clipboard_change(&mut self) {
-        let settings = self.settings.read().map(|g| g.clone()).unwrap_or_default();
+        let Ok(settings) = self.settings.read().map(|g| g.clone()) else {
+            return;
+        };
+        let Ok(generation) = self.suppression.lock().map(|s| s.ignore_generation) else {
+            return;
+        };
 
         if settings.paused {
             return;
         }
 
-        // Check one-shot ignore flag before doing heavy reads
-        {
-            if let Ok(mut sup) = self.suppression.lock()
-                && sup.ignore_next_once {
-                    sup.ignore_next_once = false;
-                    let _ = self.tx.send(ClipboardEvent::ConsumedIgnoreNext);
+        let sequence = bounds::sequence();
+        let active_app = platform::capture_frontmost_app_identity();
+        if !source_allowed(active_app.as_ref(), &settings) {
+            return;
+        }
+        let rules = FormatRules::new(&settings.ignored_clipboard_types);
+        let Some(formats) = bounds::available_formats(&self.ctx) else {
+            return;
+        };
+        if formats.iter().any(|f| f == OWN_FORMAT) {
+            return;
+        }
+        if !rules.permits_event(Some(&formats), |name| bounds::dword(name).ok().flatten()) {
+            return;
+        }
+        let payload =
+            match capture_clipboard_payload(&self.ctx, &settings, active_app.as_ref(), &rules) {
+                Ok(Some(p)) => p,
+                Err(message) => {
+                    let _ = self.tx.send(ClipboardEvent::Skipped(message));
                     self.repaint_ctx.request_repaint();
                     return;
                 }
+                _ => return,
+            };
+        {
+            let Ok(gate) = self.suppression.lock() else {
+                return;
+            };
+            if sequence != bounds::sequence()
+                || matches!(&payload, Candidate::Ready(p) if gate.is_own(sequence, &p.content_hash))
+            {
+                return;
+            }
         }
-
-        let active_app = platform::capture_frontmost_app();
-        if let Some(ref app) = active_app {
-            if should_ignore_app(&app.app_name, &app.process_or_bundle, &settings) {
-                return;
-            }
-        } else if settings.ignore_only_outside_list && !settings.ignored_apps.is_empty() {
-            return;
-        }
-
-        if let Ok(formats) = self.ctx.available_formats()
-            && should_ignore_formats(&formats, &settings.ignored_clipboard_types) {
-                return;
-            }
-
-        let Some(payload) = capture_clipboard_payload(&self.ctx, &settings, active_app.as_ref())
-        else {
-            return;
-        };
-
-        if let Ok(mut sup) = self.suppression.lock()
-            && sup.should_skip(&payload.content_hash) {
-                return;
-            }
-
-        if self.tx.send(ClipboardEvent::NewCapture(Box::new(payload))).is_ok() {
+        if self.work.try_send((payload, generation)).is_err() {
+            let _ = self
+                .tx
+                .send(ClipboardEvent::Skipped("复制过于频繁，后台采集队列已满"));
             self.repaint_ctx.request_repaint();
         }
     }
@@ -112,6 +114,18 @@ impl ClipboardHandler for EarthClipboardHandler {
 
 pub struct ClipboardHandle {
     shutdown: Option<WatcherShutdown>,
+}
+
+struct WatcherExitNotification {
+    tx: ClipboardEventSender,
+    repaint_ctx: egui::Context,
+}
+
+impl Drop for WatcherExitNotification {
+    fn drop(&mut self) {
+        let _ = self.tx.send(ClipboardEvent::WatcherStopped);
+        self.repaint_ctx.request_repaint();
+    }
 }
 
 impl Drop for ClipboardHandle {
@@ -125,15 +139,52 @@ impl Drop for ClipboardHandle {
 pub fn start_clipboard_watcher(
     settings: Arc<RwLock<AppSettings>>,
     suppression: Arc<Mutex<ClipboardSuppression>>,
-    tx: Sender<ClipboardEvent>,
+    tx: ClipboardEventSender,
     repaint_ctx: egui::Context,
 ) -> Result<ClipboardHandle, String> {
-    let mut watcher = ClipboardWatcherContext::new_with_interval(Duration::from_millis(350))
+    let mut watcher = ClipboardWatcherContext::new_with_interval(Duration::from_millis(100))
         .map_err(|e| format!("初始化剪贴板监听器失败: {e}"))?;
     let ctx = ClipboardContext::new().map_err(|e| format!("打开系统剪贴板失败: {e}"))?;
     let shutdown = watcher.get_shutdown_channel();
+    let exit_notification = WatcherExitNotification {
+        tx: tx.clone(),
+        repaint_ctx: repaint_ctx.clone(),
+    };
 
+    let (work, jobs) = std::sync::mpsc::sync_channel::<(Candidate, u64)>(3);
+    let sink = tx.clone();
+    let repaint = repaint_ctx.clone();
+    let gate = suppression.clone();
+    std::thread::Builder::new()
+        .name("earth-capture-encoder".into())
+        .spawn(move || {
+            let _exit = WatcherExitNotification {
+                tx: sink.clone(),
+                repaint_ctx: repaint.clone(),
+            };
+            for (candidate, generation) in jobs {
+                let event = match candidate.finish() {
+                    Err(message) => ClipboardEvent::Skipped(message),
+                    Ok(payload) => {
+                        let Ok(mut sup) = gate.lock() else {
+                            break;
+                        };
+                        if sup.consume_ignore(generation) {
+                            ClipboardEvent::ConsumedIgnoreNext(generation)
+                        } else {
+                            ClipboardEvent::NewCapture(Box::new(payload))
+                        }
+                    }
+                };
+                if sink.send(event).is_err() {
+                    break;
+                }
+                repaint.request_repaint();
+            }
+        })
+        .map_err(|e| format!("启动采集编码线程失败：{e}"))?;
     watcher.add_handler(EarthClipboardHandler {
+        work,
         ctx,
         settings,
         suppression,
@@ -144,6 +195,7 @@ pub fn start_clipboard_watcher(
     std::thread::Builder::new()
         .name("earth-clipboard-watcher".to_string())
         .spawn(move || {
+            let _exit_notification = exit_notification;
             watcher.start_watch();
         })
         .map_err(|e| format!("启动剪贴板监听线程失败: {e}"))?;
@@ -170,234 +222,300 @@ fn should_ignore_app(app_name: &str, bundle_or_exe: &str, settings: &AppSettings
     }
 }
 
-fn should_ignore_formats(formats: &[String], ignored_types: &[String]) -> bool {
-    if ignored_types.is_empty() {
-        return false;
-    }
-    for fmt in formats {
-        let fmt_l = fmt.to_lowercase();
-        for rule in ignored_types {
-            let r = rule.trim().to_lowercase();
-            if !r.is_empty() && (fmt_l == r || fmt_l.contains(&r)) {
-                return true;
+const OWN_FORMAT: &str = "io.earth.clipboard.self-write";
+enum Candidate {
+    Ready(Box<NewClipPayload>),
+    Image {
+        bytes: Vec<u8>,
+        dib: bool,
+        pixels: u64,
+        cap: usize,
+        source_app: Option<String>,
+        source_bundle_id: Option<String>,
+    },
+}
+impl Candidate {
+    fn finish(self) -> Result<NewClipPayload, &'static str> {
+        match self {
+            Self::Ready(p) => Ok(*p),
+            Self::Image {
+                bytes,
+                dib,
+                pixels,
+                cap,
+                source_app,
+                source_bundle_id,
+            } => {
+                let image = bounds::decode(&bytes, dib, pixels)?;
+                drop(bytes);
+                let (png, thumb, w, h) = encode_image_and_thumb(image, cap)?;
+                Ok(NewClipPayload {
+                    content_hash: image_hash(&png),
+                    byte_size: png.len() as u64,
+                    kind: ClipKind::Image,
+                    text_content: None,
+                    html_content: None,
+                    rtf_content: None,
+                    image_png: Some(png),
+                    thumb_png: Some(thumb),
+                    image_width: Some(w),
+                    image_height: Some(h),
+                    files: Vec::new(),
+                    source_app,
+                    source_bundle_id,
+                    sensitive_label: None,
+                    detected_color: None,
+                    is_url: false,
+                })
             }
         }
     }
-    false
 }
 
 fn capture_clipboard_payload(
     ctx: &ClipboardContext,
     settings: &AppSettings,
     active_app: Option<&crate::model::ActiveAppInfo>,
-) -> Option<NewClipPayload> {
+    rules: &FormatRules,
+) -> Result<Option<Candidate>, &'static str> {
     let source_app = active_app
         .map(|a| a.app_name.clone())
         .filter(|s| !s.is_empty());
     let source_bundle_id = active_app
         .map(|a| a.process_or_bundle.clone())
         .filter(|s| !s.is_empty());
-
-    // 1. Files have top priority when Finder / Explorer copies files
-    if ctx.has(ContentFormat::Files)
-        && let Ok(raw_files) = ctx.get_files() {
-            let files: Vec<FileEntry> = raw_files
-                .into_iter()
-                .filter(|p| !p.trim().is_empty())
-                .map(|p| normalize_file_uri(&p))
-                .map(|p| FileEntry::from_path(&p))
-                .collect();
-            if !files.is_empty() {
-                if !settings.save_files {
-                    return None;
-                }
-                let mut paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
-                paths.sort_unstable();
-                let hash_input = format!("files:{}", paths.join("\n"));
-                let content_hash = sha256_hex(hash_input.as_bytes());
-                let byte_size: u64 = files.iter().map(|f| f.size_bytes).sum();
-                let summary_text = files
-                    .iter()
-                    .map(|f| f.path.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                return Some(NewClipPayload {
-                    content_hash,
-                    kind: ClipKind::Files,
-                    text_content: Some(summary_text),
-                    html_content: None,
-                    rtf_content: None,
-                    image_png: None,
-                    thumb_png: None,
-                    image_width: None,
-                    image_height: None,
-                    files,
-                    byte_size,
-                    source_app,
-                    source_bundle_id,
-                    sensitive_label: None,
-                    detected_color: None,
-                    is_url: false,
-                });
-            }
+    if settings.save_files
+        && rules.allows("files")
+        && ctx.has(ContentFormat::Files)
+        && let Ok(raw_files) = ctx.get_files()
+    {
+        let files: Vec<FileEntry> = raw_files
+            .into_iter()
+            .filter(|p| !p.trim().is_empty())
+            .map(|p| normalize_file_uri(&p))
+            .map(|p| FileEntry::from_path(&p))
+            .collect();
+        if !files.is_empty() {
+            let mut paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+            paths.sort_unstable();
+            let hash_input = format!("files:{}", paths.join("\n"));
+            let content_hash = sha256_hex(hash_input.as_bytes());
+            let byte_size: u64 = files.iter().map(|f| f.size_bytes).sum();
+            let summary_text = files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Ok(Some(Candidate::Ready(Box::new(NewClipPayload {
+                content_hash,
+                kind: ClipKind::Files,
+                text_content: Some(summary_text),
+                html_content: None,
+                rtf_content: None,
+                image_png: None,
+                thumb_png: None,
+                image_width: None,
+                image_height: None,
+                files,
+                byte_size,
+                source_app,
+                source_bundle_id,
+                sensitive_label: None,
+                detected_color: None,
+                is_url: false,
+            }))));
         }
-
-    // 2. Check text & image presence
-    let has_text = ctx.has(ContentFormat::Text);
-    let has_image = ctx.has(ContentFormat::Image);
-    let text_opt = if has_text {
-        ctx.get_text().ok().filter(|t| !t.is_empty())
-    } else {
-        None
-    };
-
-    // Treat as Image when there is an image and no plain text (or browser image copy whose html is solely <img>)
-    let html_opt = if ctx.has(ContentFormat::Html) {
-        ctx.get_html().ok().filter(|h| !h.is_empty())
-    } else {
-        None
-    };
-    let prefer_image = has_image
-        && (text_opt.as_deref().map(str::trim).unwrap_or("").is_empty()
-            || html_opt
-                .as_deref()
-                .map(|h| {
-                    let hl = h.to_lowercase();
-                    hl.contains("<img") && !hl.contains("<p") && !hl.contains("<div")
-                })
-                .unwrap_or(false));
-
-    if prefer_image {
-        if !settings.save_images {
-            return None;
-        }
-        if let Ok(rust_img) = ctx.get_image()
-            && let Ok(dyn_img) = rust_img.get_dynamic_image()
-                && let Some((png_bytes, thumb_bytes, width, height)) = encode_image_and_thumb(&dyn_img)
-                {
-                    let mut hash_buf = Vec::with_capacity(png_bytes.len() + 6);
-                    hash_buf.extend_from_slice(b"image:");
-                    hash_buf.extend_from_slice(&png_bytes);
-                    let content_hash = sha256_hex(&hash_buf);
-                    let byte_size = png_bytes.len() as u64;
-                    return Some(NewClipPayload {
-                        content_hash,
-                        kind: ClipKind::Image,
-                        text_content: None,
-                        html_content: None,
-                        rtf_content: None,
-                        image_png: Some(png_bytes),
-                        thumb_png: Some(thumb_bytes),
-                        image_width: Some(width),
-                        image_height: Some(height),
-                        files: Vec::new(),
-                        byte_size,
-                        source_app,
-                        source_bundle_id,
-                        sensitive_label: None,
-                        detected_color: None,
-                        is_url: false,
-                    });
-                }
     }
 
-    // 3. Text
-    if let Some(text) = text_opt {
-        if !settings.save_text {
+    let text_cap = settings.max_text_mib.clamp(1, 16) * 1024 * 1024;
+    let image_cap = settings.max_image_mib.clamp(1, 64) * 1024 * 1024;
+    let want_image = settings.save_images && rules.allows("image") && ctx.has(ContentFormat::Image);
+    let check_regex = settings
+        .ignored_regexes
+        .iter()
+        .any(|p| !p.trim().is_empty());
+    let text = if ((rules.allows("text") && settings.save_text) || check_regex)
+        && ctx.has(ContentFormat::Text)
+    {
+        #[cfg(windows)]
+        let text = bounds::bytes("CF_UNICODETEXT", text_cap * 2 + 2)?.map(|raw| {
+            String::from_utf16_lossy(
+                &raw.chunks_exact(2)
+                    .map(|p| u16::from_le_bytes([p[0], p[1]]))
+                    .take_while(|c| *c != 0)
+                    .collect::<Vec<_>>(),
+            )
+        });
+        #[cfg(not(windows))]
+        let text = bounds::bytes("public.utf8-plain-text", text_cap)?
+            .and_then(|raw| String::from_utf8(raw).ok());
+        if check_regex && text.is_none() {
+            return Ok(None);
+        }
+        text.filter(|s| !s.is_empty())
+    } else {
+        None
+    };
+    if text.as_ref().is_some_and(|t| t.len() > text_cap) {
+        return Err(bounds::TOO_LARGE);
+    }
+    if text
+        .as_deref()
+        .is_some_and(|t| matches_ignored_regex(t, &settings.ignored_regexes))
+    {
+        return Ok(None);
+    }
+    let text = text.filter(|_| rules.allows("text") && settings.save_text);
+    let read_rich = |kind, native, format, remaining| -> Option<String> {
+        if !settings.save_text || !rules.allows(kind) || !ctx.has(format) {
             return None;
         }
-        if matches_ignored_regex(&text, &settings.ignored_regexes) {
-            return None;
+        let raw = bounds::bytes(native, remaining).ok()??;
+        let s = String::from_utf8(raw).ok()?;
+        #[cfg(windows)]
+        if kind == "html" {
+            return Some(
+                s.split_once("<!--StartFragment-->")
+                    .and_then(|(_, s)| s.split_once("<!--EndFragment-->"))
+                    .map_or_else(
+                        || s.trim_end_matches('\0').to_string(),
+                        |(s, _)| s.to_owned(),
+                    ),
+            );
         }
-        let rtf_opt = if ctx.has(ContentFormat::Rtf) {
-            ctx.get_rich_text().ok().filter(|r| !r.is_empty())
+        Some(s.trim_end_matches('\0').to_string()).filter(|s| !s.is_empty())
+    };
+    let remaining = text_cap - text.as_ref().map_or(0, String::len);
+    let html = read_rich(
+        "html",
+        if cfg!(windows) {
+            "HTML Format"
         } else {
-            None
-        };
-
-        let mut hash_buf = Vec::with_capacity(text.len() + 5);
-        hash_buf.extend_from_slice(b"text:");
-        hash_buf.extend_from_slice(text.as_bytes());
-        let content_hash = sha256_hex(&hash_buf);
-
-        let detected_color = detect_color(&text);
-        let is_url = detect_url(&text);
-        let sensitive_label = if settings.enable_privacy_masking {
-            detect_sensitive_label(&text)
+            "public.html"
+        },
+        ContentFormat::Html,
+        remaining,
+    );
+    let prefer_image = prefer_image(
+        want_image,
+        settings.save_text,
+        text.as_deref(),
+        html.as_deref(),
+    );
+    let get_image = || -> Result<Option<Candidate>, &'static str> {
+        let names: &[&str] = if cfg!(windows) {
+            &["PNG", "CF_DIBV5", "CF_DIB"]
         } else {
-            None
+            &["public.png", "public.tiff"]
         };
-        let byte_size = text.len() as u64;
-
-        return Some(NewClipPayload {
-            content_hash,
+        for name in names {
+            if let Some(bytes) = bounds::bytes(name, image_cap)? {
+                return Ok(Some(Candidate::Image {
+                    bytes,
+                    dib: name.starts_with("CF_DIB"),
+                    pixels: settings.max_image_megapixels.clamp(1, 64) * 1_000_000,
+                    cap: image_cap,
+                    source_app: source_app.clone(),
+                    source_bundle_id: source_bundle_id.clone(),
+                }));
+            }
+        }
+        Ok(None)
+    };
+    if prefer_image && let Some(p) = get_image()? {
+        return Ok(Some(p));
+    }
+    if settings.save_text
+        && let Some(text) = text
+    {
+        let rtf = read_rich(
+            "rtf",
+            if cfg!(windows) {
+                "Rich Text Format"
+            } else {
+                "public.rtf"
+            },
+            ContentFormat::Rtf,
+            remaining - html.as_ref().map_or(0, String::len),
+        );
+        let p = NewClipPayload {
+            content_hash: sha256_hex(&[b"text:", text.as_bytes()].concat()),
+            byte_size: text.len() as u64,
             kind: ClipKind::Text,
+            detected_color: detect_color(&text),
+            is_url: detect_url(&text),
+            sensitive_label: detect_sensitive_label(&text),
             text_content: Some(text),
-            html_content: html_opt,
-            rtf_content: rtf_opt,
+            html_content: html,
+            rtf_content: rtf,
             image_png: None,
             thumb_png: None,
             image_width: None,
             image_height: None,
             files: Vec::new(),
-            byte_size,
             source_app,
             source_bundle_id,
-            sensitive_label,
-            detected_color,
-            is_url,
-        });
+        };
+        return Ok(Some(Candidate::Ready(Box::new(p))));
     }
-
-    // Fallback image check if text failed to decode
-    if has_image && settings.save_images
-        && let Ok(rust_img) = ctx.get_image()
-            && let Ok(dyn_img) = rust_img.get_dynamic_image()
-                && let Some((png_bytes, thumb_bytes, width, height)) = encode_image_and_thumb(&dyn_img)
-                {
-                    let mut hash_buf = Vec::with_capacity(png_bytes.len() + 6);
-                    hash_buf.extend_from_slice(b"image:");
-                    hash_buf.extend_from_slice(&png_bytes);
-                    let content_hash = sha256_hex(&hash_buf);
-                    let byte_size = png_bytes.len() as u64;
-                    return Some(NewClipPayload {
-                        content_hash,
-                        kind: ClipKind::Image,
-                        text_content: None,
-                        html_content: None,
-                        rtf_content: None,
-                        image_png: Some(png_bytes),
-                        thumb_png: Some(thumb_bytes),
-                        image_width: Some(width),
-                        image_height: Some(height),
-                        files: Vec::new(),
-                        byte_size,
-                        source_app,
-                        source_bundle_id,
-                        sensitive_label: None,
-                        detected_color: None,
-                        is_url: false,
-                    });
-                }
-
-    None
+    if want_image && !prefer_image {
+        get_image()
+    } else {
+        Ok(None)
+    }
 }
 
-fn encode_image_and_thumb(img: &DynamicImage) -> Option<(Vec<u8>, Vec<u8>, u32, u32)> {
-    let width = img.width();
-    let height = img.height();
-    let mut full_buf = Cursor::new(Vec::new());
-    img.write_to(&mut full_buf, ImageFormat::Png).ok()?;
+fn image_hash(bytes: &[u8]) -> String {
+    sha256_hex(&[b"image:", bytes].concat())
+}
 
-    let thumb = if width > 280 || height > 180 {
-        img.resize(280, 180, FilterType::Triangle)
-    } else {
-        img.clone()
+fn prefer_image(available: bool, save_text: bool, text: Option<&str>, html: Option<&str>) -> bool {
+    available
+        && (!save_text
+            || text.is_none_or(|t| t.trim().is_empty() || detect_url(t))
+            || html.is_some_and(|h| {
+                let h = h.trim_start().as_bytes();
+                h.get(..4).is_some_and(|s| s.eq_ignore_ascii_case(b"<img"))
+                    && h.get(4)
+                        .is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'/' | b'>'))
+            }))
+}
+
+type EncodedImage = (Vec<u8>, Vec<u8>, u32, u32);
+fn encode_image_and_thumb(img: DynamicImage, cap: usize) -> Result<EncodedImage, &'static str> {
+    use image::ImageEncoder;
+    use std::io::{self, Write};
+    struct Limited {
+        buf: Vec<u8>,
+        cap: usize,
+    }
+    impl Write for Limited {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if bytes.len() > self.cap - self.buf.len() {
+                return Err(io::Error::other(bounds::TOO_LARGE));
+            }
+            self.buf.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let (w, h) = (img.width(), img.height());
+    let thumb = img.resize(w.min(280), h.min(180), FilterType::Triangle);
+    let rgba = img.into_rgba8();
+    let mut output = Limited {
+        buf: Vec::new(),
+        cap,
     };
-    let mut thumb_buf = Cursor::new(Vec::new());
-    thumb.write_to(&mut thumb_buf, ImageFormat::Png).ok()?;
-
-    Some((full_buf.into_inner(), thumb_buf.into_inner(), width, height))
+    image::codecs::png::PngEncoder::new(&mut output)
+        .write_image(&rgba, w, h, image::ExtendedColorType::Rgba8)
+        .map_err(|_| bounds::TOO_LARGE)?;
+    let mut small = Cursor::new(Vec::new());
+    thumb
+        .write_to(&mut small, ImageFormat::Png)
+        .map_err(|_| "无法编码缩略图")?;
+    Ok((output.buf, small.into_inner(), w, h))
 }
 
 fn normalize_file_uri(raw: &str) -> String {
@@ -417,9 +535,10 @@ fn matches_ignored_regex(text: &str, patterns: &[String]) -> bool {
             continue;
         }
         if let Ok(re) = Regex::new(p)
-            && re.is_match(text) {
-                return true;
-            }
+            && re.is_match(text)
+        {
+            return true;
+        }
     }
     false
 }
@@ -429,12 +548,9 @@ pub fn write_item_to_clipboard(
     plain_text_only: bool,
     suppression: &Arc<Mutex<ClipboardSuppression>>,
 ) -> Result<(), String> {
-    if let Ok(mut sup) = suppression.lock() {
-        sup.suppress_hash(item.content_hash.clone(), Duration::from_millis(1500));
-    }
-
     let ctx = ClipboardContext::new().map_err(|e| format!("无法访问系统剪贴板: {e}"))?;
-
+    let mut gate = suppression.lock().map_err(|_| "剪贴板监听状态不可用")?;
+    let mut hash = item.content_hash.clone();
     match item.kind {
         ClipKind::Text => {
             let text = item.text_content.clone().unwrap_or_default();
@@ -459,10 +575,7 @@ pub fn write_item_to_clipboard(
                 .as_deref()
                 .ok_or_else(|| "图片文件路径缺失".to_string())?;
             let bytes = std::fs::read(path).map_err(|e| format!("读取本地图片失败: {e}"))?;
-            let img = <RustImageData as clipboard_rs::common::RustImage>::from_bytes(&bytes)
-                .map_err(|e| format!("解析图片失败: {e}"))?;
-            ctx.set_image(img)
-                .map_err(|e| format!("写入图片到剪贴板失败: {e}"))?;
+            return write_managed_png(&bytes);
         }
         ClipKind::Files => {
             let valid_paths: Vec<String> = item
@@ -474,10 +587,14 @@ pub fn write_item_to_clipboard(
             if valid_paths.is_empty() {
                 return Err("原文件已不存在或被移动，无法写入文件剪贴板".to_string());
             }
+            let mut ordered: Vec<_> = valid_paths.iter().map(String::as_str).collect();
+            ordered.sort_unstable();
+            hash = sha256_hex(format!("files:{}", ordered.join("\n")).as_bytes());
             ctx.set_files(valid_paths)
                 .map_err(|e| format!("写入文件列表到剪贴板失败: {e}"))?;
         }
     }
+    gate.own_write = Some((bounds::sequence(), hash));
     Ok(())
 }
 
@@ -490,25 +607,91 @@ pub fn write_custom_text_to_clipboard(
     hash_buf.extend_from_slice(text.as_bytes());
     let hash = sha256_hex(&hash_buf);
 
-    if let Ok(mut sup) = suppression.lock() {
-        sup.suppress_hash(hash, Duration::from_millis(1500));
-    }
-
     let ctx = ClipboardContext::new().map_err(|e| format!("无法访问系统剪贴板: {e}"))?;
+    let mut gate = suppression.lock().map_err(|_| "剪贴板监听状态不可用")?;
     ctx.set_text(text.to_string())
         .map_err(|e| format!("写入剪贴板失败: {e}"))?;
+    gate.own_write = Some((bounds::sequence(), hash));
     Ok(())
 }
 
-pub fn write_custom_png_to_clipboard(png_bytes: &[u8]) -> Result<(), String> {
-    let ctx = ClipboardContext::new().map_err(|e| format!("无法访问系统剪贴板: {e}"))?;
-    let img = <RustImageData as clipboard_rs::common::RustImage>::from_bytes(png_bytes)
-        .map_err(|e| format!("解析二维码图片失败: {e}"))?;
-    ctx.set_image(img)
-        .map_err(|e| format!("写入二维码图片到剪贴板失败: {e}"))
+pub fn write_managed_png(png_bytes: &[u8]) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let image = bounds::decode(png_bytes, false, 64_000_000).map_err(str::to_string)?;
+        let rgb = image.into_rgb8();
+        let mut bitmap = Vec::new();
+        image::codecs::bmp::BmpEncoder::new(&mut bitmap)
+            .encode(
+                &rgb,
+                rgb.width(),
+                rgb.height(),
+                image::ExtendedColorType::Rgb8,
+            )
+            .map_err(|e| format!("转换位图失败: {e}"))?;
+        // CF_DIB starts at BITMAPINFOHEADER, without the 14-byte BMP file header.
+        windows::write_png_with_marker(png_bytes, &bitmap[14..], OWN_FORMAT)
+            .map_err(|e| format!("写入图片到剪贴板失败: {e}"))
+    }
+    #[cfg(not(windows))]
+    {
+        let ctx = ClipboardContext::new().map_err(|e| format!("无法访问系统剪贴板: {e}"))?;
+        ctx.set(vec![
+            ClipboardContent::Other("public.png".into(), png_bytes.to_vec()),
+            ClipboardContent::Other(OWN_FORMAT.into(), vec![1]),
+        ])
+        .map_err(|e| format!("写入图片到剪贴板失败: {e}"))
+    }
 }
 
 pub fn clear_system_clipboard() -> Result<(), String> {
     let ctx = ClipboardContext::new().map_err(|e| format!("无法访问系统剪贴板: {e}"))?;
     ctx.clear().map_err(|e| format!("清空系统剪贴板失败: {e}"))
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+
+    #[test]
+    fn mixed_copy_uses_enabled_representations() {
+        let url = Some("https://example.com/image.png");
+        assert!(prefer_image(true, true, url, None));
+        assert!(!prefer_image(false, true, url, Some("<img>")));
+        assert!(prefer_image(true, false, Some("caption"), None));
+        assert!(prefer_image(
+            true,
+            true,
+            Some("caption"),
+            Some("  <IMG src='one'>")
+        ));
+        assert!(!prefer_image(
+            true,
+            true,
+            Some("caption"),
+            Some("<imgwidget>text")
+        ));
+        assert!(!prefer_image(true, true, Some("caption"), None));
+    }
+
+    #[test]
+    fn external_copy_with_identical_content_can_consume_ignore_once() {
+        let mut suppression = ClipboardSuppression {
+            own_write: Some((16, "same".into())),
+            ignore_next_once: true,
+            ignore_generation: 3,
+        };
+        assert!(suppression.is_own(16, "same"));
+        assert!(!suppression.is_own(17, "same"));
+        assert!(!suppression.consume_ignore(2));
+        assert!(suppression.consume_ignore(3));
+        assert!(!suppression.consume_ignore(3));
+    }
+
+    #[test]
+    fn encoded_image_cannot_exceed_requested_byte_budget() {
+        let img = DynamicImage::new_rgba8(8, 6);
+        assert!(encode_image_and_thumb(img.clone(), 12).is_err());
+        assert!(encode_image_and_thumb(img, 2048).is_ok());
+    }
 }

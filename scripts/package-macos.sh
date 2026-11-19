@@ -7,12 +7,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "$ROOT_DIR"
 
-VERSION="$(python3 -c '
-import re, pathlib
-text = pathlib.Path("Cargo.toml").read_text()
-m = re.search(r"^version\s*=\s*\"([^\"]+)\"", text, re.MULTILINE)
-print(m.group(1) if m else "0.4.0")
-')"
+VERSION="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "earth"))')"
+[[ -n "$VERSION" ]] || { echo "Could not read Earth version" >&2; exit 1; }
+CORE_VERSION="${VERSION%%[-+]*}"
+CHANNEL="${EARTH_RELEASE_CHANNEL:-development}"
+if [[ "$CHANNEL" != "official" && "$CHANNEL" != "development" ]]; then
+    echo "EARTH_RELEASE_CHANNEL must be official or development" >&2; exit 1
+fi
+if [[ "$CHANNEL" == "official" ]]; then
+    : "${EARTH_UPDATE_MACOS_TEAM_ID:?Official releases require a pinned Team ID}"
+    : "${EARTH_MACOS_SIGN_IDENTITY:?Developer ID Application identity required}"
+    : "${EARTH_MACOS_INSTALLER_IDENTITY:?Developer ID Installer identity required}"
+    : "${EARTH_NOTARY_PROFILE:?A notarytool keychain profile is required}"
+    [[ "$EARTH_UPDATE_MACOS_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || {
+        echo "Official releases require a valid 10-character Team ID" >&2; exit 1
+    }
+fi
 
 MODE="${1:-auto}" # auto | universal | native
 ARCH_LABEL="universal"
@@ -47,17 +57,24 @@ fi
 
 echo "==> Earth macOS 打包开始 (version=${VERSION}, arch=${ARCH_LABEL})"
 
+TARGET_DIR="$(cargo metadata --locked --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
 BINARIES=()
 for tgt in "${BUILD_TARGETS[@]}"; do
     echo "==> 编译 Release 目标: ${tgt}"
-    cargo build --release --target "${tgt}"
-    BINARIES+=("${ROOT_DIR}/target/${tgt}/release/earth")
+    cargo build --locked --release --target "${tgt}"
+    BINARIES+=("${TARGET_DIR}/${tgt}/release/earth")
 done
 
 DIST_DIR="${ROOT_DIR}/dist"
 APP_BUNDLE="${DIST_DIR}/Earth.app"
 DMG_PATH="${DIST_DIR}/Earth-${VERSION}-macOS-${ARCH_LABEL}.dmg"
 PKG_PATH="${DIST_DIR}/Earth-${VERSION}-macOS-${ARCH_LABEL}.pkg"
+
+if [[ "$CHANNEL" == "development" ]]; then
+    DMG_PATH="${DIST_DIR}/Earth-${VERSION}-macOS-${ARCH_LABEL}-UNSIGNED.dmg"
+    PKG_PATH="${DIST_DIR}/Earth-${VERSION}-macOS-${ARCH_LABEL}-UNSIGNED.pkg"
+    echo "WARNING: development artifacts are ad-hoc signed, unnotarized, and not eligible for automatic updates." >&2
+fi
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
@@ -69,7 +86,8 @@ ICONSET_DIR="${TMP_DIR}/Earth.iconset"
 ICNS_PATH="${TMP_DIR}/Earth.icns"
 mkdir -p "${ICONSET_DIR}"
 
-swift "${ROOT_DIR}/packaging/macos/gen_icon.swift" "${ICON_PNG}"
+swift -module-cache-path "${TMP_DIR}/swift-module-cache" \
+    "${ROOT_DIR}/packaging/macos/gen_icon.swift" "${ICON_PNG}"
 
 resize_icon() {
     local px="$1"
@@ -103,18 +121,22 @@ fi
 chmod 755 "${APP_BUNDLE}/Contents/MacOS/earth"
 
 cp "${ICNS_PATH}" "${APP_BUNDLE}/Contents/Resources/Earth.icns"
-sed "s/__VERSION__/${VERSION}/g" "${ROOT_DIR}/packaging/macos/Info.plist" > "${APP_BUNDLE}/Contents/Info.plist"
+sed -e "s/__VERSION__/${VERSION}/g" -e "s/__CORE_VERSION__/${CORE_VERSION}/g" \
+    "${ROOT_DIR}/packaging/macos/Info.plist" > "${APP_BUNDLE}/Contents/Info.plist"
 printf 'APPL????' > "${APP_BUNDLE}/Contents/PkgInfo"
 
-SIGN_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development|Developer ID Application/ {print $2; exit}' || true)"
-if [[ -n "${SIGN_IDENTITY}" ]]; then
-    echo "==> 使用开发者证书签名: ${SIGN_IDENTITY}"
-    codesign --force --deep --sign "${SIGN_IDENTITY}" "${APP_BUNDLE}"
+if [[ "$CHANNEL" == "official" ]]; then
+    codesign --force --options runtime --timestamp --sign "$EARTH_MACOS_SIGN_IDENTITY" "$APP_BUNDLE"
+    REQUIREMENT="anchor apple generic and identifier \"io.earth.Earth\" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"${EARTH_UPDATE_MACOS_TEAM_ID}\""
+    codesign --verify --deep --strict --all-architectures --test-requirement "$REQUIREMENT" "$APP_BUNDLE"
+    ditto -c -k --keepParent "$APP_BUNDLE" "$TMP_DIR/Earth-notarize.zip"
+    xcrun notarytool submit "$TMP_DIR/Earth-notarize.zip" --keychain-profile "$EARTH_NOTARY_PROFILE" --wait
+    xcrun stapler staple "$APP_BUNDLE"
+    spctl --assess --type execute "$APP_BUNDLE"
 else
-    echo "==> 执行 Ad-hoc 代码签名并校验"
-    codesign --force --deep --sign - "${APP_BUNDLE}"
+    codesign --force --sign - "$APP_BUNDLE"
+    codesign --verify --deep --strict "$APP_BUNDLE"
 fi
-codesign --verify --deep --strict "${APP_BUNDLE}"
 
 # 3. 构建 .dmg 安装镜像
 echo "==> 构建 DMG 镜像: ${DMG_PATH}"
@@ -143,7 +165,7 @@ pkgbuild \
     --root "${PKG_ROOT}" \
     --component-plist "${ROOT_DIR}/packaging/macos/component.plist" \
     --identifier "io.earth.Earth.pkg" \
-    --version "${VERSION}" \
+    --version "${CORE_VERSION}" \
     --install-location "/Applications" \
     "${COMPONENT_PKG}" >/dev/null
 
@@ -155,14 +177,37 @@ else
     HOST_ARCHES="arm64,x86_64"
 fi
 
-sed -e "s/__VERSION__/${VERSION}/g" -e "s/arm64,x86_64/${HOST_ARCHES}/g" \
-    "${ROOT_DIR}/packaging/macos/Distribution.xml" > "${DIST_XML}"
+python3 - "$ROOT_DIR" "$VERSION" "$CORE_VERSION" "$HOST_ARCHES" "$DIST_XML" <<'PY'
+from pathlib import Path
+import sys
+root, version, core, arches, output = sys.argv[1:]
+root = Path(root)
+distribution = (root / "packaging/macos/Distribution.xml").read_text()
+distribution = distribution.replace("__VERSION_CHECK_SCRIPT__", (root / "packaging/semver.js").read_text())
+distribution = distribution.replace("__VERSION__", version).replace("__CORE_VERSION__", core)
+distribution = distribution.replace("arm64,x86_64", arches)
+Path(output).write_text(distribution)
+PY
 
 productbuild \
     --distribution "${DIST_XML}" \
     --resources "${ROOT_DIR}/packaging/macos" \
     --package-path "${TMP_DIR}" \
     "${PKG_PATH}" >/dev/null
+
+if [[ "$CHANNEL" == "official" ]]; then
+    productsign --sign "$EARTH_MACOS_INSTALLER_IDENTITY" "$PKG_PATH" "$TMP_DIR/Earth-signed.pkg"
+    mv "$TMP_DIR/Earth-signed.pkg" "$PKG_PATH"
+    codesign --timestamp --sign "$EARTH_MACOS_SIGN_IDENTITY" "$DMG_PATH"
+    for artifact in "$PKG_PATH" "$DMG_PATH"; do
+        xcrun notarytool submit "$artifact" --keychain-profile "$EARTH_NOTARY_PROFILE" --wait
+        xcrun stapler staple "$artifact"
+        xcrun stapler validate "$artifact"
+    done
+    pkgutil --check-signature "$PKG_PATH"
+    spctl --assess --type install "$PKG_PATH"
+    spctl --assess --type open --context context:primary-signature "$DMG_PATH"
+fi
 
 echo "==> 打包完成！输出产物："
 ls -lh "${DIST_DIR}"

@@ -1,19 +1,19 @@
-use crate::model::ActiveAppInfo;
-use crate::platform::{PreferredSystemFonts, ScreenRect, SystemFontCandidate};
+use super::positioning::{self, PopupGeometry};
+use crate::model::{ActiveAppInfo, PopupPosition};
+use crate::platform::{PreferredSystemFonts, ScreenRect, SystemFontCandidate, TrayPosition};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use windows_sys::Win32::Foundation::{CloseHandle, HWND, POINT, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    GetMonitorInfoW, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
 };
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
-use windows_sys::Win32::UI::HiDpi::GetDpiForSystem;
+use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
-    SetForegroundWindow,
+    GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, SetForegroundWindow,
 };
 
 pub fn capture_frontmost_app_identity() -> Option<ActiveAppInfo> {
@@ -59,12 +59,13 @@ pub fn capture_frontmost_app() -> Option<ActiveAppInfo> {
             right: 0,
             bottom: 0,
         };
-        let scale = system_dpi_scale();
+        // GetWindowRect, GetCursorPos and tray-icon positions share the physical
+        // desktop coordinate space in this per-monitor-DPI-aware process.
         let window_rect = if GetWindowRect(hwnd, &mut rect) != 0 {
-            let w = (rect.right - rect.left) as f32 / scale;
-            let h = (rect.bottom - rect.top) as f32 / scale;
+            let w = (rect.right - rect.left) as f32;
+            let h = (rect.bottom - rect.top) as f32;
             if w > 10.0 && h > 10.0 {
-                Some((rect.left as f32 / scale, rect.top as f32 / scale, w, h))
+                Some((rect.left as f32, rect.top as f32, w, h))
             } else {
                 None
             }
@@ -93,20 +94,20 @@ pub fn restore_frontmost_app(app: &ActiveAppInfo) -> bool {
     unsafe { SetForegroundWindow(hwnd) != 0 }
 }
 
-pub fn simulate_paste() -> Result<(), String> {
-    std::thread::sleep(std::time::Duration::from_millis(55));
+pub fn simulate_paste(target: &ActiveAppInfo) -> Result<(), String> {
     let mut enigo =
         Enigo::new(&Settings::default()).map_err(|e| format!("初始化输入模拟失败: {e}"))?;
+    if !super::is_paste_target(target) {
+        return Err("前台窗口已改变".into());
+    }
     enigo
         .key(Key::Control, Direction::Press)
         .map_err(|e| format!("模拟 Ctrl 按下失败: {e}"))?;
-    enigo
-        .key(Key::V, Direction::Click)
-        .map_err(|e| format!("模拟 V 键失败: {e}"))?;
+    let click = enigo.key(Key::V, Direction::Click);
     enigo
         .key(Key::Control, Direction::Release)
         .map_err(|e| format!("模拟 Ctrl 释放失败: {e}"))?;
-    Ok(())
+    click.map_err(|e| format!("模拟 V 键失败: {e}"))
 }
 
 pub fn has_accessibility_permission() -> bool {
@@ -121,24 +122,21 @@ pub fn activate_self_window() {}
 
 pub fn hide_self_app() {}
 
-fn system_dpi_scale() -> f32 {
-    let dpi = unsafe { GetDpiForSystem() };
-    if dpi == 0 {
+fn monitor_dpi_scale(monitor: HMONITOR) -> f32 {
+    let mut dpi_x = 0;
+    let mut dpi_y = 0;
+    // This is also how winit obtains MonitorHandle::scale_factor on Windows.
+    if !monitor.is_null()
+        && unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) } == 0
+        && dpi_x > 0
+    {
+        dpi_x as f32 / 96.0
+    } else {
         1.0
-    } else {
-        dpi as f32 / 96.0
     }
 }
 
-fn resolve_dpi_scale(dpi_scale: f32) -> f32 {
-    if dpi_scale > 0.1 {
-        dpi_scale
-    } else {
-        system_dpi_scale()
-    }
-}
-
-fn monitor_bounds_at_physical_point(pt: POINT, scale: f32) -> ScreenRect {
+fn monitor_at_physical_point(pt: POINT) -> (ScreenRect, f32) {
     unsafe {
         let hmon = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
         let mut info = MONITORINFO {
@@ -161,34 +159,79 @@ fn monitor_bounds_at_physical_point(pt: POINT, scale: f32) -> ScreenRect {
             GetMonitorInfoW(hmon, &mut info);
         }
         let work = info.rcWork;
-        ScreenRect {
-            x: work.left as f32 / scale,
-            y: work.top as f32 / scale,
-            width: (work.right - work.left) as f32 / scale,
-            height: (work.bottom - work.top) as f32 / scale,
-        }
+        (
+            ScreenRect {
+                x: work.left as f32,
+                y: work.top as f32,
+                width: (work.right - work.left) as f32,
+                height: (work.bottom - work.top) as f32,
+            },
+            monitor_dpi_scale(hmon),
+        )
     }
 }
 
-pub fn get_cursor_and_monitor_bounds(dpi_scale: f32) -> ((f32, f32), ScreenRect) {
-    let scale = resolve_dpi_scale(dpi_scale);
-    let mut pt = POINT { x: 0, y: 0 };
+fn physical_cursor() -> POINT {
+    let mut point = POINT { x: 0, y: 0 };
     unsafe {
-        let _ = GetCursorPos(&mut pt);
+        let _ = GetCursorPos(&mut point);
     }
-    (
-        (pt.x as f32 / scale, pt.y as f32 / scale),
-        monitor_bounds_at_physical_point(pt, scale),
-    )
+    point
+}
+
+fn bounds_in_viewport(bounds: ScreenRect, current_pixels_per_point: f32) -> ScreenRect {
+    let scale = positioning::valid_scale(current_pixels_per_point);
+    ScreenRect {
+        x: bounds.x / scale,
+        y: bounds.y / scale,
+        width: bounds.width / scale,
+        height: bounds.height / scale,
+    }
 }
 
 pub fn monitor_bounds_for_point(x: f32, y: f32, dpi_scale: f32) -> ScreenRect {
-    let scale = resolve_dpi_scale(dpi_scale);
+    let scale = positioning::valid_scale(dpi_scale);
     let pt = POINT {
         x: (x * scale).round() as i32,
         y: (y * scale).round() as i32,
     };
-    monitor_bounds_at_physical_point(pt, scale)
+    bounds_in_viewport(monitor_at_physical_point(pt).0, scale)
+}
+
+pub fn compute_popup_origin(
+    mode: PopupPosition,
+    window_size: (f32, f32),
+    previous_app: Option<&ActiveAppInfo>,
+    tray_position: Option<TrayPosition>,
+    current_pixels_per_point: f32,
+    zoom_factor: f32,
+) -> (f32, f32) {
+    let point = physical_cursor();
+    let cursor = (point.x as f32, point.y as f32);
+    let previous_window = previous_app.and_then(|app| app.window_rect);
+    let anchor = positioning::anchor_point(
+        mode,
+        cursor,
+        previous_window,
+        tray_position.map(|position| position.monitor_anchor),
+    );
+    let (monitor, native_scale) = monitor_at_physical_point(POINT {
+        x: anchor.0.round() as i32,
+        y: anchor.1.round() as i32,
+    });
+    let physical = positioning::popup_origin(
+        mode,
+        window_size,
+        PopupGeometry {
+            cursor,
+            monitor,
+            previous_window,
+            tray_position: tray_position.map(|position| position.popup_anchor),
+            target_scale: native_scale * positioning::valid_scale(zoom_factor),
+        },
+        true,
+    );
+    positioning::physical_to_viewport(physical, current_pixels_per_point)
 }
 
 pub fn configure_main_window(cc: &eframe::CreationContext<'_>) {
@@ -214,7 +257,17 @@ pub fn reveal_in_file_manager(path: &Path) {
 }
 
 pub fn open_url(url: &str) {
-    let _ = Command::new("cmd").args(["/C", "start", "", url]).spawn();
+    let target: Vec<u16> = url.encode_utf16().chain([0]).collect();
+    unsafe {
+        windows_sys::Win32::UI::Shell::ShellExecuteW(
+            std::ptr::null_mut(),
+            [111u16, 112, 101, 110, 0].as_ptr(),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            1,
+        );
+    }
 }
 
 pub fn preferred_system_fonts() -> PreferredSystemFonts {
@@ -224,10 +277,7 @@ pub fn preferred_system_fonts() -> PreferredSystemFonts {
     let fonts_dir = windir.join("Fonts");
 
     let mut ui = Vec::new();
-    for (file, ps) in [
-        ("segoeui.ttf", "SegoeUI"),
-        ("msyh.ttc", "MicrosoftYaHei"),
-    ] {
+    for (file, ps) in [("segoeui.ttf", "SegoeUI"), ("msyh.ttc", "MicrosoftYaHei")] {
         let p = fonts_dir.join(file);
         if p.is_file() {
             ui.push(SystemFontCandidate {
@@ -255,10 +305,7 @@ pub fn autostart_entry_needs_refresh(expected_app_path: &str, autostart_arg: &st
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
-    let value_name: Vec<u16> = "Earth"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let value_name: Vec<u16> = "Earth".encode_utf16().chain(std::iter::once(0)).collect();
 
     for root in [
         windows_sys::Win32::System::Registry::HKEY_CURRENT_USER,
@@ -277,7 +324,7 @@ fn read_reg_sz(
     value_name: &[u16],
 ) -> Option<String> {
     use windows_sys::Win32::Foundation::ERROR_SUCCESS;
-    use windows_sys::Win32::System::Registry::{RegGetValueW, RRF_RT_REG_SZ};
+    use windows_sys::Win32::System::Registry::{RRF_RT_REG_SZ, RegGetValueW};
 
     let mut byte_len: u32 = 0;
     let status = unsafe {
@@ -335,7 +382,8 @@ pub fn install_shortcut_repaint_ctx(ctx: &egui::Context) {
 pub fn set_shortcut_recording(active: bool, allow_super: bool) {
     SHORTCUT_ALLOW_SUPER.store(allow_super, std::sync::atomic::Ordering::Release);
     SHORTCUT_RECORDING.store(active, std::sync::atomic::Ordering::Release);
-    if !active && let Some(queue) = SHORTCUT_EVENTS.get()
+    if !active
+        && let Some(queue) = SHORTCUT_EVENTS.get()
         && let Ok(mut guard) = queue.lock()
     {
         guard.clear();
@@ -415,7 +463,7 @@ fn is_modifier_vk(vk: u16) -> bool {
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn handle_windows_msg_hook(msg_ptr: *const core::ffi::c_void) -> bool {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-        MapVirtualKeyW, MAPVK_VSC_TO_VK_EX, VK_ESCAPE, VK_PROCESSKEY,
+        MAPVK_VSC_TO_VK_EX, MapVirtualKeyW, VK_ESCAPE, VK_PROCESSKEY,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         MSG, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
