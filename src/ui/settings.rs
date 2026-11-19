@@ -420,68 +420,17 @@ fn render_general_tab(
                             .size(11.5)
                             .color(palette.text_muted),
                     );
-                } else {
-                    if compact_button(ui, "检查更新").clicked() {
-                        state.checking_updates = true;
-                        actions.push(SettingsAction::CheckUpdatesNow);
-                    }
-                    if let Some(rel) = state.available_update.clone() {
-                        if compact_button(ui, "前往下载").clicked() {
-                            actions.push(SettingsAction::OpenUrl(rel.html_url.clone()));
-                        }
-                        match state.update_download.clone() {
-                            UpdateDownloadState::ReadyToInstall {
-                                version,
-                                staged_path,
-                            } if version == rel.version => {
-                                let restart_btn = egui::Button::new(
-                                    RichText::new(format!("重启完成更新 (v{})", rel.version))
-                                        .size(11.0)
-                                        .color(palette.on_accent),
-                                )
-                                .fill(palette.accent)
-                                .stroke(Stroke::NONE)
-                                .corner_radius(CornerRadius::same(255));
-                                if padded_button(ui, restart_btn, vec2(10.0, 3.5)).clicked() {
-                                    actions
-                                        .push(SettingsAction::ApplyUpdateAndRestart(staged_path));
-                                }
-                            }
-                            UpdateDownloadState::Downloading { version }
-                                if version == rel.version =>
-                            {
-                                ui.label(
-                                    RichText::new(format!("正在下载 v{}…", rel.version))
-                                        .size(11.5)
-                                        .color(palette.accent_text),
-                                );
-                            }
-                            UpdateDownloadState::Failed { version, .. }
-                                if version == rel.version && rel.download_url.is_some() =>
-                            {
-                                if compact_button(ui, "重试自动更新").clicked() {
-                                    actions.push(SettingsAction::StartUpdateDownload(rel));
-                                }
-                            }
-                            _ if rel.download_url.is_some() => {
-                                let auto_btn = egui::Button::new(
-                                    RichText::new(format!("自动更新 v{}", rel.version))
-                                        .size(11.0)
-                                        .color(palette.on_accent),
-                                )
-                                .fill(palette.accent)
-                                .stroke(Stroke::NONE)
-                                .corner_radius(CornerRadius::same(255));
-                                if padded_button(ui, auto_btn, vec2(10.0, 3.5)).clicked() {
-                                    actions.push(SettingsAction::StartUpdateDownload(rel));
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
+                } else if compact_button(ui, "检查更新").clicked() {
+                    state.checking_updates = true;
+                    actions.push(SettingsAction::CheckUpdatesNow);
                 }
             });
         });
+
+        if let Some(rel) = state.available_update.clone() {
+            ui.add_space(6.0);
+            render_update_status_row(ui, &rel, &state.update_download, palette, actions);
+        }
 
         #[cfg(target_os = "macos")]
         {
@@ -655,6 +604,119 @@ fn render_general_tab(
 
         ui.label(RichText::new(hint).size(11.5).color(palette.text_muted));
     });
+}
+
+fn render_update_status_row(
+    ui: &mut Ui,
+    rel: &ReleaseInfo,
+    dl_state: &UpdateDownloadState,
+    palette: &EarthPalette,
+    actions: &mut Vec<SettingsAction>,
+) {
+    let (status_text, status_color) = match dl_state {
+        UpdateDownloadState::Downloading { version } if version == &rel.version => (
+            format!("⬇ 正在下载新版本 v{}…", rel.version),
+            palette.accent_text,
+        ),
+        UpdateDownloadState::ReadyToInstall { version, .. } if version == &rel.version => (
+            format!("✓ 新版本 v{} 已就绪", rel.version),
+            palette.success_text,
+        ),
+        UpdateDownloadState::Failed { version, error } if version == &rel.version => (
+            format!("⚠ v{} 自动下载失败：{error}", rel.version),
+            palette.warning_text,
+        ),
+        _ => (
+            format!("🎉 发现新版本 v{}", rel.version),
+            palette.accent_text,
+        ),
+    };
+
+    let reserve_w = match dl_state {
+        UpdateDownloadState::ReadyToInstall { version, .. } if version == &rel.version => 188.0,
+        UpdateDownloadState::Downloading { version } if version == &rel.version => 84.0,
+        UpdateDownloadState::Failed { version, .. }
+            if version == &rel.version && rel.download_url.is_some() =>
+        {
+            192.0
+        }
+        _ if rel.download_url.is_some() => 164.0,
+        _ => 84.0,
+    };
+
+    egui::Frame::NONE
+        .fill(palette.info_bg)
+        .stroke(Stroke::new(1.0, palette.info_border))
+        .corner_radius(CornerRadius::same(12))
+        .inner_margin(egui::Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.set_max_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let text_w = (ui.available_width() - reserve_w).max(80.0);
+                ui.allocate_ui_with_layout(
+                    vec2(text_w, 22.0),
+                    Layout::left_to_right(Align::Center),
+                    |ui| {
+                        ui.set_max_width(text_w);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&status_text).size(11.5).color(status_color),
+                            )
+                            .truncate(),
+                        )
+                        .on_hover_text(&status_text);
+                    },
+                );
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if compact_button(ui, "前往下载").clicked() {
+                        actions.push(SettingsAction::OpenUrl(rel.html_url.clone()));
+                    }
+                    match dl_state {
+                        UpdateDownloadState::ReadyToInstall {
+                            version,
+                            staged_path,
+                        } if version == &rel.version => {
+                            let restart_btn = egui::Button::new(
+                                RichText::new("重启完成更新")
+                                    .size(11.0)
+                                    .color(palette.on_accent),
+                            )
+                            .fill(palette.accent)
+                            .stroke(Stroke::NONE)
+                            .corner_radius(CornerRadius::same(255));
+                            if padded_button(ui, restart_btn, vec2(10.0, 3.5)).clicked() {
+                                actions.push(SettingsAction::ApplyUpdateAndRestart(
+                                    staged_path.clone(),
+                                ));
+                            }
+                        }
+                        UpdateDownloadState::Downloading { version } if version == &rel.version => {
+                        }
+                        UpdateDownloadState::Failed { version, .. }
+                            if version == &rel.version && rel.download_url.is_some() =>
+                        {
+                            if compact_button(ui, "重试自动更新").clicked() {
+                                actions.push(SettingsAction::StartUpdateDownload(rel.clone()));
+                            }
+                        }
+                        _ if rel.download_url.is_some() => {
+                            let auto_btn = egui::Button::new(
+                                RichText::new("自动更新")
+                                    .size(11.0)
+                                    .color(palette.on_accent),
+                            )
+                            .fill(palette.accent)
+                            .stroke(Stroke::NONE)
+                            .corner_radius(CornerRadius::same(255));
+                            if padded_button(ui, auto_btn, vec2(10.0, 3.5)).clicked() {
+                                actions.push(SettingsAction::StartUpdateDownload(rel.clone()));
+                            }
+                        }
+                        _ => {}
+                    }
+                });
+            });
+        });
 }
 
 fn shortcut_row(
@@ -1563,5 +1625,169 @@ mod tests {
             state.recording.is_none(),
             "focused button Space activation must not re-start recording on the frame capture finishes"
         );
+    }
+
+    #[test]
+    fn update_status_row_does_not_overlap_checkbox_or_buttons_at_compact_width() {
+        let ctx = egui::Context::default();
+        if std::path::Path::new("/Library/Fonts/Arial Unicode.ttf").exists()
+            && let Ok(bytes) = std::fs::read("/Library/Fonts/Arial Unicode.ttf")
+        {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "arial_unicode".into(),
+                egui::FontData::from_owned(bytes).into(),
+            );
+            if let Some(vec) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                vec.insert(0, "arial_unicode".into());
+            }
+            ctx.set_fonts(fonts);
+        }
+
+        let palette = EarthPalette::resolve(ThemeMode::Light, false);
+        let rel = ReleaseInfo {
+            version: "0.5.0".into(),
+            html_url: "https://github.com/lumingbao/Earth/releases/tag/v0.5.0".into(),
+            tag_name: "v0.5.0".into(),
+            download_url: Some(
+                "https://github.com/lumingbao/Earth/releases/download/v0.5.0/Earth-0.5.0-macOS-universal.dmg"
+                    .into(),
+            ),
+            asset_name: Some("Earth-0.5.0-macOS-universal.dmg".into()),
+            checksum_url: Some(
+                "https://github.com/lumingbao/Earth/releases/download/v0.5.0/SHA256SUMS.txt".into(),
+            ),
+        };
+
+        let states = [
+            (
+                "downloading",
+                UpdateDownloadState::Downloading {
+                    version: "0.5.0".into(),
+                },
+                "⬇ 正在下载新版本 v0.5.0",
+            ),
+            (
+                "ready",
+                UpdateDownloadState::ReadyToInstall {
+                    version: "0.5.0".into(),
+                    staged_path: PathBuf::from("/tmp/Earth.app"),
+                },
+                "✓ 新版本 v0.5.0 已就绪",
+            ),
+            (
+                "failed",
+                UpdateDownloadState::Failed {
+                    version: "0.5.0".into(),
+                    error: "连接超时".into(),
+                },
+                "⚠ v0.5.0 自动下载失败",
+            ),
+            ("idle", UpdateDownloadState::Idle, "🎉 发现新版本 v0.5.0"),
+        ];
+
+        fn collect_text_rects(shapes: &[egui::epaint::ClippedShape]) -> Vec<(String, egui::Rect)> {
+            let mut out = Vec::new();
+            fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(String, egui::Rect)>) {
+                match shape {
+                    egui::epaint::Shape::Text(t) => {
+                        out.push((t.galley.text().to_string(), t.visual_bounding_rect()));
+                    }
+                    egui::epaint::Shape::Vec(v) => {
+                        for child in v {
+                            walk(child, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for clipped in shapes {
+                walk(&clipped.shape, &mut out);
+            }
+            out
+        }
+
+        for (label, dl_state, status_needle) in states {
+            let mut settings = AppSettings::default();
+            let mut state = SettingsState {
+                active_tab: SettingsTab::General,
+                available_update: Some(rel.clone()),
+                update_download: dl_state,
+                ..Default::default()
+            };
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    vec2(424.0, 520.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let ctx = ui.ctx().clone();
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| {
+                        let _ = render_settings_view(
+                            ui,
+                            &ctx,
+                            SettingsViewData {
+                                settings: &mut settings,
+                                collections: &[],
+                                palette: &palette,
+                                storage_bytes: 0,
+                                item_count: 0,
+                                has_accessibility: true,
+                            },
+                            &mut state,
+                        );
+                    });
+            });
+            let rects = collect_text_rects(&out.shapes);
+            out.textures_delta.clear();
+
+            let (_, check_rect) = rects
+                .iter()
+                .find(|(t, _)| t.contains("启用更新提示检查"))
+                .expect("checkbox text should render");
+            let (_, check_btn_rect) = rects
+                .iter()
+                .find(|(t, _)| t == "检查更新")
+                .expect("check-now button should render");
+            let (_, dl_page_rect) = rects
+                .iter()
+                .find(|(t, _)| t == "前往下载")
+                .expect("open-download button should render");
+            let (_, status_rect) = rects
+                .iter()
+                .find(|(t, _)| t.contains(status_needle))
+                .unwrap_or_else(|| {
+                    panic!("status '{status_needle}' should render in state {label}")
+                });
+
+            assert!(
+                check_rect.right() + 4.0 <= check_btn_rect.left(),
+                "[{label}] checkbox overlapped check button: {check_rect:?} vs {check_btn_rect:?}"
+            );
+            assert!(
+                check_rect.bottom() <= status_rect.top(),
+                "[{label}] update status must render on its own row below checkbox: {check_rect:?} vs {status_rect:?}"
+            );
+            assert!(
+                status_rect.right() + 4.0 <= dl_page_rect.left(),
+                "[{label}] status text overlapped open-download button: {status_rect:?} vs {dl_page_rect:?}"
+            );
+            for btn_label in ["重启完成更新", "重试自动更新", "自动更新"] {
+                if let Some((_, action_btn_rect)) = rects.iter().find(|(t, _)| t == btn_label) {
+                    assert!(
+                        status_rect.right() + 4.0 <= action_btn_rect.left(),
+                        "[{label}] status text overlapped '{btn_label}': {status_rect:?} vs {action_btn_rect:?}"
+                    );
+                    assert!(
+                        action_btn_rect.right() + 4.0 <= dl_page_rect.left(),
+                        "[{label}] '{btn_label}' overlapped '前往下载': {action_btn_rect:?} vs {dl_page_rect:?}"
+                    );
+                }
+            }
+        }
     }
 }
