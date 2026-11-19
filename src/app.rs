@@ -148,6 +148,7 @@ impl EarthApp {
         platform::configure_macos_accessory_mode();
         platform::configure_main_window(cc);
         platform::install_shortcut_repaint_ctx(&cc.egui_ctx);
+        platform::install_system_theme_observer(&cc.egui_ctx);
 
         let (mut settings, settings_warning) = storage.load_settings_with_warning();
         crate::i18n::set_language(settings.language);
@@ -277,7 +278,10 @@ impl EarthApp {
             platform::activate_self_window();
         }
 
-        let cached_palette = EarthPalette::resolve(settings.theme_mode, false);
+        let initial_system_dark = platform::system_is_dark()
+            .or_else(|| cc.egui_ctx.system_theme().map(|t| t == egui::Theme::Dark))
+            .unwrap_or(false);
+        let cached_palette = EarthPalette::resolve(settings.theme_mode, initial_system_dark);
         let cached_accessibility = platform::has_accessibility_permission();
         let mut app = Self {
             storage,
@@ -1235,10 +1239,9 @@ impl eframe::App for EarthApp {
             return;
         }
 
-        let system_dark = ctx
-            .system_theme()
-            .map(|t| t == egui::Theme::Dark)
-            .unwrap_or_else(|| ctx.theme() == egui::Theme::Dark);
+        let system_dark = platform::system_is_dark()
+            .or_else(|| ctx.system_theme().map(|t| t == egui::Theme::Dark))
+            .unwrap_or(false);
         let ppp_key = (ctx.pixels_per_point() * 100.0).round() as u32;
         let theme_key = (self.settings.theme_mode, system_dark, ppp_key);
         if self.last_applied_theme != Some(theme_key) {

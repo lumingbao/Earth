@@ -100,8 +100,12 @@ pub struct EarthPalette {
 }
 
 impl EarthPalette {
-    pub fn resolve(mode: ThemeMode, _system_dark: bool) -> Self {
-        let dark = matches!(mode, ThemeMode::Dark);
+    pub fn resolve(mode: ThemeMode, system_dark: bool) -> Self {
+        let dark = match mode {
+            ThemeMode::Dark => true,
+            ThemeMode::Light => false,
+            ThemeMode::System => system_dark,
+        };
         if dark {
             // macOS Dark Mode (Apple HIG): neutral charcoal/graphite elevation + System Blue (#0A84FF)
             Self {
@@ -692,6 +696,20 @@ mod tests {
                 .color_transfer_function,
             FontColorTransferFunction::DARK_MODE_DEFAULT
         );
+    }
+
+    #[test]
+    fn system_theme_mode_follows_os_dark_flag_and_label_is_concise() {
+        let light = EarthPalette::resolve(ThemeMode::System, false);
+        let dark = EarthPalette::resolve(ThemeMode::System, true);
+        assert!(!light.is_dark);
+        assert!(dark.is_dark);
+        assert_ne!(light.window_bg, dark.window_bg);
+
+        assert_eq!(ThemeMode::System.label(), "跟随系统");
+        crate::i18n::with_test_language(crate::i18n::ResolvedLanguage::EnUs, || {
+            assert_eq!(ThemeMode::System.label(), "Follow System");
+        });
     }
 
     #[test]

@@ -57,6 +57,14 @@ pub fn install_shortcut_repaint_ctx(ctx: &egui::Context) {
     imp::install_shortcut_repaint_ctx(ctx);
 }
 
+pub fn install_system_theme_observer(ctx: &egui::Context) {
+    imp::install_system_theme_observer(ctx);
+}
+
+pub fn system_is_dark() -> Option<bool> {
+    imp::system_is_dark()
+}
+
 pub fn set_shortcut_recording(active: bool, allow_super: bool) {
     imp::set_shortcut_recording(active, allow_super);
 }

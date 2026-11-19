@@ -379,6 +379,40 @@ pub fn install_shortcut_repaint_ctx(ctx: &egui::Context) {
     }
 }
 
+pub fn install_system_theme_observer(_ctx: &egui::Context) {}
+
+pub fn system_is_dark() -> Option<bool> {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+
+    let subkey: Vec<u16> = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let value_name: Vec<u16> = "AppsUseLightTheme"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut value: u32 = 1;
+    let mut byte_len = std::mem::size_of::<u32>() as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            value_name.as_ptr(),
+            RRF_RT_REG_DWORD,
+            std::ptr::null_mut(),
+            (&mut value as *mut u32).cast(),
+            &mut byte_len,
+        )
+    };
+    if status == ERROR_SUCCESS {
+        Some(value == 0)
+    } else {
+        None
+    }
+}
+
 pub fn set_shortcut_recording(active: bool, allow_super: bool) {
     SHORTCUT_ALLOW_SUPER.store(allow_super, std::sync::atomic::Ordering::Release);
     SHORTCUT_RECORDING.store(active, std::sync::atomic::Ordering::Release);

@@ -112,6 +112,12 @@ pub fn autostart_entry_needs_refresh(expected_app_path: &str, autostart_arg: &st
 
 pub fn install_shortcut_repaint_ctx(_ctx: &egui::Context) {}
 
+pub fn install_system_theme_observer(_ctx: &egui::Context) {}
+
+pub fn system_is_dark() -> Option<bool> {
+    None
+}
+
 pub fn set_shortcut_recording(_active: bool, _allow_super: bool) {}
 
 pub fn poll_native_shortcut_event() -> Option<crate::platform::NativeShortcutEvent> {

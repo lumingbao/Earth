@@ -576,6 +576,94 @@ pub fn autostart_entry_needs_refresh(expected_app_path: &str, autostart_arg: &st
 
 pub fn install_shortcut_repaint_ctx(_ctx: &egui::Context) {}
 
+pub fn system_is_dark() -> Option<bool> {
+    let mtm = MainThreadMarker::new()?;
+    let app = NSApplication::sharedApplication(mtm);
+    let appearance: Option<Retained<objc2::runtime::AnyObject>> =
+        unsafe { objc2::msg_send![&app, effectiveAppearance] };
+    let appearance = appearance?;
+    let name: Option<Retained<objc2_foundation::NSString>> =
+        unsafe { objc2::msg_send![&appearance, name] };
+    let name = name?.to_string();
+    Some(name.contains("Dark"))
+}
+
+mod theme_observer {
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+    use objc2_foundation::{NSObject, NSObjectProtocol, ns_string};
+    use std::cell::RefCell;
+    use std::time::Duration;
+
+    pub struct ThemeObserverState {
+        ctx: egui::Context,
+    }
+
+    define_class!(
+        #[unsafe(super = NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = ThemeObserverState]
+        pub struct ThemeChangeObserver;
+
+        unsafe impl NSObjectProtocol for ThemeChangeObserver {}
+
+        impl ThemeChangeObserver {
+            #[unsafe(method(systemThemeChanged:))]
+            fn system_theme_changed(&self, _notification: Option<&AnyObject>) {
+                self.ivars().ctx.request_repaint();
+                self.ivars()
+                    .ctx
+                    .request_repaint_after(Duration::from_millis(120));
+            }
+        }
+    );
+
+    thread_local! {
+        static OBSERVER: RefCell<Option<Retained<ThemeChangeObserver>>> = const { RefCell::new(None) };
+    }
+
+    pub fn install(ctx: &egui::Context) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        OBSERVER.with(|slot| {
+            if slot.borrow().is_some() {
+                return;
+            }
+            let Some(center_cls) = AnyClass::get(c"NSDistributedNotificationCenter") else {
+                return;
+            };
+            let center: Option<Retained<AnyObject>> =
+                unsafe { msg_send![center_cls, defaultCenter] };
+            let Some(center) = center else {
+                return;
+            };
+            let observer =
+                ThemeChangeObserver::alloc(mtm).set_ivars(ThemeObserverState { ctx: ctx.clone() });
+            let observer: Retained<ThemeChangeObserver> =
+                unsafe { msg_send![super(observer), init] };
+            let target: &AnyObject = &observer;
+            let notif_name = ns_string!("AppleInterfaceThemeChangedNotification");
+            let nil_obj: *const AnyObject = std::ptr::null();
+            let _: () = unsafe {
+                msg_send![
+                    &*center,
+                    addObserver: target,
+                    selector: sel!(systemThemeChanged:),
+                    name: notif_name,
+                    object: nil_obj
+                ]
+            };
+            *slot.borrow_mut() = Some(observer);
+        });
+    }
+}
+
+pub fn install_system_theme_observer(ctx: &egui::Context) {
+    theme_observer::install(ctx);
+}
+
 pub fn set_shortcut_recording(_active: bool, _allow_super: bool) {}
 
 pub fn poll_native_shortcut_event() -> Option<crate::platform::NativeShortcutEvent> {
