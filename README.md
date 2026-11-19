@@ -69,26 +69,26 @@ node packaging/semver.test.js
 # 编译 Release 版本
 cargo build --release
 
-# 打包 macOS 开发产物（输出 Earth.app 和带 UNSIGNED 标记的安装包至 dist/）
+# 打包 macOS 开发产物（输出 Earth.app、DMG 与 PKG 至 dist/）
 ./scripts/package-macos.sh
 ```
 
 ### 平台说明
 - **macOS**：Earth 以无 Dock 图标的 Accessory 菜单栏应用运行（已在 `Info.plist` 设置 `LSUIElement=true`）。执行 `./scripts/package-macos.sh universal` 可生成通用二进制（`arm64` + `x86_64`）的 `dist/Earth.app`、DMG 与 PKG；`native` 参数仅构建本机架构。
-  - 默认 `EARTH_RELEASE_CHANNEL=development`，安装包文件名带 `-UNSIGNED`，应用仅做 Ad-hoc 签名，不具备公证，也不作为自动更新资产。正式产物必须显式设置 `EARTH_RELEASE_CHANNEL=official`，提供 Developer ID Application / Installer 身份与公证凭据；签名、发布者校验或公证任一步失败都会中止。PKG 按完整 SemVer 比较已安装应用版本，拒绝稳定版降至同核心版本的预发布版，以及预发布序号倒退。
+  - 默认 `EARTH_RELEASE_CHANNEL=development`，应用仅做 Ad-hoc 签名，不具备公证，也不作为自动更新资产。正式产物必须显式设置 `EARTH_RELEASE_CHANNEL=official`，提供 Developer ID Application / Installer 身份与公证凭据；签名、发布者校验或公证任一步失败都会中止。PKG 按完整 SemVer 比较已安装应用版本，拒绝稳定版降至同核心版本的预发布版，以及预发布序号倒退。
   - 若启用「选择后自动粘贴」，首次触发需在「系统设置 -> 隐私与安全性 -> 辅助功能」中授予权限；若版本重签名后已勾选仍提示未授权，请在「辅助功能」列表中选中 Earth 点击 `-` 移除后重新添加一次。
 - **Windows**：`src/platform/windows.rs` 已基于 `windows-sys` 实现高 DPI 自动缩放定位、系统托盘右键菜单、`SendInput` 自动模拟 `Ctrl+V` 粘贴及开机自启（Windows 可执行文件需在 Windows 本机环境或配置对应交叉编译目标后构建测试）。
-  - `scripts/package-windows.ps1` 同样默认生成带 `-UNSIGNED` 的开发安装包。正式模式会为 `Earth.exe` 与 Setup 安装器进行 Authenticode 签名，并核对可信证书 SHA-256；打包时检查 PE 版本资源，安装器通过系统 Windows Script Host 按完整 SemVer 拒绝降级。脚本运行受策略限制、版本损坏或目标目录中的已有应用缺少可靠安装登记时，会在覆盖文件前中止并提示处理。
+  - `scripts/package-windows.ps1` 同样默认生成未签名的开发安装包。正式模式会为 `Earth.exe` 与 Setup 安装器进行 Authenticode 签名，并核对可信证书 SHA-256；打包时检查 PE 版本资源，安装器通过系统 Windows Script Host 按完整 SemVer 拒绝降级。脚本运行受策略限制、版本损坏或目标目录中的已有应用缺少可靠安装登记时，会在覆盖文件前中止并提示处理。
 
 ### 下载未签名的开发包
 
-在仓库的 **Actions → Build & Release (Windows + macOS) → Run workflow** 中选择包含修复的分支，`platform` 选择 `all`，保持 `publish_release` **未勾选**。完成后，在该次运行的 **Artifacts** 下载 `earth-windows-x64-development`（Setup EXE、便携 ZIP）或 `earth-macos-universal-development`（DMG、PKG）。解压后的安装包文件名带 `-UNSIGNED`；此流程无需配置签名证书，也不会创建 GitHub Release。
+在仓库的 **Actions → Build & Release (Windows + macOS) → Run workflow** 中选择包含修复的分支，`platform` 选择 `all`，保持 `publish_release` **未勾选**。完成后，在该次运行的 **Artifacts** 下载 `earth-windows-x64-development`（Setup EXE、便携 ZIP）或 `earth-macos-universal-development`（DMG、PKG）；此流程无需配置签名证书，也不会创建 GitHub Release。
 
 ### 发布与签名配置
 
 所有版本均从 `Cargo.toml` 通过 `cargo metadata` 读取。发布标签必须严格等于 `v{Cargo 版本}`；CI 的格式检查、Clippy 和测试分别作为独立门禁。推送版本标签（或手动选择匹配标签并勾选 `publish_release`）时：
 
-- **若仓库未配置签名证书**：对应平台自动回退为未签名构建（文件名带 `-UNSIGNED`），并照常生成 `SHA256SUMS.txt` 与 GitHub Release（首次运行需按系统提示手动放行，客户端内自动更新保留「前往下载」手动模式）。
+- **若仓库未配置签名证书**：对应平台自动回退为未签名构建，照常生成安装包、`SHA256SUMS.txt` 与 GitHub Release（首次运行需按系统提示手动放行，客户端内自动更新保留「前往下载」手动模式）。
 - **若仓库完整配置了对应平台的签名凭据**：按 `official` 模式进行代码签名、Apple 公证与可信发布者校验，仅发布签名通过的正式产物；若**只配置了部分**凭据变量或 Secret，工作流会直接报错中止以防意外降级。
 
 在 GitHub Actions 仓库配置中设置（可选，用于正式签名与内建自动更新验证）：

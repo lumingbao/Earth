@@ -12,7 +12,7 @@ on:
         type: choice
         options: [all, windows, macos]
       publish_release:
-        description: "Publish a GitHub Release from the matching version tag (signed if credentials exist, otherwise -UNSIGNED)"
+        description: "Publish a GitHub Release from the matching version tag (signed if credentials exist, otherwise unsigned)"
         required: false
         default: false
         type: boolean
@@ -113,7 +113,7 @@ jobs:
             fi
             windows_channel="official"
           elif (( win_present == 0 )); then
-            echo "::notice::Windows signing credentials are not configured; building unsigned Windows release artifacts (-UNSIGNED)."
+            echo "::notice::Windows signing credentials are not configured; building unsigned Windows release artifacts."
             windows_channel="development"
           else
             echo "::error::Incomplete Windows signing configuration; missing: ${win_missing[*]}" >&2
@@ -146,7 +146,7 @@ jobs:
             fi
             macos_channel="official"
           elif (( mac_present == 0 )); then
-            echo "::notice::macOS signing/notarization credentials are not configured; building unsigned macOS release artifacts (-UNSIGNED)."
+            echo "::notice::macOS signing/notarization credentials are not configured; building unsigned macOS release artifacts."
             macos_channel="development"
           else
             echo "::error::Incomplete macOS signing configuration; missing: ${mac_missing[*]}" >&2
@@ -316,26 +316,16 @@ jobs:
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.validate-version.outputs.tag }}
-          WINDOWS_CHANNEL: ${{ needs.validate-version.outputs.windows_channel }}
-          MACOS_CHANNEL: ${{ needs.validate-version.outputs.macos_channel }}
         run: |
           set -euo pipefail
           cd release-artifacts
           shopt -s nullglob
           version="${RELEASE_TAG#v}"
-          win_suffix=""
-          if [[ "$WINDOWS_CHANNEL" != "official" ]]; then
-            win_suffix="-UNSIGNED"
-          fi
-          mac_suffix=""
-          if [[ "$MACOS_CHANNEL" != "official" ]]; then
-            mac_suffix="-UNSIGNED"
-          fi
           expected=(
-            "Earth-${version}-Windows-x64-Portable${win_suffix}.zip"
-            "Earth-${version}-Windows-x64-Setup${win_suffix}.exe"
-            "Earth-${version}-macOS-universal${mac_suffix}.dmg"
-            "Earth-${version}-macOS-universal${mac_suffix}.pkg"
+            "Earth-${version}-Windows-x64-Portable.zip"
+            "Earth-${version}-Windows-x64-Setup.exe"
+            "Earth-${version}-macOS-universal.dmg"
+            "Earth-${version}-macOS-universal.pkg"
           )
           artifacts=(Earth-*)
           (( ${#artifacts[@]} == ${#expected[@]} )) || {

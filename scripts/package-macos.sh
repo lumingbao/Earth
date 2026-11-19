@@ -71,8 +71,6 @@ DMG_PATH="${DIST_DIR}/Earth-${VERSION}-macOS-${ARCH_LABEL}.dmg"
 PKG_PATH="${DIST_DIR}/Earth-${VERSION}-macOS-${ARCH_LABEL}.pkg"
 
 if [[ "$CHANNEL" == "development" ]]; then
-    DMG_PATH="${DIST_DIR}/Earth-${VERSION}-macOS-${ARCH_LABEL}-UNSIGNED.dmg"
-    PKG_PATH="${DIST_DIR}/Earth-${VERSION}-macOS-${ARCH_LABEL}-UNSIGNED.pkg"
     echo "WARNING: development artifacts are ad-hoc signed, unnotarized, and not eligible for automatic updates." >&2
 fi
 

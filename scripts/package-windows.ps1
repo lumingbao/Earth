@@ -61,7 +61,6 @@ if ($ResourceVersion.ProductName -ne "Earth" -or $ResourceVersion.ProductVersion
     throw "Earth.exe is missing the expected target Windows version resources"
 }
 Sign-AndVerify $StagedExe
-$ArtifactSuffix = if ($Channel -eq "official") { "" } else { "-UNSIGNED" }
 if ($Channel -ne "official") { Write-Warning "Development artifacts are unsigned and are not eligible for automatic updates or official releases." }
 
 # Verify CRT is statically linked so Earth.exe runs on clean Windows without VCRUNTIME140.dll
@@ -124,7 +123,7 @@ if ($BadRuntime) {
 }
 
 # 1. Portable ZIP package
-$ZipPath = Join-Path $DistDir "Earth-$Version-Windows-x64-Portable$ArtifactSuffix.zip"
+$ZipPath = Join-Path $DistDir "Earth-$Version-Windows-x64-Portable.zip"
 Write-Host "==> Creating portable archive: $ZipPath"
 Compress-Archive -Path $StagedExe -DestinationPath $ZipPath -CompressionLevel Optimal -Force
 
@@ -147,7 +146,7 @@ if (-not $Makensis) {
     throw "makensis.exe not found. Please install NSIS (e.g. choco install nsis -y)."
 }
 
-$SetupPath = Join-Path $DistDir "Earth-$Version-Windows-x64-Setup$ArtifactSuffix.exe"
+$SetupPath = Join-Path $DistDir "Earth-$Version-Windows-x64-Setup.exe"
 $NsiScript = Join-Path $RootDir "packaging\windows\installer.nsi"
 $IconPath = Join-Path $RootDir "packaging\windows\earth.ico"
 $VersionCheckScript = Join-Path $RootDir "packaging\semver.js"
