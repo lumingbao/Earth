@@ -103,29 +103,36 @@ pub fn render_popup_view(
             .shadow(card_shadow(palette))
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width());
+                let inner_w = ui.available_width();
+                ui.set_min_width(inner_w);
+                ui.set_max_width(inner_w);
+                let text_w = (inner_w - 28.0).max(80.0);
                 ui.horizontal(|ui| {
-                    let msg_w = (ui.available_width() - 136.0).max(120.0);
-                    ui.allocate_ui(vec2(msg_w, 18.0), |ui| {
-                        ui.set_max_width(msg_w);
-                        ui.add(
-                            egui::Label::new(
-                                RichText::new(t("banner.accessibility_warn"))
-                                    .size(11.0)
-                                    .color(palette.text_primary),
-                            )
-                            .truncate(),
-                        );
-                    });
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.allocate_ui_with_layout(
+                        vec2(text_w, 18.0),
+                        Layout::top_down(Align::Min),
+                        |ui| {
+                            ui.set_max_width(text_w);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(t("banner.accessibility_warn"))
+                                        .size(11.5)
+                                        .color(palette.text_primary),
+                                )
+                                .wrap(),
+                            );
+                        },
+                    );
+                    ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                         if dismiss_button(ui).clicked() {
                             state.dismissed_accessibility_banner = true;
                         }
-                        if compact_button(ui, t("banner.accessibility_btn")).clicked() {
-                            actions.push(PopupAction::OpenAccessibilitySettings);
-                        }
                     });
                 });
+                ui.add_space(4.0);
+                if compact_button(ui, t("banner.accessibility_btn")).clicked() {
+                    actions.push(PopupAction::OpenAccessibilitySettings);
+                }
             });
         ui.add_space(4.0);
     } else if settings.check_updates

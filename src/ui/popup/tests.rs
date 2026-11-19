@@ -2407,3 +2407,107 @@ fn accessibility_copy_status_banner_does_not_overlap_action_button_or_overflow()
         });
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn persistent_accessibility_banner_wraps_full_message_without_truncation() {
+    for lang in [
+        crate::i18n::ResolvedLanguage::ZhCn,
+        crate::i18n::ResolvedLanguage::EnUs,
+    ] {
+        crate::i18n::with_test_language(lang, || {
+            let ctx = egui::Context::default();
+            let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+            palette.apply_to_ctx(&ctx);
+
+            let mut settings = AppSettings {
+                auto_paste: true,
+                ..Default::default()
+            };
+            let collections = Vec::new();
+            let results = Vec::new();
+            let mut state = PopupState::default();
+
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    vec2(424.0, 520.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let ctx = ui.ctx().clone();
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| {
+                        let _ = render_popup_view(
+                            ui,
+                            &ctx,
+                            PopupViewData {
+                                settings: &mut settings,
+                                results: &results,
+                                collections: &collections,
+                                palette: &palette,
+                                storage_bytes: 0,
+                                total_items: 0,
+                                has_accessibility: false,
+                            },
+                            &mut state,
+                        );
+                    });
+            });
+            out.textures_delta.clear();
+
+            let mut rects = Vec::new();
+            let mut full_galley_text = None;
+            fn walk(
+                shape: &egui::epaint::Shape,
+                out: &mut Vec<(String, egui::Rect)>,
+                needle: &str,
+                elided_hit: &mut Option<bool>,
+            ) {
+                match shape {
+                    egui::epaint::Shape::Text(t) => {
+                        let txt = t.galley.text().to_string();
+                        if txt == needle {
+                            *elided_hit = Some(t.galley.elided);
+                        }
+                        out.push((txt, t.visual_bounding_rect()));
+                    }
+                    egui::epaint::Shape::Vec(v) => {
+                        for child in v {
+                            walk(child, out, needle, elided_hit);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let expected_msg = crate::i18n::t("banner.accessibility_warn");
+            for clipped in &out.shapes {
+                walk(
+                    &clipped.shape,
+                    &mut rects,
+                    expected_msg,
+                    &mut full_galley_text,
+                );
+            }
+
+            assert_eq!(
+                full_galley_text,
+                Some(false),
+                "[{lang:?}] persistent accessibility warning must not be elided/truncated"
+            );
+            let (_, msg_rect) = rects.iter().find(|(text, _)| text == expected_msg).unwrap();
+            let expected_btn = crate::i18n::t("banner.accessibility_btn");
+            let (_, btn_rect) = rects.iter().find(|(text, _)| text == expected_btn).unwrap();
+            assert!(
+                msg_rect.right() <= 394.0,
+                "[{lang:?}] warning text overflowed into dismiss button: {msg_rect:?}"
+            );
+            assert!(
+                msg_rect.bottom() <= btn_rect.top(),
+                "[{lang:?}] warning text overlapped action button: {msg_rect:?} vs {btn_rect:?}"
+            );
+        });
+    }
+}
