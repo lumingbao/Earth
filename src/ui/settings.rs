@@ -356,9 +356,25 @@ pub fn render_settings_view(
                 .shadow(card_shadow(palette))
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
+                    let inner_w = ui.available_width();
+                    ui.set_min_width(inner_w);
+                    ui.set_max_width(inner_w);
+                    let text_w = (inner_w - 28.0).max(80.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(msg).size(12.0).color(palette.text_primary));
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.allocate_ui_with_layout(
+                            vec2(text_w, 18.0),
+                            Layout::top_down(Align::Min),
+                            |ui| {
+                                ui.set_max_width(text_w);
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(msg).size(12.0).color(palette.text_primary),
+                                    )
+                                    .wrap(),
+                                );
+                            },
+                        );
+                        ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                             if dismiss_button(ui).clicked() {
                                 clear_status = true;
                             }

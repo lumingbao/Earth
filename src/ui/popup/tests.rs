@@ -2309,3 +2309,101 @@ fn popup_status_banner_auto_dismisses_after_three_seconds() {
     assert!(!t3.iter().any(|s| s.contains("已粘贴到当前目标窗口")));
     assert!(state.status_banner.is_none());
 }
+
+#[test]
+fn accessibility_copy_status_banner_does_not_overlap_action_button_or_overflow() {
+    for lang in [
+        crate::i18n::ResolvedLanguage::ZhCn,
+        crate::i18n::ResolvedLanguage::EnUs,
+    ] {
+        crate::i18n::with_test_language(lang, || {
+            let ctx = egui::Context::default();
+            let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+            palette.apply_to_ctx(&ctx);
+
+            let mut settings = AppSettings::default();
+            let collections = Vec::new();
+            let results = Vec::new();
+            let mut state = PopupState::default();
+            state.set_status_banner(crate::i18n::t("app.accessibility_paste_hint"), true);
+
+            let raw = egui::RawInput {
+                time: Some(1.0),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0),
+                    vec2(424.0, 520.0),
+                )),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let ctx = ui.ctx().clone();
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::NONE)
+                    .show(ui, |ui| {
+                        let _ = render_popup_view(
+                            ui,
+                            &ctx,
+                            PopupViewData {
+                                settings: &mut settings,
+                                results: &results,
+                                collections: &collections,
+                                palette: &palette,
+                                storage_bytes: 0,
+                                total_items: 0,
+                                has_accessibility: false,
+                            },
+                            &mut state,
+                        );
+                    });
+            });
+            out.textures_delta.clear();
+
+            let mut rects = Vec::new();
+            fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(String, egui::Rect)>) {
+                match shape {
+                    egui::epaint::Shape::Text(t) => {
+                        out.push((t.galley.text().to_string(), t.visual_bounding_rect()));
+                    }
+                    egui::epaint::Shape::Vec(v) => {
+                        for child in v {
+                            walk(child, out);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for clipped in &out.shapes {
+                walk(&clipped.shape, &mut rects);
+            }
+
+            let expected_msg = crate::i18n::t("app.accessibility_paste_hint");
+            let (_, msg_rect) = rects
+                .iter()
+                .find(|(text, _)| text == expected_msg)
+                .unwrap_or_else(|| panic!("[{lang:?}] banner message should render"));
+            assert!(
+                msg_rect.right() <= 394.0,
+                "[{lang:?}] banner message overflowed into dismiss button or right edge: {msg_rect:?}"
+            );
+
+            #[cfg(target_os = "macos")]
+            {
+                let expected_btn = crate::i18n::t("footer.open_accessibility");
+                let (_, btn_rect) = rects
+                    .iter()
+                    .find(|(text, _)| text == expected_btn)
+                    .unwrap_or_else(|| {
+                        panic!("[{lang:?}] accessibility action button should render")
+                    });
+                assert!(
+                    msg_rect.bottom() <= btn_rect.top(),
+                    "[{lang:?}] banner text overlapped accessibility action button: {msg_rect:?} vs {btn_rect:?}"
+                );
+                assert!(
+                    btn_rect.right() <= 410.0,
+                    "[{lang:?}] accessibility action button overflowed viewport: {btn_rect:?}"
+                );
+            }
+        });
+    }
+}

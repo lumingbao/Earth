@@ -168,6 +168,7 @@ pub(super) fn render_banner(
     } else {
         (palette.success_bg, palette.success_border)
     };
+    let has_ax_action = show_ax_btn && is_warn && cfg!(target_os = "macos");
     egui::Frame::NONE
         .fill(bg)
         .stroke(Stroke::new(1.0, border))
@@ -175,21 +176,36 @@ pub(super) fn render_banner(
         .shadow(card_shadow(palette))
         .inner_margin(egui::Margin::symmetric(10, 6))
         .show(ui, |ui| {
+            let inner_w = ui.available_width();
+            ui.set_min_width(inner_w);
+            ui.set_max_width(inner_w);
+            let text_w = (inner_w - 28.0).max(80.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new(msg).size(11.5).color(palette.text_primary));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                ui.allocate_ui_with_layout(
+                    vec2(text_w, 18.0),
+                    Layout::top_down(Align::Min),
+                    |ui| {
+                        ui.set_max_width(text_w);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(msg).size(11.5).color(palette.text_primary),
+                            )
+                            .wrap(),
+                        );
+                    },
+                );
+                ui.with_layout(Layout::right_to_left(Align::Min), |ui| {
                     if dismiss_button(ui).clicked() {
                         close_clicked = true;
                     }
-                    if show_ax_btn
-                        && is_warn
-                        && cfg!(target_os = "macos")
-                        && compact_button(ui, t("footer.open_accessibility")).clicked()
-                    {
-                        actions.push(PopupAction::OpenAccessibilitySettings);
-                    }
                 });
             });
+            if has_ax_action {
+                ui.add_space(4.0);
+                if compact_button(ui, t("footer.open_accessibility")).clicked() {
+                    actions.push(PopupAction::OpenAccessibilitySettings);
+                }
+            }
         });
     ui.add_space(4.0);
     close_clicked
