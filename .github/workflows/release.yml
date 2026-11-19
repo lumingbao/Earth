@@ -313,7 +313,6 @@ jobs:
           path: release-artifacts
           merge-multiple: true
       - name: Verify release artifact set and generate checksums
-        id: verify
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.validate-version.outputs.tag }}
@@ -352,16 +351,6 @@ jobs:
           done
           sha256sum "${expected[@]}" > SHA256SUMS.txt
           sha256sum --check SHA256SUMS.txt
-          if [[ "$WINDOWS_CHANNEL" != "official" || "$MACOS_CHANNEL" != "official" ]]; then
-            {
-              echo 'release_notes<<EARTH_NOTES_EOF'
-              echo '> [!WARNING]'
-              echo '> 本版本包含未签名的构建产物（`-UNSIGNED`），因为仓库尚未配置完整的官方代码签名 / Apple 公证凭据。首次运行前请按需在系统安全提示中手动放行；客户端内自动更新将保留「前往下载」手动模式。'
-              echo 'EARTH_NOTES_EOF'
-            } >> "$GITHUB_OUTPUT"
-          else
-            echo "release_notes=" >> "$GITHUB_OUTPUT"
-          fi
       - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -370,5 +359,4 @@ jobs:
           name: Earth ${{ needs.validate-version.outputs.tag }}
           prerelease: ${{ needs.validate-version.outputs.prerelease == 'true' }}
           generate_release_notes: true
-          body: ${{ steps.verify.outputs.release_notes }}
           files: release-artifacts/*
