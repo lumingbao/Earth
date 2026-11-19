@@ -277,7 +277,8 @@ mod tests {
     fn decoder_downscales_before_upload_and_rejects_oversized_files() {
         let dir = std::env::temp_dir().join(format!("earth-preview-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("preview #1%?.png");
+        // Keep spaces and URL-reserved chars valid across Windows and POSIX filesystems (`?` is illegal on Windows).
+        let path = dir.join("preview #1%.png");
         image::RgbaImage::from_pixel(4096, 16, image::Rgba([10, 20, 30, 255]))
             .save(&path)
             .unwrap();
