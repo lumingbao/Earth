@@ -5,3 +5,7 @@
 .DS_Store
 earth.db*
 settings.json
+.idea
+.codex
+.openidea
+skills
