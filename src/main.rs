@@ -18,13 +18,14 @@ use app::EarthApp;
 use std::sync::Arc;
 
 fn main() -> eframe::Result<()> {
+    i18n::set_language(i18n::AppLanguage::System);
     let (storage, instance_lock) = match storage::Storage::open_primary() {
         Ok(Some(primary)) => primary,
         Ok(None) => return Ok(()),
         Err(message) => {
             eprintln!("Earth: {message}");
             rfd::MessageDialog::new()
-                .set_title("Earth 无法启动")
+                .set_title(i18n::t("app.startup_failed_title"))
                 .set_description(message)
                 .set_level(rfd::MessageLevel::Error)
                 .show();

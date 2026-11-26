@@ -57,7 +57,7 @@ impl ImagePreview {
                 Err(TryRecvError::Disconnected)
                     if !pending.cancel.load(Ordering::Relaxed) && pending.key == path =>
                 {
-                    self.error = Some("图片预览后台任务已停止".into());
+                    self.error = Some(crate::i18n::t("media.err_preview_stopped").into());
                 }
                 _ => {}
             }
@@ -105,7 +105,7 @@ impl Drop for ImagePreview {
 fn decode_preview(path: &str, max_side: u32) -> Result<ColorImage, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("读取图片失败: {e}"))?;
     if file.metadata().map_err(|e| e.to_string())?.len() > MAX_IMAGE_BYTES {
-        return Err("图片超过 32 MiB 预览上限，可另存后在图片应用中打开".into());
+        return Err(crate::i18n::t("media.err_preview_too_large").into());
     }
     let mut reader = image::ImageReader::new(std::io::BufReader::new(file))
         .with_guessed_format()

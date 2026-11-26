@@ -1,11 +1,33 @@
+#[cfg(test)]
 use super::should_ignore_app;
-use crate::model::{ActiveAppInfo, AppSettings};
+use super::should_ignore_app_compiled;
+use crate::model::ActiveAppInfo;
+#[cfg(test)]
+use crate::model::AppSettings;
 
+#[cfg(test)]
 pub(super) fn source_allowed(app: Option<&ActiveAppInfo>, settings: &AppSettings) -> bool {
     !settings.ignored_apps.iter().any(|s| !s.trim().is_empty())
         || app.is_some_and(|a| {
             (!a.app_name.is_empty() || !a.process_or_bundle.is_empty())
                 && !should_ignore_app(&a.app_name, &a.process_or_bundle, settings)
+        })
+}
+
+pub(super) fn source_allowed_compiled(
+    app: Option<&ActiveAppInfo>,
+    ignored_apps_lower: &[String],
+    ignore_only_outside_list: bool,
+) -> bool {
+    ignored_apps_lower.is_empty()
+        || app.is_some_and(|a| {
+            (!a.app_name.is_empty() || !a.process_or_bundle.is_empty())
+                && !should_ignore_app_compiled(
+                    &a.app_name,
+                    &a.process_or_bundle,
+                    ignored_apps_lower,
+                    ignore_only_outside_list,
+                )
         })
 }
 fn canonical(s: &str) -> String {

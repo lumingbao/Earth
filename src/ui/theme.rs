@@ -1,8 +1,8 @@
 use crate::model::{MatchHighlight, ThemeMode};
+use crate::search::MatchMask;
 use egui::epaint::FontColorTransferFunction;
 use egui::epaint::text::{FontData, FontFamily, FontInsert, FontPriority, InsertFontFamily};
 use egui::{Color32, CornerRadius, FontId, Stroke, Style, TextFormat, Ui, Visuals};
-use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -356,7 +356,7 @@ pub fn desktop_scroll_source() -> egui::scroll_area::ScrollSource {
 
 pub fn build_highlighted_layout_job(
     text: &str,
-    matched_indices: &HashSet<usize>,
+    matched_indices: &MatchMask,
     highlight_mode: MatchHighlight,
     palette: &EarthPalette,
     font_size: f32,
@@ -374,7 +374,7 @@ pub fn build_highlighted_layout_job(
     };
     let base_color = palette.text_primary;
 
-    if matched_indices.is_empty() {
+    if matched_indices.is_empty() || text.is_empty() {
         job.append(
             text,
             0.0,
@@ -387,30 +387,29 @@ pub fn build_highlighted_layout_job(
         return job;
     }
 
-    let mut run = String::new();
-    let mut run_matched = false;
+    let mut run_start = 0usize;
+    let mut run_matched = matched_indices.contains(&0);
 
-    for (char_idx, ch) in text.chars().enumerate() {
+    for (char_idx, (byte_idx, _)) in text.char_indices().enumerate() {
         let is_matched = matched_indices.contains(&char_idx);
-        if char_idx > 0 && is_matched != run_matched && !run.is_empty() {
+        if char_idx > 0 && is_matched != run_matched {
             append_run(
                 &mut job,
-                &run,
+                &text[run_start..byte_idx],
                 run_matched,
                 highlight_mode,
                 palette,
                 font_size,
                 base_color,
             );
-            run.clear();
+            run_start = byte_idx;
+            run_matched = is_matched;
         }
-        run_matched = is_matched;
-        run.push(ch);
     }
-    if !run.is_empty() {
+    if run_start < text.len() {
         append_run(
             &mut job,
-            &run,
+            &text[run_start..],
             run_matched,
             highlight_mode,
             palette,

@@ -89,18 +89,34 @@ pub struct ClipItem {
     pub is_url: bool,
     #[serde(default)]
     pub note: Option<String>,
+    /// Set on lightweight resident history snapshots when `text_content` was truncated in SQL.
+    #[serde(skip)]
+    pub text_truncated: bool,
+    /// Indicates whether the stored SQLite row has HTML or RTF rich-text representations.
+    #[serde(skip)]
+    pub has_rich_text: bool,
 }
 
 impl ClipItem {
     pub fn searchable_text(&self) -> String {
-        let base = match self.kind {
-            ClipKind::Text => self.text_content.clone().unwrap_or_default(),
-            ClipKind::Files => self
-                .files
-                .iter()
-                .map(|f| format!("{} {}", f.name, f.path))
-                .collect::<Vec<_>>()
-                .join("\n"),
+        self.searchable_text_with(self.text_content.as_deref())
+    }
+
+    pub fn searchable_text_with(&self, text_override: Option<&str>) -> String {
+        let mut base = match self.kind {
+            ClipKind::Text => text_override.unwrap_or_default().to_string(),
+            ClipKind::Files => {
+                let mut out = String::new();
+                for (i, f) in self.files.iter().enumerate() {
+                    if i > 0 {
+                        out.push('\n');
+                    }
+                    out.push_str(&f.name);
+                    out.push(' ');
+                    out.push_str(&f.path);
+                }
+                out
+            }
             ClipKind::Image => {
                 let dims = match (self.image_width, self.image_height) {
                     (Some(w), Some(h)) => format!("{}x{}", w, h),
@@ -119,10 +135,10 @@ impl ClipItem {
             .map(str::trim)
             .filter(|n| !n.is_empty())
         {
-            format!("{base}\n{note}")
-        } else {
-            base
+            base.push('\n');
+            base.push_str(note);
         }
+        base
     }
 
     pub fn is_sensitive(&self) -> bool {
@@ -408,7 +424,7 @@ impl Default for AppSettings {
             max_image_megapixels: 40,
             sort_order: SortOrder::LastCopiedAt,
 
-            theme_mode: ThemeMode::Light,
+            theme_mode: ThemeMode::System,
             popup_position: PopupPosition::Cursor,
             pin_position: PinPosition::Bottom,
             match_highlight: MatchHighlight::Bold,

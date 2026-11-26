@@ -14,6 +14,7 @@ pub fn render_popup_view(
         storage_bytes,
         total_items,
         has_accessibility,
+        load_full_item,
     } = data;
     let mut actions = Vec::new();
 
@@ -359,6 +360,7 @@ pub fn render_popup_view(
                 render_preview_pane(
                     ui,
                     selected_item,
+                    load_full_item,
                     settings.enable_privacy_masking,
                     collections,
                     state,
@@ -386,7 +388,7 @@ pub fn render_popup_view(
         && let Some(sid) = state.selected_id
         && let Some(sel) = results.iter().find(|r| r.item.id == sid)
     {
-        state.ensure_preview_cache(&sel.item);
+        state.ensure_preview_cache_with(&sel.item, load_full_item);
     }
 
     match state.workbench_side {

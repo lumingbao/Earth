@@ -1,3 +1,4 @@
+use crate::i18n::{t, tf};
 use crate::model::{AppSettings, ClipItem, ClipKind, Collection, FileEntry};
 use crate::transforms::{detect_color, detect_sensitive_label, detect_url};
 use chrono::Utc;
@@ -12,6 +13,8 @@ mod files;
 pub mod history;
 #[cfg(test)]
 mod regression_tests;
+
+pub use backup::ImportSummary;
 
 use files::{
     PendingMedia, atomic_private_write, ensure_private_file, managed_media_path, private_dir,
@@ -50,7 +53,8 @@ pub struct Storage {
 
 impl Storage {
     pub fn open_primary() -> Result<Option<(Self, crate::instance::InstanceGuard)>, String> {
-        let proj = ProjectDirs::from("io", "earth", "Earth").ok_or("无法解析系统应用数据目录")?;
+        let proj =
+            ProjectDirs::from("io", "earth", "Earth").ok_or_else(|| t("storage.err_data_dir"))?;
         let dir = proj.data_dir();
         let open = || -> Result<_, String> {
             private_dir(dir).map_err(|e| e.to_string())?;
@@ -66,7 +70,43 @@ impl Storage {
             };
             Ok(Some((Self::open_in_dir(dir)?, instance)))
         };
-        open().map_err(|e| format!("{e}\n\n数据目录：{}\n请确认有足够的磁盘空间和读写权限。需要恢复时，请先备份整个数据目录。", dir.display()))
+        open().map_err(|e| {
+            let dir_str = dir.display().to_string();
+            tf(
+                "storage.err_open_primary_hint",
+                &[("error", &e), ("dir", &dir_str)],
+            )
+        })
+    }
+
+    pub fn base_dir(&self) -> &Path {
+        &self.base_dir
+    }
+
+    /// Opens a secondary connection to an already-initialized data directory (e.g. for
+    /// background backup export/import) without repeating startup permission sweeps or GC.
+    pub fn open_existing_in_dir(base_dir: &Path) -> Result<Self, String> {
+        let base_dir = base_dir
+            .canonicalize()
+            .map_err(|e| format!("解析数据目录失败: {e}"))?;
+        let images_dir = base_dir.join("images");
+        let thumbs_dir = base_dir.join("thumbs");
+        let db_path = base_dir.join("earth.db");
+        let conn = Connection::open(&db_path).map_err(|e| format!("打开数据库失败: {e}"))?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|e| format!("配置数据库等待时间失败: {e}"))?;
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA foreign_keys = ON;",
+        )
+        .map_err(|e| format!("配置 SQLite PRAGMA 失败: {e}"))?;
+        Ok(Self {
+            base_dir,
+            images_dir,
+            thumbs_dir,
+            conn,
+        })
     }
 
     pub fn open_in_dir(base_dir: &Path) -> Result<Self, String> {
@@ -121,8 +161,12 @@ impl Storage {
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .map_err(|e| format!("读取数据库版本失败: {e}"))?;
         if version > SCHEMA_VERSION {
-            return Err(format!(
-                "数据库版本 {version} 高于本版本支持的 {SCHEMA_VERSION}，请升级 Earth"
+            return Err(tf(
+                "storage.err_future_schema",
+                &[
+                    ("version", &version.to_string()),
+                    ("supported", &SCHEMA_VERSION.to_string()),
+                ],
             ));
         }
         if version == SCHEMA_VERSION {
@@ -206,11 +250,11 @@ impl Storage {
             let now = Utc::now().timestamp_millis();
             tx.execute(
                 "INSERT OR IGNORE INTO collections (name, color_hex, created_at) VALUES (?1, ?2, ?3)",
-                params!["常用指令", "#456EFD", now],
+                params![t("storage.default_col_commands"), "#456EFD", now],
             ).map_err(|e| format!("创建初始收藏分组失败: {e}"))?;
             tx.execute(
                 "INSERT OR IGNORE INTO collections (name, color_hex, created_at) VALUES (?1, ?2, ?3)",
-                params!["代码片段", "#22C55E", now],
+                params![t("storage.default_col_snippets"), "#22C55E", now],
             ).map_err(|e| format!("创建初始收藏分组失败: {e}"))?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)
@@ -240,7 +284,10 @@ impl Storage {
                     };
                     return (
                         defaults,
-                        Some(format!("设置损坏且无法保留副本，已暂停监听: {err}")),
+                        Some(tf(
+                            "storage.warn_settings_corrupt_no_copy",
+                            &[("error", &err.to_string())],
+                        )),
                     );
                 }
             }
@@ -252,7 +299,13 @@ impl Storage {
                     paused: true,
                     ..Default::default()
                 };
-                return (defaults, Some(format!("无法读取设置，已暂停监听: {err}")));
+                return (
+                    defaults,
+                    Some(tf(
+                        "storage.warn_settings_unreadable",
+                        &[("error", &err.to_string())],
+                    )),
+                );
             }
         }
         let backup = self.base_dir.join("settings.json.bak");
@@ -263,9 +316,9 @@ impl Storage {
             return (
                 settings,
                 Some(if restored.is_ok() {
-                    "设置文件损坏，已保留副本并恢复上一次有效设置".to_string()
+                    t("storage.warn_settings_restored").to_string()
                 } else {
-                    "设置文件损坏，已加载备份，但无法写回设置文件".to_string()
+                    t("storage.warn_settings_loaded_bak").to_string()
                 }),
             );
         }
@@ -273,7 +326,10 @@ impl Storage {
             paused: true,
             ..Default::default()
         };
-        (defaults, Some("设置文件损坏且无有效备份，已保留副本并恢复默认设置；监听已暂停，请检查隐私规则后恢复".to_string()))
+        (
+            defaults,
+            Some(t("storage.warn_settings_reset_paused").to_string()),
+        )
     }
 
     pub fn save_settings(&self, settings: &AppSettings) -> Result<(), String> {
@@ -451,27 +507,57 @@ impl Storage {
 
     #[cfg(test)]
     pub fn list_items(&self) -> Result<Vec<ClipItem>, String> {
-        self.query_items(
-            "html_content, rtf_content",
-            "ORDER BY last_copied_at DESC, id DESC",
-            [],
-        )
+        self.query_items_inner(false, "ORDER BY last_copied_at DESC, id DESC", [])
     }
 
     pub fn item(&self, id: i64) -> Result<ClipItem, String> {
-        self.query_items("html_content, rtf_content", "WHERE id = ?", [id])?
+        self.query_items_inner(false, "WHERE id = ?", [id])?
             .pop()
-            .ok_or_else(|| "记录已不存在".into())
+            .ok_or_else(|| t("storage.err_item_missing").into())
     }
 
-    fn query_items<const N: usize>(
+    pub(super) fn query_items_lightweight<const N: usize>(
         &self,
-        rich: &str,
         clause: &str,
         args: [i64; N],
     ) -> Result<Vec<ClipItem>, String> {
+        self.query_items_inner(true, clause, args)
+    }
+
+    pub fn with_full_text_lookup<R>(
+        &self,
+        f: impl FnOnce(&mut dyn FnMut(i64) -> Option<String>) -> R,
+    ) -> R {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT text_content FROM items WHERE id = ?1")
+            .ok();
+        let mut lookup = |id: i64| -> Option<String> {
+            stmt.as_mut()?
+                .query_row([id], |r| r.get::<_, Option<String>>(0))
+                .ok()
+                .flatten()
+        };
+        f(&mut lookup)
+    }
+
+    fn query_items_inner<const N: usize>(
+        &self,
+        lightweight: bool,
+        clause: &str,
+        args: [i64; N],
+    ) -> Result<Vec<ClipItem>, String> {
+        let (text_expr, rich_expr, trunc_expr) = if lightweight {
+            (
+                "CASE WHEN length(text_content) > 512 THEN substr(text_content, 1, 256) || '…' || substr(text_content, -32) ELSE text_content END",
+                "NULL, NULL",
+                "CASE WHEN length(text_content) > 512 THEN 1 ELSE 0 END",
+            )
+        } else {
+            ("text_content", "html_content, rtf_content", "0")
+        };
         let sql = format!(
-            "SELECT id, content_hash, kind, text_content, {rich}, image_path, thumb_path, image_width, image_height, files_json, byte_size, source_app, source_bundle_id, pinned, collection_id, first_copied_at, last_copied_at, copy_count, sensitive_label, detected_color, is_url, note FROM items {clause}"
+            "SELECT id, content_hash, kind, {text_expr}, {rich_expr}, image_path, thumb_path, image_width, image_height, files_json, byte_size, source_app, source_bundle_id, pinned, collection_id, first_copied_at, last_copied_at, copy_count, sensitive_label, detected_color, is_url, note, {trunc_expr}, (html_content IS NOT NULL OR rtf_content IS NOT NULL) FROM items {clause}"
         );
         let mut stmt = self
             .conn
@@ -486,8 +572,10 @@ impl Storage {
                 let files_json: String = row.get(10)?;
                 let files: Vec<FileEntry> = serde_json::from_str(&files_json).unwrap_or_default();
                 let color_str: Option<String> = row.get(20)?;
+                let text_truncated = row.get::<_, i64>(23)? != 0;
+                let has_rich_text = row.get::<_, i64>(24)? != 0;
                 let detected_color = color_str.as_deref().and_then(parse_rgba_csv).or_else(|| {
-                    (kind == ClipKind::Text)
+                    (kind == ClipKind::Text && !text_truncated)
                         .then(|| text_content.as_deref().and_then(detect_color))
                         .flatten()
                 });
@@ -516,6 +604,8 @@ impl Storage {
                     detected_color,
                     is_url: row.get::<_, i64>(21)? != 0,
                     note: row.get(22)?,
+                    text_truncated,
+                    has_rich_text,
                 })
             })
             .map_err(|e| format!("读取记录失败: {e}"))?;
@@ -565,7 +655,7 @@ impl Storage {
     pub fn create_collection(&self, name: &str, color_hex: &str) -> Result<i64, String> {
         let trimmed = name.trim();
         if trimmed.is_empty() {
-            return Err("收藏分组名称不能为空".to_string());
+            return Err(t("storage.err_collection_empty").to_string());
         }
         let now = Utc::now().timestamp_millis();
         self.conn
@@ -573,14 +663,19 @@ impl Storage {
                 "INSERT INTO collections (name, color_hex, created_at) VALUES (?1, ?2, ?3)",
                 params![trimmed, color_hex, now],
             )
-            .map_err(|e| format!("创建收藏分组失败（可能名称已存在）: {e}"))?;
+            .map_err(|e| {
+                tf(
+                    "storage.err_collection_create",
+                    &[("error", &e.to_string())],
+                )
+            })?;
         Ok(self.conn.last_insert_rowid())
     }
 
     pub fn rename_collection(&self, id: i64, new_name: &str) -> Result<(), String> {
         let trimmed = new_name.trim();
         if trimmed.is_empty() {
-            return Err("名称不能为空".to_string());
+            return Err(t("storage.err_collection_empty").to_string());
         }
         self.conn
             .execute(
@@ -631,7 +726,7 @@ impl Storage {
 
     pub fn update_item_text(&self, id: i64, new_text: &str) -> Result<(), String> {
         if new_text.trim().is_empty() {
-            return Err("文本内容不能为空".to_string());
+            return Err(t("storage.err_text_empty").to_string());
         }
         let tx = self.begin_write()?;
         let kind: Option<String> = tx
@@ -639,7 +734,7 @@ impl Storage {
             .optional()
             .map_err(|e| format!("读取待编辑记录失败: {e}"))?;
         if kind.as_deref() != Some("text") {
-            return Err("仅可编辑仍然存在的文本记录".to_string());
+            return Err(t("storage.err_edit_text_only").to_string());
         }
         let new_hash = content_hash_for_text(new_text);
         let byte_size = new_text.len() as i64;
@@ -659,9 +754,7 @@ impl Storage {
             )
             .map_err(|e| format!("检查重复文本失败: {e}"))?;
         if collision {
-            return Err(
-                "相同文本已存在，未保存修改；两条记录及其备注、固定和收藏均已保留".to_string(),
-            );
+            return Err(t("storage.err_edit_collision").to_string());
         }
 
         tx.execute(
@@ -872,8 +965,13 @@ impl Storage {
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
+    sha256_prefixed_hex(b"", bytes)
+}
+
+pub fn sha256_prefixed_hex(prefix: &[u8], body: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(bytes);
+    hasher.update(prefix);
+    hasher.update(body);
     let digest = hasher.finalize();
     let mut s = String::with_capacity(digest.len() * 2);
     for b in digest {
@@ -895,8 +993,8 @@ fn parse_rgba_csv(s: &str) -> Option<[u8; 4]> {
     }
 }
 
-fn content_hash_for_text(text: &str) -> String {
-    sha256_hex(&[b"text:".as_slice(), text.as_bytes()].concat())
+pub(crate) fn content_hash_for_text(text: &str) -> String {
+    sha256_prefixed_hex(b"text:", text.as_bytes())
 }
 
 fn dir_size(path: &Path) -> u64 {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::search::MatchMask;
 
 fn safety_test_item() -> ClipItem {
     ClipItem {
@@ -25,6 +26,8 @@ fn safety_test_item() -> ClipItem {
         detected_color: None,
         is_url: false,
         note: None,
+        text_truncated: false,
+        has_rich_text: false,
     }
 }
 
@@ -58,7 +61,8 @@ fn keyboard_test_frame(
     let results = vec![SearchResultItem {
         item: safety_test_item().into(),
         score: 0,
-        matched_indices: HashSet::new(),
+        matched_indices: MatchMask::default(),
+        display_text: None,
     }];
     let mut settings = AppSettings {
         hotkey_delete: "Alt+Backspace".into(),
@@ -170,7 +174,8 @@ fn masking_consistently_protects_list_preview_editor_and_transform_output() {
     let result = SearchResultItem {
         item: item.clone(),
         score: 0,
-        matched_indices: HashSet::new(),
+        matched_indices: MatchMask::default(),
+        display_text: None,
     };
     for masking in [true, false] {
         let ctx = egui::Context::default();
@@ -215,6 +220,7 @@ fn masking_consistently_protects_list_preview_editor_and_transform_output() {
                 render_preview_pane(
                     ui,
                     Some(&item),
+                    None,
                     masking,
                     &[],
                     &mut state,
@@ -330,10 +336,13 @@ fn footer_fits_within_launcher_width() {
                 detected_color: None,
                 is_url: true,
                 note: None,
+                text_truncated: false,
+                has_rich_text: false,
             }
             .into(),
             score: 100,
-            matched_indices: HashSet::new(),
+            matched_indices: MatchMask::default(),
+            display_text: None,
         })
         .collect();
     let mut state = PopupState::default();
@@ -390,6 +399,7 @@ fn footer_fits_within_launcher_width() {
                                     storage_bytes: 109_500,
                                     total_items: 53,
                                     has_accessibility: true,
+                                    load_full_item: None,
                                 },
                                 &mut state,
                             );
@@ -468,10 +478,13 @@ fn workbench_preview_caches_and_renders_large_item_without_lag() {
             detected_color: None,
             is_url: false,
             note: None,
+            text_truncated: false,
+            has_rich_text: false,
         }
         .into(),
         score: 100,
-        matched_indices: HashSet::new(),
+        matched_indices: MatchMask::default(),
+        display_text: None,
     }];
 
     let mut state = PopupState {
@@ -514,6 +527,7 @@ fn workbench_preview_caches_and_renders_large_item_without_lag() {
                                     storage_bytes: 120_000,
                                     total_items: 1,
                                     has_accessibility: true,
+                                    load_full_item: None,
                                 },
                                 &mut state,
                             );
@@ -680,10 +694,13 @@ fn selected_row_bar_vertically_centered_and_hover_uses_pointing_hand() {
             detected_color: None,
             is_url: false,
             note: None,
+            text_truncated: false,
+            has_rich_text: false,
         }
         .into(),
         score: 100,
-        matched_indices: HashSet::new(),
+        matched_indices: MatchMask::default(),
+        display_text: None,
     };
     let mut state = PopupState {
         selected_id: Some(1),
@@ -795,10 +812,13 @@ fn single_click_vs_double_click_copy_mode_avoids_workbench_conflict() {
             detected_color: None,
             is_url: false,
             note: None,
+            text_truncated: false,
+            has_rich_text: false,
         }
         .into(),
         score: 100,
-        matched_indices: HashSet::new(),
+        matched_indices: MatchMask::default(),
+        display_text: None,
     };
 
     let mut sim_time = 10.0f64;
@@ -964,10 +984,13 @@ fn qr_preview_hides_duplicate_text_below() {
             detected_color: None,
             is_url: false,
             note: None,
+            text_truncated: false,
+            has_rich_text: false,
         }
         .into(),
         score: 100,
-        matched_indices: HashSet::new(),
+        matched_indices: MatchMask::default(),
+        display_text: None,
     }];
 
     let run_workbench = |state: &mut PopupState| -> (Vec<String>, Vec<egui::Rect>) {
@@ -1001,6 +1024,7 @@ fn qr_preview_hides_duplicate_text_below() {
                                 render_preview_pane(
                                     ui,
                                     Some(&results[0].item),
+                                    None,
                                     true,
                                     &collections,
                                     state,
@@ -1128,10 +1152,13 @@ fn image_files_and_text_rows_have_uniform_height_and_loaded_thumbnail() {
                 detected_color: None,
                 is_url: false,
                 note: None,
+                text_truncated: false,
+                has_rich_text: false,
             }
             .into(),
             score: 100,
-            matched_indices: HashSet::new(),
+            matched_indices: MatchMask::default(),
+            display_text: None,
         },
         SearchResultItem {
             item: ClipItem {
@@ -1163,10 +1190,13 @@ fn image_files_and_text_rows_have_uniform_height_and_loaded_thumbnail() {
                 detected_color: None,
                 is_url: false,
                 note: None,
+                text_truncated: false,
+                has_rich_text: false,
             }
             .into(),
             score: 100,
-            matched_indices: HashSet::new(),
+            matched_indices: MatchMask::default(),
+            display_text: None,
         },
         SearchResultItem {
             item: ClipItem {
@@ -1193,10 +1223,13 @@ fn image_files_and_text_rows_have_uniform_height_and_loaded_thumbnail() {
                 detected_color: None,
                 is_url: false,
                 note: None,
+                text_truncated: false,
+                has_rich_text: false,
             }
             .into(),
             score: 100,
-            matched_indices: HashSet::new(),
+            matched_indices: MatchMask::default(),
+            display_text: None,
         },
     ];
 
@@ -1344,13 +1377,16 @@ fn popup_can_be_dragged_from_rows_footer_and_empty_space_but_not_search_text_edi
             last_copied_at: 0,
             copy_count: 1,
             note: None,
+            text_truncated: false,
+            has_rich_text: false,
             is_url: false,
             detected_color: None,
             sensitive_label: None,
         }
         .into(),
         score: 0,
-        matched_indices: HashSet::new(),
+        matched_indices: MatchMask::default(),
+        display_text: None,
     }];
     let mut state = PopupState {
         search_query: "drag".into(),
@@ -1428,6 +1464,7 @@ fn popup_can_be_dragged_from_rows_footer_and_empty_space_but_not_search_text_edi
                                         storage_bytes: 25,
                                         total_items: 1,
                                         has_accessibility: true,
+                                        load_full_item: None,
                                     },
                                     state,
                                 );
@@ -1543,13 +1580,16 @@ fn workbench_renders_on_left_when_flipped_and_stays_uncramped_mid_animation() {
             last_copied_at: 0,
             copy_count: 1,
             note: None,
+            text_truncated: false,
+            has_rich_text: false,
             is_url: false,
             detected_color: None,
             sensitive_label: None,
         }
         .into(),
         score: 0,
-        matched_indices: HashSet::new(),
+        matched_indices: MatchMask::default(),
+        display_text: None,
     }];
 
     let mut render_at_width = |card_w: f32, reveal: Option<f32>| -> Vec<(String, f32)> {
@@ -1591,6 +1631,7 @@ fn workbench_renders_on_left_when_flipped_and_stays_uncramped_mid_animation() {
                                     storage_bytes: 29,
                                     total_items: 1,
                                     has_accessibility: true,
+                                    load_full_item: None,
                                 },
                                 &mut state,
                             );
@@ -1762,6 +1803,7 @@ fn window_pin_button_toggles_and_prevents_escape_hide() {
                                     storage_bytes: 0,
                                     total_items: 0,
                                     has_accessibility: true,
+                                    load_full_item: None,
                                 },
                                 &mut state,
                             );
@@ -1812,6 +1854,7 @@ fn window_pin_button_toggles_and_prevents_escape_hide() {
                 storage_bytes: 0,
                 total_items: 0,
                 has_accessibility: true,
+                load_full_item: None,
             },
             &mut state,
         );
@@ -1878,6 +1921,7 @@ fn left_and_right_arrows_cycle_categories_with_wraparound() {
                     storage_bytes: 0,
                     total_items: 0,
                     has_accessibility: true,
+                    load_full_item: None,
                 },
                 state,
             );
@@ -2022,10 +2066,13 @@ fn holding_down_arrow_accelerates_past_single_step_and_stops_on_release() {
                 detected_color: None,
                 is_url: false,
                 note: None,
+                text_truncated: false,
+                has_rich_text: false,
             }
             .into(),
             score: 100,
-            matched_indices: HashSet::new(),
+            matched_indices: MatchMask::default(),
+            display_text: None,
         })
         .collect();
 
@@ -2053,6 +2100,7 @@ fn holding_down_arrow_accelerates_past_single_step_and_stops_on_release() {
                     storage_bytes: 0,
                     total_items: results.len(),
                     has_accessibility: true,
+                    load_full_item: None,
                 },
                 state,
             );
@@ -2179,10 +2227,13 @@ fn rgb_color_record_renders_normalized_hex_rgb_hsl_in_workbench_card() {
             detected_color: Some(rgba),
             is_url: false,
             note: None,
+            text_truncated: false,
+            has_rich_text: false,
         }
         .into(),
         score: 100,
-        matched_indices: HashSet::new(),
+        matched_indices: MatchMask::default(),
+        display_text: None,
     }];
 
     let mut state = PopupState {
@@ -2213,6 +2264,7 @@ fn rgb_color_record_renders_normalized_hex_rgb_hsl_in_workbench_card() {
                 storage_bytes: 23,
                 total_items: 1,
                 has_accessibility: true,
+                load_full_item: None,
             },
             &mut state,
         );
@@ -2278,6 +2330,7 @@ fn popup_status_banner_auto_dismisses_after_three_seconds() {
                     storage_bytes: 0,
                     total_items: 0,
                     has_accessibility: true,
+                    load_full_item: None,
                 },
                 state,
             );
@@ -2351,6 +2404,7 @@ fn accessibility_copy_status_banner_does_not_overlap_action_button_or_overflow()
                                 storage_bytes: 0,
                                 total_items: 0,
                                 has_accessibility: false,
+                                load_full_item: None,
                             },
                             &mut state,
                         );
@@ -2451,6 +2505,7 @@ fn persistent_accessibility_banner_wraps_full_message_without_truncation() {
                                 storage_bytes: 0,
                                 total_items: 0,
                                 has_accessibility: false,
+                                load_full_item: None,
                             },
                             &mut state,
                         );
@@ -2510,4 +2565,132 @@ fn persistent_accessibility_banner_wraps_full_message_without_truncation() {
             );
         });
     }
+}
+
+#[test]
+fn truncated_item_resolves_full_text_in_workbench_and_english_toolbar_wraps_cleanly() {
+    crate::i18n::with_test_language(crate::i18n::ResolvedLanguage::EnUs, || {
+        let ctx = egui::Context::default();
+        let palette = EarthPalette::resolve(crate::model::ThemeMode::Light, false);
+        palette.apply_to_ctx(&ctx);
+
+        let full_json = format!("{{\"prefix\":\"{}\",\"deep_key\":42}}", "a".repeat(1200));
+        let full_item = ClipItem {
+            id: 99,
+            content_hash: "trunc-99".into(),
+            kind: ClipKind::Text,
+            text_content: Some(full_json.clone()),
+            html_content: Some("<b>rich</b>".into()),
+            rtf_content: None,
+            image_path: None,
+            thumb_path: None,
+            image_width: None,
+            image_height: None,
+            files: Vec::new(),
+            byte_size: full_json.len() as u64,
+            source_app: Some("Safari".into()),
+            source_bundle_id: None,
+            pinned: true,
+            collection_id: None,
+            first_copied_at: 1000,
+            last_copied_at: 1000,
+            copy_count: 1,
+            sensitive_label: Some("API Key".into()),
+            detected_color: None,
+            is_url: false,
+            note: Some("prod".into()),
+            text_truncated: false,
+            has_rich_text: true,
+        };
+        let mut truncated = full_item.clone();
+        truncated.text_content = Some(format!("{{\"prefix\":\"{}…", "a".repeat(256)));
+        truncated.html_content = None;
+        truncated.text_truncated = true;
+
+        let results = vec![SearchResultItem {
+            item: Arc::new(truncated),
+            score: 100,
+            matched_indices: MatchMask::default(),
+            display_text: None,
+        }];
+        let mut settings = AppSettings::default();
+        let collections = Vec::new();
+        let mut state = PopupState {
+            selected_id: Some(99),
+            preview_open: true,
+            preview_reveal: Some(1.0),
+            ..Default::default()
+        };
+        state.revealed_sensitive_ids.insert(99);
+
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                vec2(760.0, 520.0),
+            )),
+            ..Default::default()
+        };
+        let load_full = |id: i64| (id == 99).then(|| full_item.clone());
+        let mut max_right = 0.0f32;
+        let mut out = ctx.run_ui(raw, |ui| {
+            let ctx = ui.ctx().clone();
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ui, |ui| {
+                    let content_rect = ui.max_rect().shrink(13.0);
+                    ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(content_rect)
+                            .layout(Layout::top_down(Align::Min)),
+                        |ui| {
+                            ui.set_min_size(content_rect.size());
+                            ui.set_max_size(content_rect.size());
+                            let _ = render_popup_view(
+                                ui,
+                                &ctx,
+                                PopupViewData {
+                                    settings: &mut settings,
+                                    results: &results,
+                                    collections: &collections,
+                                    palette: &palette,
+                                    storage_bytes: 1400,
+                                    total_items: 1,
+                                    has_accessibility: true,
+                                    load_full_item: Some(&load_full),
+                                },
+                                &mut state,
+                            );
+                        },
+                    );
+                });
+        });
+        let mut max_text_right = 0.0f32;
+        for cs in &out.shapes {
+            let r = cs.shape.visual_bounding_rect().right();
+            if r.is_finite() {
+                max_right = max_right.max(r);
+            }
+            if let egui::epaint::Shape::Text(t) = &cs.shape {
+                max_text_right = max_text_right.max(t.visual_bounding_rect().right());
+            }
+        }
+        out.textures_delta.clear();
+
+        let cache = state
+            .preview_cache
+            .as_ref()
+            .expect("preview cache populated");
+        assert_eq!(
+            cache.resolved.text_content.as_deref(),
+            Some(full_json.as_str())
+        );
+        assert!(
+            cache.quick_actions.contains(&QuickActionKind::JsonPretty),
+            "Quick actions must inspect resolved full JSON rather than truncated snippet"
+        );
+        assert!(
+            max_text_right <= 747.0 && max_right <= 760.0,
+            "English workbench action toolbar must wrap cleanly without overflowing card/viewport: max_text_right={max_text_right} max_right={max_right}"
+        );
+    });
 }

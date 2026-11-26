@@ -1,11 +1,37 @@
 use super::{ClipItem, Collection, Storage};
 use rusqlite::{Connection, OpenFlags};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-type Stamp = (String, i64, i64, bool, Option<i64>, Option<String>);
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    last_copied_at: i64,
+    copy_count: i64,
+    pinned: bool,
+    collection_id: Option<i64>,
+    digest: [u8; 16],
+}
+
+fn stamp_digest(content_hash: &[u8], note: Option<&[u8]>) -> [u8; 16] {
+    let mut hasher = Sha256::new();
+    hasher.update((content_hash.len() as u64).to_le_bytes());
+    hasher.update(content_hash);
+    match note {
+        Some(note_bytes) => {
+            hasher.update([1u8]);
+            hasher.update((note_bytes.len() as u64).to_le_bytes());
+            hasher.update(note_bytes);
+        }
+        None => hasher.update([0u8]),
+    }
+    let full = hasher.finalize();
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&full[..16]);
+    out
+}
 #[derive(Default)]
 pub struct Delta {
     /// The worker's first consistent snapshot replaces the provisional first page.
@@ -71,12 +97,8 @@ impl History {
 }
 impl Storage {
     pub fn first_page(&self) -> Result<Vec<Arc<ClipItem>>, String> {
-        self.query_items(
-            "NULL,NULL",
-            "ORDER BY last_copied_at DESC, id DESC LIMIT 64",
-            [],
-        )
-        .map(|items| items.into_iter().map(Arc::new).collect())
+        self.query_items_lightweight("ORDER BY last_copied_at DESC, id DESC LIMIT 64", [])
+            .map(|items| items.into_iter().map(Arc::new).collect())
     }
     fn history_delta(&self, known: &mut Option<HashMap<i64, Stamp>>) -> Result<Delta, String> {
         let tx = self
@@ -90,19 +112,26 @@ impl Storage {
         };
         let mut current = HashMap::new();
         {
-            let mut stmt=self.conn.prepare("SELECT id,content_hash,last_copied_at,copy_count,pinned,collection_id,note FROM items").map_err(|e|e.to_string())?;
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id,content_hash,last_copied_at,copy_count,pinned,collection_id,note FROM items",
+                )
+                .map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map([], |r| {
+                    let id = r.get::<_, i64>(0)?;
+                    let hash_ref = r.get_ref(1)?.as_bytes()?;
+                    let note_ref = r.get_ref(6)?.as_bytes_or_null()?;
                     Ok((
-                        r.get::<_, i64>(0)?,
-                        (
-                            r.get(1)?,
-                            r.get(2)?,
-                            r.get(3)?,
-                            r.get(4)?,
-                            r.get(5)?,
-                            r.get(6)?,
-                        ),
+                        id,
+                        Stamp {
+                            last_copied_at: r.get(2)?,
+                            copy_count: r.get(3)?,
+                            pinned: r.get(4)?,
+                            collection_id: r.get(5)?,
+                            digest: stamp_digest(hash_ref, note_ref),
+                        },
                     ))
                 })
                 .map_err(|e| e.to_string())?;
@@ -116,7 +145,7 @@ impl Storage {
             .filter(|(id, key)| known.as_ref().and_then(|known| known.get(id)) != Some(key))
             .map(|(id, _)| *id)
             .collect();
-        // Only changed rows transfer their text; rich clipboard formats are loaded on paste.
+        // Changed rows load only a bounded preview snippet; full text and rich formats load on demand.
         for batch in changed.chunks(96) {
             let ids = batch
                 .iter()
@@ -124,7 +153,7 @@ impl Storage {
                 .collect::<Vec<_>>()
                 .join(",");
             delta.items.extend(
-                self.query_items("NULL,NULL", &format!("WHERE id IN ({ids})"), [])?
+                self.query_items_lightweight(&format!("WHERE id IN ({ids})"), [])?
                     .into_iter()
                     .map(Arc::new),
             );
@@ -314,6 +343,60 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(throttled.items.is_empty() && throttled.bytes.is_none());
+    }
+
+    #[test]
+    fn truncated_history_rows_bound_resident_memory_and_stream_full_text_on_search() {
+        let dir = TestDir::new("truncated-large");
+        let store = Storage::open_in_dir(&dir.0).unwrap();
+        let large_text = format!(
+            "HEAD_1234_{}_DEEP_NEEDLE_TOKEN_{}_TAIL_9876",
+            "x".repeat(8_000),
+            "y".repeat(8_000)
+        );
+        let id = store.upsert_item(payload(&large_text), 100).unwrap();
+
+        let page = store.first_page().unwrap();
+        assert_eq!(page.len(), 1);
+        assert!(page[0].text_truncated);
+        assert!(page[0].has_rich_text);
+        let resident_len = page[0].text_content.as_ref().unwrap().len();
+        assert!(
+            resident_len < 600,
+            "resident preview text must stay bounded (<600B), got {resident_len}B"
+        );
+        assert!(
+            page[0]
+                .text_content
+                .as_deref()
+                .unwrap()
+                .ends_with("TAIL_9876"),
+            "truncated resident snippet must preserve real tail characters for sensitive masking"
+        );
+
+        let full = store.item(id).unwrap();
+        assert!(!full.text_truncated);
+        assert!(full.has_rich_text);
+        assert_eq!(full.text_content.as_deref(), Some(large_text.as_str()));
+
+        for mode in [SearchMode::Exact, SearchMode::Fuzzy, SearchMode::Regex] {
+            let results = store
+                .with_full_text_lookup(|lookup| {
+                    crate::search::filter_and_search_with(
+                        &page,
+                        "DEEP_NEEDLE_TOKEN",
+                        CategoryFilter::All,
+                        mode,
+                        SortOrder::LastCopiedAt,
+                        PinPosition::Top,
+                        false,
+                        lookup,
+                    )
+                })
+                .unwrap();
+            assert_eq!(results.len(), 1, "mode {mode:?} must match deep text");
+            assert!(Arc::ptr_eq(&results[0].item, &page[0]));
+        }
     }
 
     /// cargo test history_5000_rows_2000_thumbnails_benchmark -- --ignored --nocapture

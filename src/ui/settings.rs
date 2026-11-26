@@ -83,6 +83,7 @@ pub struct SettingsState {
     pub checking_updates: bool,
     pub available_update: Option<ReleaseInfo>,
     pub update_download: UpdateDownloadState,
+    pub backup_busy: bool,
 }
 
 impl Default for SettingsState {
@@ -105,6 +106,7 @@ impl Default for SettingsState {
             checking_updates: false,
             available_update: None,
             update_download: UpdateDownloadState::Idle,
+            backup_busy: false,
         }
     }
 }
@@ -406,6 +408,7 @@ pub fn render_settings_view(
                 render_storage_tab(
                     ui,
                     settings,
+                    state.backup_busy,
                     palette,
                     storage_bytes,
                     item_count,
@@ -895,6 +898,7 @@ fn shortcut_row(
 fn render_storage_tab(
     ui: &mut Ui,
     settings: &mut AppSettings,
+    backup_busy: bool,
     palette: &EarthPalette,
     storage_bytes: u64,
     item_count: usize,
@@ -1007,29 +1011,39 @@ fn render_storage_tab(
         });
 
         ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(t("settings.storage.clear_unpinned")).clicked() {
-                actions.push(SettingsAction::ClearHistory(false));
-            }
-            if ui
-                .add(
-                    egui::Button::new(
-                        RichText::new(t("settings.storage.clear_all")).color(palette.danger),
+        ui.add_enabled_ui(!backup_busy, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(t("settings.storage.clear_unpinned")).clicked() {
+                    actions.push(SettingsAction::ClearHistory(false));
+                }
+                if ui
+                    .add(
+                        egui::Button::new(
+                            RichText::new(t("settings.storage.clear_all")).color(palette.danger),
+                        )
+                        .fill(palette.danger_bg)
+                        .stroke(Stroke::new(1.0, palette.danger_border))
+                        .corner_radius(CornerRadius::same(255)),
                     )
-                    .fill(palette.danger_bg)
-                    .stroke(Stroke::new(1.0, palette.danger_border))
-                    .corner_radius(CornerRadius::same(255)),
-                )
-                .clicked()
-            {
-                actions.push(SettingsAction::ClearHistory(true));
-            }
-            if ui.button(t("settings.storage.export_json")).clicked() {
-                actions.push(SettingsAction::ExportJson);
-            }
-            if ui.button(t("settings.storage.import_json")).clicked() {
-                actions.push(SettingsAction::ImportJson);
-            }
+                    .clicked()
+                {
+                    actions.push(SettingsAction::ClearHistory(true));
+                }
+                if ui.button(t("settings.storage.export_json")).clicked() {
+                    actions.push(SettingsAction::ExportJson);
+                }
+                if ui.button(t("settings.storage.import_json")).clicked() {
+                    actions.push(SettingsAction::ImportJson);
+                }
+                if backup_busy {
+                    ui.spinner();
+                    ui.label(
+                        RichText::new(t("settings.storage.backup_busy"))
+                            .size(11.5)
+                            .color(palette.accent_text),
+                    );
+                }
+            });
         });
         ui.label(
             RichText::new(t("settings.storage.backup_note"))
@@ -1223,6 +1237,7 @@ fn render_ignore_tab(
         });
         ui.separator();
 
+        let mut validation_err: Option<String> = None;
         match state.ignore_sub_tab {
             IgnoreSubTab::Apps => {
                 if ui
@@ -1241,6 +1256,7 @@ fn render_ignore_tab(
                     t("settings.ignore.app_placeholder"),
                     palette,
                     actions,
+                    |_| Ok(()),
                 );
             }
             IgnoreSubTab::ClipboardTypes => {
@@ -1256,6 +1272,7 @@ fn render_ignore_tab(
                     t("settings.ignore.type_placeholder"),
                     palette,
                     actions,
+                    |_| Ok(()),
                 );
             }
             IgnoreSubTab::Regexes => {
@@ -1271,8 +1288,16 @@ fn render_ignore_tab(
                     t("settings.ignore.regex_placeholder"),
                     palette,
                     actions,
+                    |pat| {
+                        crate::clipboard::validate_ignore_regex(pat).inspect_err(|err| {
+                            validation_err = Some(err.clone());
+                        })
+                    },
                 );
             }
+        }
+        if let Some(err) = validation_err {
+            state.set_status_message(err, true);
         }
     });
 }
@@ -1284,6 +1309,7 @@ fn render_editable_string_list(
     placeholder: &str,
     palette: &EarthPalette,
     actions: &mut Vec<SettingsAction>,
+    mut validate: impl FnMut(&str) -> Result<(), String>,
 ) {
     control_row(ui, |ui| {
         let edit = egui::TextEdit::singleline(draft)
@@ -1299,7 +1325,10 @@ fn render_editable_string_list(
             || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
         if add_clicked {
             let trimmed = draft.trim().to_string();
-            if !trimmed.is_empty() && !list.iter().any(|x| x == &trimmed) {
+            if !trimmed.is_empty()
+                && !list.iter().any(|x| x == &trimmed)
+                && validate(&trimmed).is_ok()
+            {
                 list.push(trimmed);
                 draft.clear();
                 actions.push(SettingsAction::SettingsChanged);

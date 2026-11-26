@@ -150,12 +150,19 @@ pub(super) fn render_item_row(
                                     .truncate(),
                                 );
                             } else {
-                                let clipped = crate::search::display_line(
-                                    item,
-                                    settings.show_special_symbols,
-                                );
+                                let fallback;
+                                let clipped = match res.display_text.as_deref() {
+                                    Some(cached) => cached,
+                                    None => {
+                                        fallback = crate::search::display_line(
+                                            item,
+                                            settings.show_special_symbols,
+                                        );
+                                        &fallback
+                                    }
+                                };
                                 let job = build_highlighted_layout_job(
-                                    &clipped,
+                                    clipped,
                                     &res.matched_indices,
                                     settings.match_highlight,
                                     palette,
@@ -178,9 +185,16 @@ pub(super) fn render_item_row(
                             );
                         }
                         ClipKind::Files => {
-                            let summary = item.summary_line(60);
+                            let fallback;
+                            let summary = match res.display_text.as_deref() {
+                                Some(cached) => cached,
+                                None => {
+                                    fallback = item.summary_line(60);
+                                    &fallback
+                                }
+                            };
                             let job = build_highlighted_layout_job(
-                                &summary,
+                                summary,
                                 &res.matched_indices,
                                 settings.match_highlight,
                                 palette,

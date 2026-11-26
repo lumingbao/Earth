@@ -80,7 +80,10 @@ impl Storage {
                 };
                 if record.item.kind == ClipKind::Image {
                     let path = image_path.as_deref().ok_or_else(|| {
-                        format!("图片记录 {} 缺少原图，未生成不完整备份", record.item.id)
+                        tf(
+                            "backup.err_missing_image",
+                            &[("id", &record.item.id.to_string())],
+                        )
                     })?;
                     // Account for escaped metadata and the actual base64 field
                     // punctuation before reading/encoding a potentially large PNG.
@@ -174,7 +177,10 @@ impl Storage {
         if usize::try_from(items).map_or(true, |count| count > record_limit)
             || usize::try_from(collections).map_or(true, |count| count > record_limit)
         {
-            return Err(format!("单个备份最多包含 {record_limit} 条记录或分组"));
+            return Err(tf(
+                "backup.err_record_limit",
+                &[("limit", &record_limit.to_string())],
+            ));
         }
         if usize::try_from(item_bytes)
             .ok()
@@ -207,7 +213,7 @@ impl Storage {
         let backup: Backup =
             serde_json::from_slice(&raw).map_err(|e| format!("解析备份失败: {e}"))?;
         if backup.format != "earth-clipboard" || backup.version != 2 {
-            return Err("不支持此备份格式或版本".to_string());
+            return Err(t("backup.err_unsupported_version").to_string());
         }
         self.import_records(backup.items, &backup.collections, max_history, false)
     }
@@ -233,7 +239,10 @@ impl Storage {
         legacy_format: bool,
     ) -> Result<ImportSummary, String> {
         if records.len() > MAX_ITEMS || collections.len() > MAX_ITEMS {
-            return Err(format!("单个备份最多包含 {MAX_ITEMS} 条记录或分组"));
+            return Err(tf(
+                "backup.err_record_limit",
+                &[("limit", &MAX_ITEMS.to_string())],
+            ));
         }
         let mut summary = ImportSummary {
             legacy_format,
@@ -288,7 +297,7 @@ impl Storage {
                             .map_err(|e| format!("生成导入缩略图失败: {e}"))?;
                         output.into_inner()
                     };
-                    item.content_hash = sha256_hex(&[b"image:".as_slice(), &bytes].concat());
+                    item.content_hash = sha256_prefixed_hex(b"image:", &bytes);
                     image_bytes = Some(bytes);
                     thumb_bytes = Some(thumb);
                     item.image_path = None;
@@ -426,7 +435,7 @@ fn legacy_item(item: ClipItem) -> BackupItem {
 }
 
 fn backup_too_large() -> String {
-    "备份超过大小上限（最多 128 MiB），请减少导出记录".to_string()
+    t("backup.err_too_large").to_string()
 }
 
 struct LimitedBuffer {
@@ -632,7 +641,7 @@ mod tests {
             .unwrap();
         let png = encoded.into_inner();
         NewClipPayload {
-            content_hash: sha256_hex(&[b"image:".as_slice(), &png].concat()),
+            content_hash: sha256_prefixed_hex(b"image:", &png),
             kind: ClipKind::Image,
             text_content: None,
             image_png: Some(png.clone()),

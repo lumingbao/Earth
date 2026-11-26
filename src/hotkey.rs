@@ -38,9 +38,10 @@ impl GlobalHotkeyController {
             .map(|error| {
                 let fallback = crate::model::AppSettings::default().hotkey_open;
                 if ctrl.set_open_shortcut(&fallback).is_ok() {
-                    format!(
-                        "{error}；已恢复默认唤醒快捷键 {}",
-                        format_shortcut_display(&fallback)
+                    let disp = format_shortcut_display(&fallback);
+                    tf(
+                        "hotkey.warn_fallback_restored",
+                        &[("error", &error), ("fallback", &disp)],
                     )
                 } else {
                     error
@@ -52,7 +53,7 @@ impl GlobalHotkeyController {
     pub fn set_open_shortcut(&mut self, shortcut: &str) -> Result<(), String> {
         validate_shortcut(shortcut, true)?;
         if self.suspended {
-            return Err("请先结束快捷键录制，再应用新的快捷键".to_string());
+            return Err(t("hotkey.err_recording_active").to_string());
         }
         let previous = self.desired_open_shortcut.clone();
         self.desired_open_shortcut = shortcut.trim().to_string();
@@ -107,7 +108,10 @@ impl GlobalHotkeyController {
             hotkey,
             |next| {
                 self.manager.register(next).map_err(|e| {
-                    format!("注册全局快捷键 \"{trimmed}\" 失败（可能被系统或其他应用占用）: {e}")
+                    tf(
+                        "hotkey.err_register_conflict",
+                        &[("shortcut", trimmed), ("error", &e.to_string())],
+                    )
                 })
             },
             |old| {

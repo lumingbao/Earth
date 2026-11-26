@@ -1,8 +1,10 @@
 use super::*;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_preview_pane(
     ui: &mut Ui,
     item: Option<&Arc<ClipItem>>,
+    load_full_item: Option<&dyn Fn(i64) -> Option<ClipItem>>,
     privacy_masking: bool,
     collections: &[Collection],
     state: &mut PopupState,
@@ -46,7 +48,13 @@ pub(super) fn render_preview_pane(
                 ClipKind::Image => t("workbench.kind.image"),
                 ClipKind::Files => t("workbench.kind.files"),
             };
-            state.ensure_preview_cache(item);
+            state.ensure_preview_cache_with(item, load_full_item);
+            let resolved_item = state
+                .preview_cache
+                .as_ref()
+                .map(|c| Arc::clone(&c.resolved))
+                .unwrap_or_else(|| Arc::clone(item));
+            let item = &resolved_item;
             let ts_str = state
                 .preview_cache
                 .as_ref()
@@ -118,7 +126,7 @@ pub(super) fn render_preview_pane(
                 .unwrap_or(false);
 
             ui.add_space(4.0);
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let pin_btn = if item.pinned {
                     egui::Button::new(
                         RichText::new(t("workbench.pinned"))
@@ -132,7 +140,7 @@ pub(super) fn render_preview_pane(
                     egui::Button::new(RichText::new(t("workbench.pin")).size(11.5))
                         .corner_radius(CornerRadius::same(255))
                 };
-                if ui.add(pin_btn).clicked() {
+                if padded_button(ui, pin_btn, vec2(11.0, 4.5)).clicked() {
                     actions.push(PopupAction::TogglePin(item.id));
                 }
 
@@ -144,7 +152,7 @@ pub(super) fn render_preview_pane(
                     .unwrap_or(t("workbench.collection_placeholder"));
                 egui::ComboBox::from_id_salt(("preview_col", item.id))
                     .selected_text(cur_col)
-                    .width(110.0)
+                    .width(104.0)
                     .show_ui(ui, |ui| {
                         if ui
                             .selectable_label(
@@ -223,17 +231,14 @@ pub(super) fn render_preview_pane(
                     }
                 }
 
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let del_btn = egui::Button::new(
-                        RichText::new(t("workbench.delete")).color(palette.danger),
-                    )
-                    .fill(palette.danger_bg)
-                    .stroke(Stroke::new(1.0, palette.danger_border))
-                    .corner_radius(CornerRadius::same(255));
-                    if padded_button(ui, del_btn, vec2(11.0, 4.5)).clicked() {
-                        actions.push(PopupAction::DeleteItem(item.id));
-                    }
-                });
+                let del_btn =
+                    egui::Button::new(RichText::new(t("workbench.delete")).color(palette.danger))
+                        .fill(palette.danger_bg)
+                        .stroke(Stroke::new(1.0, palette.danger_border))
+                        .corner_radius(CornerRadius::same(255));
+                if padded_button(ui, del_btn, vec2(11.0, 4.5)).clicked() {
+                    actions.push(PopupAction::DeleteItem(item.id));
+                }
             });
 
             // Optional Note Editor / Note Display Bar
@@ -372,6 +377,17 @@ pub(super) fn render_preview_pane(
                                             cancel_edit = true;
                                         }
                                     });
+                                    if item.has_rich_text
+                                        || item.html_content.is_some()
+                                        || item.rtf_content.is_some()
+                                    {
+                                        ui.add_space(2.0);
+                                        ui.label(
+                                            RichText::new(t("workbench.edit_rich_hint"))
+                                                .size(11.0)
+                                                .color(palette.text_muted),
+                                        );
+                                    }
                                     ui.add_space(4.0);
                                     ui.scope(|ui| {
                                         let r = CornerRadius::same(10);
@@ -466,14 +482,25 @@ pub(super) fn render_preview_pane(
                             }
                         }
                         ClipKind::Image => {
-                            let preview_path = if state.image_actual_size {
+                            let max_w = ui.available_width().max(120.0);
+                            let max_h = (body_h - 32.0).max(100.0);
+                            if !state.image_actual_size
+                                && let Some(thumb) = item.thumb_path.as_deref()
+                            {
+                                state.image_preview.clear();
+                                let uri = path_to_file_uri(thumb);
+                                state.thumbnail_cache.track(ui.ctx(), &uri);
+                                ui.centered_and_justified(|ui| {
+                                    ui.add(
+                                        egui::Image::from_uri(uri)
+                                            .max_size(vec2(max_w, max_h))
+                                            .maintain_aspect_ratio(true)
+                                            .corner_radius(CornerRadius::same(12)),
+                                    );
+                                });
+                            } else if let Some(path) =
                                 item.image_path.as_deref().or(item.thumb_path.as_deref())
-                            } else {
-                                item.thumb_path.as_deref().or(item.image_path.as_deref())
-                            };
-                            if let Some(path) = preview_path {
-                                let max_w = ui.available_width().max(120.0);
-                                let max_h = (body_h - 32.0).max(100.0);
+                            {
                                 match state.image_preview.texture(ui.ctx(), path) {
                                     Ok(Some(texture)) => {
                                         ui.centered_and_justified(|ui| {

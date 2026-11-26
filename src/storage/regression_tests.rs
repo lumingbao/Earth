@@ -46,7 +46,7 @@ fn image_payload() -> NewClipPayload {
         .unwrap();
     let png = encoded.into_inner();
     NewClipPayload {
-        content_hash: sha256_hex(&[b"image:".as_slice(), &png].concat()),
+        content_hash: sha256_prefixed_hex(b"image:", &png),
         kind: ClipKind::Image,
         image_width: Some(8),
         image_height: Some(6),

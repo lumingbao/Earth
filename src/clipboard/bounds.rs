@@ -1,7 +1,9 @@
 use image::{DynamicImage, ImageDecoder, ImageReader, Limits};
 use std::io::Cursor;
 
-pub(super) const TOO_LARGE: &str = "剪贴板内容超过存储设置中的单条上限，已跳过";
+pub(super) fn too_large() -> &'static str {
+    crate::i18n::t("clipboard.skip_too_large")
+}
 
 #[cfg(windows)]
 pub(super) fn available_formats(_ctx: &clipboard_rs::ClipboardContext) -> Option<Vec<String>> {
@@ -37,7 +39,7 @@ pub(super) fn bytes(name: &str, cap: usize) -> Result<Option<Vec<u8>>, &'static 
             return Ok(None);
         };
         if data.length() > cap {
-            return Err(TOO_LARGE);
+            return Err(too_large());
         }
         Ok(Some(data.to_vec()))
     })
@@ -92,10 +94,11 @@ pub(super) fn decode(
     ) -> Result<DynamicImage, &'static str> {
         let (w, h) = decoder.dimensions();
         if u64::from(w) * u64::from(h) > max_pixels || decoder.total_bytes() > max_pixels * 8 {
-            return Err(TOO_LARGE);
+            return Err(too_large());
         }
-        decoder.set_limits(limits).map_err(|_| TOO_LARGE)?;
-        DynamicImage::from_decoder(decoder).map_err(|_| "无法解码剪贴板图片")
+        decoder.set_limits(limits).map_err(|_| too_large())?;
+        DynamicImage::from_decoder(decoder)
+            .map_err(|_| crate::i18n::t("clipboard.skip_image_decode"))
     }
     if dib {
         let decoder = image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(bytes))

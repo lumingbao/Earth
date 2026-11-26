@@ -135,6 +135,11 @@ pub(super) fn managed_media_path(directory: &Path, raw: &str) -> Option<PathBuf>
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return None;
     }
+    if path.parent() == Some(directory)
+        && matches!(path.file_name(), Some(name) if name != "." && name != "..")
+    {
+        return Some(path.to_path_buf());
+    }
     let root = directory.canonicalize().ok()?;
     let resolved = path.canonicalize().ok()?;
     (resolved.parent() == Some(root.as_path())).then_some(resolved)

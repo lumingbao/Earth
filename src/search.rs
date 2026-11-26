@@ -1,17 +1,99 @@
+use crate::i18n::{t, tf};
 use crate::model::{CategoryFilter, ClipItem, ClipKind, PinPosition, SearchMode, SortOrder};
 use nucleo_matcher::pattern::{AtomKind, CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use regex::RegexBuilder;
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::cell::RefCell;
 use std::sync::Arc;
+
+/// Zero-allocation bitset tracking matched character indices (`0..128`) in a single-line preview.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MatchMask(u128);
+
+impl MatchMask {
+    pub const fn new() -> Self {
+        Self(0)
+    }
+
+    #[inline]
+    pub fn insert(&mut self, idx: usize) {
+        if idx < 128 {
+            self.0 |= 1u128 << idx;
+        }
+    }
+
+    #[inline]
+    pub fn contains(&self, idx: &usize) -> bool {
+        *idx < 128 && (self.0 & (1u128 << *idx)) != 0
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.0 == 0
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.0.count_ones() as usize
+    }
+}
+
+impl<const N: usize> From<[usize; N]> for MatchMask {
+    fn from(indices: [usize; N]) -> Self {
+        let mut mask = Self::new();
+        for idx in indices {
+            mask.insert(idx);
+        }
+        mask
+    }
+}
+
+impl FromIterator<usize> for MatchMask {
+    fn from_iter<T: IntoIterator<Item = usize>>(iter: T) -> Self {
+        let mut mask = Self::new();
+        mask.extend(iter);
+        mask
+    }
+}
+
+impl Extend<usize> for MatchMask {
+    fn extend<T: IntoIterator<Item = usize>>(&mut self, iter: T) {
+        for idx in iter {
+            self.insert(idx);
+        }
+    }
+}
+
+struct FuzzyScratch {
+    matcher: Matcher,
+    utf32_buf: Vec<char>,
+    indices_buf: Vec<u32>,
+}
+
+impl FuzzyScratch {
+    fn new() -> Self {
+        Self {
+            matcher: Matcher::new(Config::DEFAULT),
+            utf32_buf: Vec::new(),
+            indices_buf: Vec::new(),
+        }
+    }
+}
+
+thread_local! {
+    static FUZZY_SCRATCH: RefCell<FuzzyScratch> = RefCell::new(FuzzyScratch::new());
+}
 
 #[derive(Debug, Clone)]
 pub struct SearchResultItem {
     pub item: Arc<ClipItem>,
     pub score: u32,
     /// Character indices (in the item's `display_text`) matched by the current query.
-    pub matched_indices: HashSet<usize>,
+    pub matched_indices: MatchMask,
+    /// Precomputed single-line display label when produced during an active query.
+    pub display_text: Option<Box<str>>,
 }
 
 pub fn matches_filter(item: &ClipItem, filter: CategoryFilter) -> bool {
@@ -47,6 +129,29 @@ pub fn filter_and_search(
     sort_order: SortOrder,
     pin_position: PinPosition,
     symbols: bool,
+) -> Result<Vec<SearchResultItem>, String> {
+    filter_and_search_with(
+        items,
+        query,
+        filter,
+        search_mode,
+        sort_order,
+        pin_position,
+        symbols,
+        &mut |_| None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn filter_and_search_with(
+    items: &[Arc<ClipItem>],
+    query: &str,
+    filter: CategoryFilter,
+    search_mode: SearchMode,
+    sort_order: SortOrder,
+    pin_position: PinPosition,
+    symbols: bool,
+    full_text_of: &mut dyn FnMut(i64) -> Option<String>,
 ) -> Result<Vec<SearchResultItem>, String> {
     let mut filtered: Vec<&Arc<ClipItem>> = items
         .iter()
@@ -89,84 +194,146 @@ pub fn filter_and_search(
             .map(|item| SearchResultItem {
                 item: Arc::clone(item),
                 score: 0,
-                matched_indices: HashSet::new(),
+                matched_indices: MatchMask::new(),
+                display_text: None,
             })
             .collect());
     }
     if trimmed_query.len() > 4096 {
-        return Err("搜索内容超过 4096 字节".into());
+        return Err(t("search.err_query_too_long").into());
     }
     match search_mode {
-        SearchMode::Exact => Ok(exact_search(&filtered, trimmed_query, symbols)),
-        SearchMode::Fuzzy => Ok(fuzzy_search(&filtered, trimmed_query, symbols)),
-        SearchMode::Regex => regex_search(&filtered, trimmed_query, symbols),
+        SearchMode::Exact => Ok(exact_search(
+            &filtered,
+            trimmed_query,
+            symbols,
+            full_text_of,
+        )),
+        SearchMode::Fuzzy => Ok(fuzzy_search(
+            &filtered,
+            trimmed_query,
+            symbols,
+            full_text_of,
+        )),
+        SearchMode::Regex => regex_search(&filtered, trimmed_query, symbols, full_text_of),
     }
 }
 
+#[cfg(test)]
 fn searchable_text(item: &ClipItem) -> Cow<'_, str> {
+    searchable_text_resolved(item, &mut |_| None)
+}
+
+fn searchable_text_resolved<'a>(
+    item: &'a ClipItem,
+    full_text_of: &mut dyn FnMut(i64) -> Option<String>,
+) -> Cow<'a, str> {
+    let has_note = item
+        .note
+        .as_deref()
+        .is_some_and(|note| !note.trim().is_empty());
     if item.kind == ClipKind::Text
-        && item
-            .note
-            .as_deref()
-            .is_none_or(|note| note.trim().is_empty())
+        && item.text_truncated
+        && let Some(full) = full_text_of(item.id)
     {
+        return if has_note {
+            Cow::Owned(item.searchable_text_with(Some(&full)))
+        } else {
+            Cow::Owned(full)
+        };
+    }
+    if item.kind == ClipKind::Text && !has_note {
         Cow::Borrowed(item.text_content.as_deref().unwrap_or_default())
     } else {
         Cow::Owned(item.searchable_text())
     }
 }
 
-fn exact_search(items: &[&Arc<ClipItem>], query: &str, symbols: bool) -> Vec<SearchResultItem> {
+fn exact_search(
+    items: &[&Arc<ClipItem>],
+    query: &str,
+    symbols: bool,
+    full_text_of: &mut dyn FnMut(i64) -> Option<String>,
+) -> Vec<SearchResultItem> {
+    let escaped = regex::escape(query);
+    let compiled = RegexBuilder::new(&escaped)
+        .case_insensitive(true)
+        .size_limit(4 * 1024 * 1024)
+        .build()
+        .ok();
     let lower_query = query.to_lowercase();
     let mut results = Vec::new();
 
     for item in items {
-        let haystack = searchable_text(item);
-        if haystack.to_lowercase().contains(&lower_query) {
-            let matched = find_substring_char_indices(&display_line(item, symbols), &lower_query)
-                .unwrap_or_default();
+        let haystack = searchable_text_resolved(item, full_text_of);
+        let matched_item = match &compiled {
+            Some(re) => re.is_match(&haystack),
+            None => haystack.to_lowercase().contains(&lower_query),
+        };
+        if matched_item {
+            let label = display_line(item, symbols);
+            let matched = find_substring_char_indices(&label, &lower_query).unwrap_or_default();
             results.push(SearchResultItem {
                 item: Arc::clone(item),
                 score: 100,
                 matched_indices: matched,
+                display_text: Some(label.into_boxed_str()),
             });
         }
     }
     results
 }
 
-fn fuzzy_search(items: &[&Arc<ClipItem>], query: &str, symbols: bool) -> Vec<SearchResultItem> {
-    let mut matcher = Matcher::new(Config::DEFAULT);
+fn fuzzy_search(
+    items: &[&Arc<ClipItem>],
+    query: &str,
+    symbols: bool,
+    full_text_of: &mut dyn FnMut(i64) -> Option<String>,
+) -> Vec<SearchResultItem> {
     let pattern = Pattern::new(
         query,
         CaseMatching::Smart,
         Normalization::Smart,
         AtomKind::Fuzzy,
     );
-    let mut utf32_buf = Vec::new();
-    let mut indices_buf = Vec::new();
-    let mut results = Vec::new();
-
-    for item in items {
-        let haystack = searchable_text(item);
-        utf32_buf.clear();
-        indices_buf.clear();
-        let u32_haystack = Utf32Str::new(&haystack, &mut utf32_buf);
-        if let Some(score) = pattern.score(u32_haystack, &mut matcher) {
-            let label = display_line(item, symbols);
-            let _ = pattern.indices(
-                Utf32Str::new(&label, &mut utf32_buf),
-                &mut matcher,
-                &mut indices_buf,
-            );
-            let matched_indices = indices_buf.iter().map(|&idx| idx as usize).collect();
-            results.push(SearchResultItem {
-                item: Arc::clone(item),
-                score,
-                matched_indices,
-            });
+    let mut results = FUZZY_SCRATCH.with(|cell| {
+        let mut scratch = cell.try_borrow_mut().ok();
+        let mut fallback;
+        let s: &mut FuzzyScratch = match scratch.as_deref_mut() {
+            Some(inner) => inner,
+            None => {
+                fallback = FuzzyScratch::new();
+                &mut fallback
+            }
+        };
+        let mut out = Vec::new();
+        for item in items {
+            let haystack = searchable_text_resolved(item, full_text_of);
+            s.utf32_buf.clear();
+            s.indices_buf.clear();
+            let u32_haystack = Utf32Str::new(&haystack, &mut s.utf32_buf);
+            if let Some(score) = pattern.score(u32_haystack, &mut s.matcher) {
+                let label = display_line(item, symbols);
+                let _ = pattern.indices(
+                    Utf32Str::new(&label, &mut s.utf32_buf),
+                    &mut s.matcher,
+                    &mut s.indices_buf,
+                );
+                let matched_indices: MatchMask =
+                    s.indices_buf.iter().map(|&idx| idx as usize).collect();
+                out.push(SearchResultItem {
+                    item: Arc::clone(item),
+                    score,
+                    matched_indices,
+                    display_text: Some(label.into_boxed_str()),
+                });
+            }
         }
-    }
+        if s.utf32_buf.capacity() > 16_384 {
+            s.utf32_buf.shrink_to(4_096);
+        }
+        out
+    });
 
     results.sort_by(|a, b| {
         b.score
@@ -180,19 +347,20 @@ fn regex_search(
     items: &[&Arc<ClipItem>],
     query: &str,
     symbols: bool,
+    full_text_of: &mut dyn FnMut(i64) -> Option<String>,
 ) -> Result<Vec<SearchResultItem>, String> {
     let re = RegexBuilder::new(query)
         .case_insensitive(true)
         .size_limit(1024 * 1024)
         .build()
-        .map_err(|e| format!("正则语法错误：{e}"))?;
+        .map_err(|e| tf("search.err_regex", &[("error", &e.to_string())]))?;
     let mut results = Vec::new();
     for item in items {
-        if !re.is_match(&searchable_text(item)) {
+        if !re.is_match(&searchable_text_resolved(item, full_text_of)) {
             continue;
         }
         let label = display_line(item, symbols);
-        let mut indices = HashSet::new();
+        let mut indices = MatchMask::new();
         let mut last = 0;
         let mut pos = 0;
         for m in re.find_iter(&label) {
@@ -206,14 +374,15 @@ fn regex_search(
             item: Arc::clone(item),
             score: 100,
             matched_indices: indices,
+            display_text: Some(label.into_boxed_str()),
         });
     }
     Ok(results)
 }
 
-pub fn find_substring_char_indices(haystack: &str, lower_query: &str) -> Option<HashSet<usize>> {
+pub fn find_substring_char_indices(haystack: &str, lower_query: &str) -> Option<MatchMask> {
     if lower_query.is_empty() {
-        return Some(HashSet::new());
+        return Some(MatchMask::new());
     }
     let hay_chars: Vec<char> = haystack.chars().collect();
     let hay_lower: Vec<char> = hay_chars.iter().flat_map(|c| c.to_lowercase()).collect();
@@ -226,10 +395,10 @@ pub fn find_substring_char_indices(haystack: &str, lower_query: &str) -> Option<
     // Fallback cleanly to byte-level lowercase match when 1-to-many lowercase expansion shifts lengths
     if hay_lower.len() != hay_chars.len() {
         let hay_l = haystack.to_lowercase();
-        return hay_l.contains(lower_query).then(HashSet::new);
+        return hay_l.contains(lower_query).then(MatchMask::new);
     }
 
-    let mut indices = HashSet::new();
+    let mut indices = MatchMask::new();
     let mut found = false;
     let mut i = 0;
     while i + needle.len() <= hay_lower.len() {
@@ -275,6 +444,8 @@ mod tests {
             detected_color: None,
             is_url: false,
             note: None,
+            text_truncated: false,
+            has_rich_text: false,
         })
     }
 
@@ -324,12 +495,12 @@ mod tests {
                 false,
             )
         };
-        assert_eq!(run("两").unwrap()[0].matched_indices, HashSet::from([2]));
+        assert_eq!(run("两").unwrap()[0].matched_indices, MatchMask::from([2]));
         assert!(run("notes").unwrap()[0].matched_indices.is_empty());
         assert!(run("(").is_err());
         let big = sample_text_item(2, &"a".repeat(1_000_000), false, 2);
         assert!(
-            regex_search(&[&big], ".", false).unwrap()[0]
+            regex_search(&[&big], ".", false, &mut |_| None).unwrap()[0]
                 .matched_indices
                 .len()
                 <= 89

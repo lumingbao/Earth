@@ -149,7 +149,7 @@ pub(super) fn read(name: &str, amount: ReadAmount) -> Result<Option<Vec<u8>>, &'
         }
         let allocated = GlobalSize(handle);
         let length = match amount {
-            ReadAmount::All { cap } if allocated > cap => return Err(super::bounds::TOO_LARGE),
+            ReadAmount::All { cap } if allocated > cap => return Err(super::bounds::too_large()),
             ReadAmount::All { .. } => allocated,
             // GlobalSize includes allocation padding; a DWORD is exactly the
             // first four bytes regardless of the size of its memory block.

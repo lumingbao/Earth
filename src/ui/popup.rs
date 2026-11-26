@@ -91,6 +91,7 @@ const MAX_PREVIEW_FILES: usize = 64;
 
 pub struct CachedPreviewItem {
     pub source: Arc<ClipItem>,
+    pub resolved: Arc<ClipItem>,
     pub formatted_ts: String,
     pub display_text: String,
     pub anim_display_text: String,
@@ -248,7 +249,16 @@ impl PopupState {
         self.set_preview_open(!self.preview_open);
     }
 
+    #[cfg(test)]
     pub fn ensure_preview_cache(&mut self, item: &Arc<ClipItem>) -> &CachedPreviewItem {
+        self.ensure_preview_cache_with(item, None)
+    }
+
+    pub fn ensure_preview_cache_with(
+        &mut self,
+        item: &Arc<ClipItem>,
+        load_full_item: Option<&dyn Fn(i64) -> Option<ClipItem>>,
+    ) -> &CachedPreviewItem {
         const MAX_PREVIEW_TEXT_CHARS: usize = 4000;
         const MAX_ANIM_PREVIEW_CHARS: usize = 900;
         let needs_rebuild = self
@@ -257,10 +267,18 @@ impl PopupState {
             .map(|c| !Arc::ptr_eq(&c.source, item))
             .unwrap_or(true);
         if needs_rebuild {
-            let formatted_ts = format_epoch_millis(item.last_copied_at);
+            let resolved = if item.text_truncated {
+                load_full_item
+                    .and_then(|load| load(item.id))
+                    .map(Arc::new)
+                    .unwrap_or_else(|| Arc::clone(item))
+            } else {
+                Arc::clone(item)
+            };
+            let formatted_ts = format_epoch_millis(resolved.last_copied_at);
             let (display_text, anim_display_text, stats, quick_actions) =
-                if item.kind == ClipKind::Text {
-                    let raw = item.text_content.as_deref().unwrap_or("");
+                if resolved.kind == ClipKind::Text {
+                    let raw = resolved.text_content.as_deref().unwrap_or("");
                     let display = match raw.char_indices().nth(MAX_PREVIEW_TEXT_CHARS) {
                         Some((byte_idx, _)) => format!(
                             "{}{}",
@@ -285,8 +303,9 @@ impl PopupState {
                 } else {
                     (String::new(), String::new(), None, Vec::new())
                 };
-            let file_exists = if item.kind == ClipKind::Files {
-                item.files
+            let file_exists = if resolved.kind == ClipKind::Files {
+                resolved
+                    .files
                     .iter()
                     .take(MAX_PREVIEW_FILES)
                     .map(|f| f.exists())
@@ -296,6 +315,7 @@ impl PopupState {
             };
             self.preview_cache = Some(CachedPreviewItem {
                 source: Arc::clone(item),
+                resolved,
                 formatted_ts,
                 display_text,
                 anim_display_text,
@@ -310,7 +330,7 @@ impl PopupState {
             && let Some(cache) = self.preview_cache.as_mut()
             && cache.qr_matrix.is_none()
         {
-            let raw = item.text_content.as_deref().unwrap_or("").trim();
+            let raw = cache.resolved.text_content.as_deref().unwrap_or("").trim();
             cache.qr_matrix = Some(build_qr_matrix(raw));
         }
         self.preview_cache.as_ref().unwrap()
@@ -343,6 +363,7 @@ pub struct PopupViewData<'a> {
     pub storage_bytes: u64,
     pub total_items: usize,
     pub has_accessibility: bool,
+    pub load_full_item: Option<&'a dyn Fn(i64) -> Option<ClipItem>>,
 }
 
 mod cards;

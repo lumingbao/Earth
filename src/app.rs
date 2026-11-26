@@ -1,16 +1,17 @@
 use crate::clipboard::{
-    ClipboardEvent, ClipboardHandle, ClipboardSuppression, clear_system_clipboard,
-    start_clipboard_watcher, write_custom_text_to_clipboard, write_item_to_clipboard,
-    write_managed_png,
+    ClipboardEvent, ClipboardHandle, ClipboardSuppression, CompiledCaptureConfig,
+    SharedCaptureConfig, clear_system_clipboard, start_clipboard_watcher,
+    write_custom_text_to_clipboard, write_item_to_clipboard, write_managed_png,
 };
 use crate::hotkey::GlobalHotkeyController;
 use crate::i18n::{t, tf};
 use crate::model::{
-    ActiveAppInfo, AppSettings, ClipItem, Collection, PasteBehavior, ThemeMode, truncate_chars,
+    ActiveAppInfo, AppSettings, CategoryFilter, ClipItem, Collection, PasteBehavior, ThemeMode,
+    truncate_chars,
 };
 use crate::platform;
-use crate::search::{SearchResultItem, filter_and_search};
-use crate::storage::Storage;
+use crate::search::{SearchResultItem, filter_and_search, filter_and_search_with};
+use crate::storage::{ImportSummary, Storage};
 use crate::tray::{EarthTray, TrayAction};
 use crate::ui::popup::{PopupAction, PopupState, PopupViewData, WorkbenchSide, render_popup_view};
 use crate::ui::settings::{
@@ -90,12 +91,19 @@ pub enum ViewMode {
     Settings,
 }
 
+enum BackupEvent {
+    Exported(Result<PathBuf, String>),
+    Imported(Result<ImportSummary, String>),
+}
+
 pub struct EarthApp {
     storage: Storage,
     instance: crate::instance::InstanceGuard,
     paste_tx: Sender<Result<String, String>>,
     paste_rx: Receiver<Result<String, String>>,
-    shared_settings: Arc<RwLock<AppSettings>>,
+    backup_tx: Sender<BackupEvent>,
+    backup_rx: Receiver<BackupEvent>,
+    shared_capture_config: SharedCaptureConfig,
     settings: AppSettings,
     suppression: Arc<Mutex<ClipboardSuppression>>,
     clipboard_rx: crate::clipboard::ClipboardEvents,
@@ -111,6 +119,7 @@ pub struct EarthApp {
     storage_bytes: u64,
     cached_results: Vec<SearchResultItem>,
     search_dirty: bool,
+    awaiting_newest_selection: bool,
 
     view_mode: ViewMode,
     popup_state: PopupState,
@@ -160,6 +169,7 @@ impl EarthApp {
             startup_errors.push(error);
         }
         let (paste_tx, paste_rx) = std::sync::mpsc::channel();
+        let (backup_tx, backup_rx) = std::sync::mpsc::channel();
         if settings.launch_at_login
             && let Err(error) = platform::refresh_autostart_if_enabled()
         {
@@ -177,7 +187,9 @@ impl EarthApp {
         });
         let storage_bytes = 0;
 
-        let shared_settings = Arc::new(RwLock::new(settings.clone()));
+        let shared_capture_config: SharedCaptureConfig = Arc::new(RwLock::new(Arc::new(
+            CompiledCaptureConfig::from_settings(settings.clone()),
+        )));
         let suppression = Arc::new(Mutex::new(ClipboardSuppression {
             ignore_next_once: settings.ignore_next_event,
             ..Default::default()
@@ -185,7 +197,7 @@ impl EarthApp {
 
         let (clip_tx, clipboard_rx) = crate::clipboard::clipboard_event_channel();
         let clipboard_handle = match start_clipboard_watcher(
-            Arc::clone(&shared_settings),
+            Arc::clone(&shared_capture_config),
             Arc::clone(&suppression),
             clip_tx,
             cc.egui_ctx.clone(),
@@ -218,8 +230,8 @@ impl EarthApp {
             // A hidden tray is unsafe when the other entry point did not register.
             settings.show_tray_icon = true;
         }
-        if let Ok(mut shared) = shared_settings.write() {
-            *shared = settings.clone();
+        if let Ok(mut shared) = shared_capture_config.write() {
+            *shared = Arc::new(CompiledCaptureConfig::from_settings(settings.clone()));
         }
         if let Err(error) = storage.save_settings(&settings) {
             startup_errors.push(error);
@@ -288,7 +300,9 @@ impl EarthApp {
             instance: instance_lock,
             paste_tx,
             paste_rx,
-            shared_settings,
+            backup_tx,
+            backup_rx,
+            shared_capture_config,
             settings,
             suppression,
             clipboard_rx,
@@ -303,6 +317,7 @@ impl EarthApp {
             storage_bytes,
             cached_results: Vec::new(),
             search_dirty: true,
+            awaiting_newest_selection: true,
             view_mode: ViewMode::Launcher,
             popup_state,
             settings_state,
@@ -363,12 +378,13 @@ impl EarthApp {
             self.record_service_error(t("app.hotkey_unavailable_keep_tray"));
         }
         let (privacy_changed, language_changed) = self
-            .shared_settings
+            .shared_capture_config
             .read()
             .map(|previous| {
                 (
-                    previous.enable_privacy_masking != self.settings.enable_privacy_masking,
-                    previous.language != self.settings.language,
+                    previous.settings.enable_privacy_masking
+                        != self.settings.enable_privacy_masking,
+                    previous.settings.language != self.settings.language,
                 )
             })
             .unwrap_or((false, false));
@@ -383,14 +399,14 @@ impl EarthApp {
                 tray.refresh_language();
             }
         }
-        if let Ok(mut guard) = self.shared_settings.write() {
-            if guard.ignore_next_event != self.settings.ignore_next_event
+        if let Ok(mut guard) = self.shared_capture_config.write() {
+            if guard.settings.ignore_next_event != self.settings.ignore_next_event
                 && let Ok(mut sup) = self.suppression.lock()
             {
                 sup.ignore_next_once = self.settings.ignore_next_event;
                 sup.ignore_generation = sup.ignore_generation.wrapping_add(1);
             }
-            *guard = self.settings.clone();
+            *guard = Arc::new(CompiledCaptureConfig::from_settings(self.settings.clone()));
         }
         if let Err(err) = self.storage.save_settings(&self.settings) {
             self.report_error(tf("app.settings_save_failed", &[("error", &err)]));
@@ -748,12 +764,13 @@ impl EarthApp {
         mode: ViewMode,
         tray_pos: Option<platform::TrayPosition>,
     ) {
-        if !self.visible {
+        let was_visible = self.visible;
+        if !was_visible {
             self.prev_app = platform::capture_frontmost_app();
         } else if let Some(active) = platform::capture_frontmost_app() {
             self.prev_app = Some(active);
         }
-        if !self.visible {
+        if !was_visible {
             self.popup_state.window_pinned = false;
         }
         self.view_mode = mode;
@@ -767,14 +784,9 @@ impl EarthApp {
         self.popup_state.workbench_side = WorkbenchSide::Right;
         self.popup_state.preview_reveal = None;
         if mode == ViewMode::Launcher {
-            self.popup_state.request_search_focus = true;
-            self.popup_state.ime_composing = false;
-            self.popup_state.preview_open = false;
-            self.popup_state.active_transform = None;
-            self.popup_state.inline_edit_text = None;
-            self.popup_state.inline_edit_note = None;
-            self.popup_state.qr_preview_id = None;
+            prepare_launcher_reopen(was_visible, &mut self.popup_state, &mut self.search_dirty);
             self.select_newest_result();
+            self.awaiting_newest_selection = true;
         }
 
         let target_size = (COMPACT_WIDTH, WINDOW_HEIGHT);
@@ -812,6 +824,7 @@ impl EarthApp {
 
     fn hide_popup(&mut self, ctx: &egui::Context, restore_focus: bool) {
         self.popup_state.clear_sensitive_context();
+        self.popup_state.inline_edit_note = None;
         self.popup_state.release_images();
         self.settings_state.recording = None;
         self.sync_shortcut_recording_guards();
@@ -826,6 +839,10 @@ impl EarthApp {
             return;
         }
         self.visible = false;
+        self.awaiting_newest_selection = false;
+        if self.cached_results.capacity() > 128 {
+            self.cached_results.shrink_to(64);
+        }
         self.popup_state.show_about_modal = false;
         self.workbench_anim = None;
         self.workbench_collapse_pending = false;
@@ -864,15 +881,25 @@ impl EarthApp {
     }
 
     fn recompute_search(&mut self) {
-        self.cached_results = match filter_and_search(
-            &self.items,
-            &self.popup_state.search_query,
-            self.popup_state.filter,
-            self.settings.search_mode,
-            self.settings.sort_order,
-            self.settings.pin_position,
-            self.settings.show_special_symbols,
-        ) {
+        let query = &self.popup_state.search_query;
+        let filter = self.popup_state.filter;
+        let mode = self.settings.search_mode;
+        let sort_order = self.settings.sort_order;
+        let pin_pos = self.settings.pin_position;
+        let symbols = self.settings.show_special_symbols;
+        let items = &self.items;
+
+        let search_res = if query.trim().is_empty() || !items.iter().any(|it| it.text_truncated) {
+            filter_and_search(items, query, filter, mode, sort_order, pin_pos, symbols)
+        } else {
+            self.storage.with_full_text_lookup(|lookup| {
+                filter_and_search_with(
+                    items, query, filter, mode, sort_order, pin_pos, symbols, lookup,
+                )
+            })
+        };
+
+        self.cached_results = match search_res {
             Ok(results) => results,
             Err(err) => {
                 self.popup_state.set_status_banner(err, true);
@@ -898,16 +925,22 @@ impl EarthApp {
             PasteBehavior::CopyAndPastePlainText => (true, true),
         };
 
-        if let Err(err) = write_item_to_clipboard(&item, plain_only, &self.suppression) {
-            self.popup_state.set_status_banner(err, true);
-            ctx.request_repaint();
-            return;
-        }
+        let partial_warning = match write_item_to_clipboard(&item, plain_only, &self.suppression) {
+            Ok(warning) => warning,
+            Err(err) => {
+                self.popup_state.set_status_banner(err, true);
+                ctx.request_repaint();
+                return;
+            }
+        };
 
         let marked = self.storage.mark_copied(id);
         self.reload_items();
 
         self.complete_copy_or_paste(ctx, do_paste, t("app.copied"), t("app.pasted"));
+        if let Some(warning) = partial_warning {
+            self.report_error(warning);
+        }
         if let Err(err) = marked {
             self.report_error(tf("app.copied_history_unsaved", &[("error", &err)]));
         }
@@ -945,7 +978,7 @@ impl EarthApp {
     fn finish_qr_export(&mut self, ctx: &egui::Context, action: PopupAction) {
         match action {
             PopupAction::CopyQrImage(png_bytes) => {
-                match write_managed_png(&png_bytes) {
+                match write_managed_png(&png_bytes, &self.suppression) {
                     Ok(()) => {
                         self.popup_state
                             .set_status_banner(t("app.qr_copied"), false);
@@ -992,9 +1025,50 @@ impl EarthApp {
                 _ => (),
             }
         }
+        while let Ok(ev) = self.backup_rx.try_recv() {
+            self.settings_state.backup_busy = false;
+            match ev {
+                BackupEvent::Exported(Ok(dest)) => {
+                    let path = dest.display().to_string();
+                    self.settings_state
+                        .set_status_message(tf("app.export_ok", &[("path", &path)]), false);
+                }
+                BackupEvent::Exported(Err(e)) => {
+                    self.report_error(tf("app.export_failed", &[("error", &e)]));
+                }
+                BackupEvent::Imported(Ok(summary)) => {
+                    self.reload_items();
+                    let image_warning = if summary.missing_images > 0 {
+                        let count = summary.missing_images.to_string();
+                        tf("app.import_missing_images", &[("count", &count)])
+                    } else if summary.legacy_format {
+                        t("app.import_legacy_note").to_string()
+                    } else {
+                        String::new()
+                    };
+                    let imported = summary.imported.to_string();
+                    let skipped = summary.skipped_duplicates.to_string();
+                    self.settings_state.set_status_message(
+                        tf(
+                            "app.import_ok",
+                            &[
+                                ("imported", &imported),
+                                ("skipped", &skipped),
+                                ("warning", &image_warning),
+                            ],
+                        ),
+                        summary.missing_images > 0,
+                    );
+                }
+                BackupEvent::Imported(Err(e)) => {
+                    self.report_error(e);
+                }
+            }
+        }
         while let Ok(result) = self.history.rx.try_recv() {
             match result {
                 Ok(delta) => {
+                    let had_changed_items = !delta.items.is_empty();
                     delta.apply(
                         &mut self.items,
                         &mut self.collections,
@@ -1002,6 +1076,9 @@ impl EarthApp {
                     );
                     self.search_dirty = true;
                     self.sync_tray();
+                    if had_changed_items && (!self.visible || self.awaiting_newest_selection) {
+                        self.select_newest_result();
+                    }
                 }
                 Err(err) => self.report_error(tf("app.history_read_failed", &[("error", &err)])),
             }
@@ -1014,7 +1091,12 @@ impl EarthApp {
                         .storage
                         .upsert_item(*payload, self.settings.max_history)
                     {
-                        Ok(_) => captured_any = true,
+                        Ok(_) => {
+                            captured_any = true;
+                            if !self.visible {
+                                self.awaiting_newest_selection = true;
+                            }
+                        }
                         Err(err) => {
                             self.report_error(tf("app.history_save_failed", &[("error", &err)]))
                         }
@@ -1035,8 +1117,9 @@ impl EarthApp {
                     if let Err(err) = self.storage.save_settings(&self.settings) {
                         self.report_error(tf("app.settings_save_failed", &[("error", &err)]));
                     }
-                    if let Ok(mut guard) = self.shared_settings.write() {
-                        guard.ignore_next_event = false;
+                    if let Ok(mut guard) = self.shared_capture_config.write() {
+                        *guard =
+                            Arc::new(CompiledCaptureConfig::from_settings(self.settings.clone()));
                     }
                     self.sync_tray();
                 }
@@ -1315,29 +1398,38 @@ impl eframe::App for EarthApp {
                                 if self.search_dirty {
                                     self.recompute_search();
                                 }
+                                let prev_selected = self.popup_state.selected_id;
                                 let total_items = self.items.len();
 
-                                let actions = render_popup_view(
-                                    ui,
-                                    &ctx,
-                                    PopupViewData {
-                                        settings: &mut self.settings,
-                                        results: &self.cached_results,
-                                        collections: &self.collections,
-                                        palette: &palette,
-                                        storage_bytes: self.storage_bytes,
-                                        total_items,
-                                        has_accessibility,
-                                    },
-                                    &mut self.popup_state,
-                                );
+                                let actions = {
+                                    let storage = &self.storage;
+                                    let load_full = |id: i64| storage.item(id).ok();
+                                    render_popup_view(
+                                        ui,
+                                        &ctx,
+                                        PopupViewData {
+                                            settings: &mut self.settings,
+                                            results: &self.cached_results,
+                                            collections: &self.collections,
+                                            palette: &palette,
+                                            storage_bytes: self.storage_bytes,
+                                            total_items,
+                                            has_accessibility,
+                                            load_full_item: Some(&load_full),
+                                        },
+                                        &mut self.popup_state,
+                                    )
+                                };
 
                                 if self.popup_state.search_query != prev_query
                                     || self.popup_state.filter != prev_filter
                                 {
+                                    self.awaiting_newest_selection = false;
                                     self.popup_state.reset_list_navigation();
                                     self.search_dirty = true;
                                     ctx.request_repaint();
+                                } else if self.popup_state.selected_id != prev_selected {
+                                    self.awaiting_newest_selection = false;
                                 }
 
                                 for action in actions {
@@ -1586,85 +1678,78 @@ impl eframe::App for EarthApp {
                                             }
                                         }
                                         SettingsAction::ExportJson => {
-                                            self.dialog_open = true;
-                                            if let Some(dest) = rfd::FileDialog::new()
-                                                .set_file_name("earth_clipboard_backup.json")
-                                                .add_filter("JSON", &["json"])
-                                                .save_file()
-                                            {
-                                                let res = self.storage.export_backup(&dest);
-                                                match res {
-                                                    Ok(()) => {
-                                                        let path = PathBuf::from(&dest)
-                                                            .display()
-                                                            .to_string();
-                                                        self.settings_state.set_status_message(
-                                                            tf("app.export_ok", &[("path", &path)]),
-                                                            false,
-                                                        );
-                                                    }
-                                                    Err(e) => {
-                                                        self.settings_state.set_status_message(
-                                                            tf(
-                                                                "app.export_failed",
-                                                                &[("error", &e)],
-                                                            ),
-                                                            true,
-                                                        );
-                                                    }
+                                            if !self.settings_state.backup_busy {
+                                                self.dialog_open = true;
+                                                let picked = rfd::FileDialog::new()
+                                                    .set_file_name("earth_clipboard_backup.json")
+                                                    .add_filter("JSON", &["json"])
+                                                    .save_file();
+                                                self.dialog_open = false;
+                                                if let Some(dest) = picked {
+                                                    self.settings_state.backup_busy = true;
+                                                    self.settings_state.set_status_message(
+                                                        t("app.backup_exporting"),
+                                                        false,
+                                                    );
+                                                    let base_dir =
+                                                        self.storage.base_dir().to_path_buf();
+                                                    let tx = self.backup_tx.clone();
+                                                    let repaint = ctx.clone();
+                                                    let _ = std::thread::Builder::new()
+                                                        .name("earth-backup-export".into())
+                                                        .spawn(move || {
+                                                            let res =
+                                                                Storage::open_existing_in_dir(
+                                                                    &base_dir,
+                                                                )
+                                                                .and_then(|s| {
+                                                                    s.export_backup(&dest)
+                                                                })
+                                                                .map(|()| dest);
+                                                            let _ =
+                                                                tx.send(BackupEvent::Exported(res));
+                                                            repaint.request_repaint();
+                                                        });
                                                 }
                                             }
-                                            self.dialog_open = false;
                                         }
                                         SettingsAction::ImportJson => {
-                                            self.dialog_open = true;
-                                            if let Some(src) = rfd::FileDialog::new()
-                                                .add_filter("JSON", &["json"])
-                                                .pick_file()
-                                            {
-                                                let res = self
-                                                    .storage
-                                                    .import_backup(&src, self.settings.max_history);
-                                                match res {
-                                                    Ok(summary) => {
-                                                        self.reload_items();
-                                                        let image_warning = if summary
-                                                            .missing_images
-                                                            > 0
-                                                        {
-                                                            let count =
-                                                                summary.missing_images.to_string();
-                                                            tf(
-                                                                "app.import_missing_images",
-                                                                &[("count", &count)],
-                                                            )
-                                                        } else if summary.legacy_format {
-                                                            t("app.import_legacy_note").to_string()
-                                                        } else {
-                                                            String::new()
-                                                        };
-                                                        let imported = summary.imported.to_string();
-                                                        let skipped =
-                                                            summary.skipped_duplicates.to_string();
-                                                        self.settings_state.set_status_message(
-                                                            tf(
-                                                                "app.import_ok",
-                                                                &[
-                                                                    ("imported", &imported),
-                                                                    ("skipped", &skipped),
-                                                                    ("warning", &image_warning),
-                                                                ],
-                                                            ),
-                                                            summary.missing_images > 0,
-                                                        );
-                                                    }
-                                                    Err(e) => {
-                                                        self.settings_state
-                                                            .set_status_message(e, true);
-                                                    }
+                                            if !self.settings_state.backup_busy {
+                                                self.dialog_open = true;
+                                                let picked = rfd::FileDialog::new()
+                                                    .add_filter("JSON", &["json"])
+                                                    .pick_file();
+                                                self.dialog_open = false;
+                                                if let Some(src) = picked {
+                                                    self.settings_state.backup_busy = true;
+                                                    self.settings_state.set_status_message(
+                                                        t("app.backup_importing"),
+                                                        false,
+                                                    );
+                                                    let base_dir =
+                                                        self.storage.base_dir().to_path_buf();
+                                                    let max_history = self.settings.max_history;
+                                                    let tx = self.backup_tx.clone();
+                                                    let repaint = ctx.clone();
+                                                    let _ = std::thread::Builder::new()
+                                                        .name("earth-backup-import".into())
+                                                        .spawn(move || {
+                                                            let res =
+                                                                Storage::open_existing_in_dir(
+                                                                    &base_dir,
+                                                                )
+                                                                .and_then(|s| {
+                                                                    s.import_backup(
+                                                                        &src,
+                                                                        max_history,
+                                                                    )
+                                                                });
+                                                            let _ =
+                                                                tx.send(BackupEvent::Imported(res));
+                                                            repaint.request_repaint();
+                                                        });
                                                 }
                                             }
-                                            self.dialog_open = false;
                                         }
                                         SettingsAction::CreateCollection { name, color_hex } => {
                                             match self.storage.create_collection(&name, &color_hex)
@@ -1783,6 +1868,21 @@ pub(crate) struct FocusBlurCheck {
 
 fn has_reopen_entry(hotkey_available: bool, tray_visible: bool) -> bool {
     hotkey_available || tray_visible
+}
+
+fn prepare_launcher_reopen(was_visible: bool, state: &mut PopupState, search_dirty: &mut bool) {
+    if !was_visible && (!state.search_query.is_empty() || state.filter != CategoryFilter::All) {
+        state.search_query.clear();
+        state.filter = CategoryFilter::All;
+        *search_dirty = true;
+    }
+    state.request_search_focus = true;
+    state.ime_composing = false;
+    state.preview_open = false;
+    state.active_transform = None;
+    state.inline_edit_text = None;
+    state.inline_edit_note = None;
+    state.qr_preview_id = None;
 }
 
 fn newest_result_id(results: &[SearchResultItem]) -> Option<i64> {
@@ -2261,8 +2361,7 @@ mod tests {
     fn newest_result_id_selects_latest_copy_even_with_pinned_items_at_top() {
         use super::newest_result_id;
         use crate::model::{ClipItem, ClipKind};
-        use crate::search::SearchResultItem;
-        use std::collections::HashSet;
+        use crate::search::{MatchMask, SearchResultItem};
         use std::sync::Arc;
 
         assert_eq!(newest_result_id(&[]), None);
@@ -2289,12 +2388,15 @@ mod tests {
                 pinned,
                 collection_id: None,
                 note: None,
+                text_truncated: false,
+                has_rich_text: false,
                 detected_color: None,
                 is_url: false,
                 sensitive_label: None,
             }),
             score: 0,
-            matched_indices: HashSet::new(),
+            matched_indices: MatchMask::default(),
+            display_text: None,
         };
 
         // Pinned old item sits at index 0, newest unpinned copy sits below it.
@@ -2313,5 +2415,37 @@ mod tests {
             make_item(4, 3000, false),
         ];
         assert_eq!(newest_result_id(&recopied_pinned), Some(1));
+    }
+
+    #[test]
+    fn reopening_launcher_from_hidden_resets_stale_search_and_filter() {
+        use super::prepare_launcher_reopen;
+        use crate::model::CategoryFilter;
+        use crate::ui::popup::PopupState;
+
+        let mut state = PopupState {
+            search_query: "stale query".into(),
+            filter: CategoryFilter::Image,
+            preview_open: true,
+            inline_edit_text: Some((1, "draft".into())),
+            inline_edit_note: Some((1, "note".into())),
+            ..Default::default()
+        };
+        let mut dirty = false;
+
+        // While already visible, switching back to Launcher keeps active query/filter.
+        prepare_launcher_reopen(true, &mut state, &mut dirty);
+        assert_eq!(state.search_query, "stale query");
+        assert_eq!(state.filter, CategoryFilter::Image);
+        assert!(!dirty);
+        assert!(!state.preview_open);
+
+        // Reopening from hidden resets stale query and filter so the newest item is always visible.
+        prepare_launcher_reopen(false, &mut state, &mut dirty);
+        assert!(state.search_query.is_empty());
+        assert_eq!(state.filter, CategoryFilter::All);
+        assert!(dirty);
+        assert!(state.inline_edit_text.is_none());
+        assert!(state.inline_edit_note.is_none());
     }
 }
