@@ -516,7 +516,12 @@ fn load_mmap_font_data(path: &Path, target_ps_name: &str) -> Option<FontData> {
     // SAFETY: OS system font collections are read-only immutable assets mapped for the app lifetime.
     let mapped = unsafe { memmap2::Mmap::map(&file).ok()? };
     let index = resolve_rasterizable_ttc_face(&mapped, target_ps_name)?;
-    Some(FontData::from_blob(Arc::new(mapped), index))
+    let y_offset_factor = font_line_gap_y_offset_factor(&mapped, index);
+    let mut font_data = FontData::from_blob(Arc::new(mapped), index);
+    if y_offset_factor > 0.0 {
+        font_data.tweak.y_offset_factor = y_offset_factor;
+    }
+    Some(font_data)
 }
 
 /// Checks whether `path` is a font file containing standard vector outlines (`glyf`, `CFF `,
@@ -540,9 +545,67 @@ fn read_u16_be(bytes: &[u8], off: usize) -> Option<u16> {
     Some(u16::from_be_bytes([slice[0], slice[1]]))
 }
 
+fn read_i16_be(bytes: &[u8], off: usize) -> Option<i16> {
+    let slice = bytes.get(off..off.checked_add(2)?)?;
+    Some(i16::from_be_bytes([slice[0], slice[1]]))
+}
+
 fn read_u32_be(bytes: &[u8], off: usize) -> Option<u32> {
     let slice = bytes.get(off..off.checked_add(4)?)?;
     Some(u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+/// Computes a downward `FontTweak::y_offset_factor` that compensates for positive OpenType
+/// line gap (`leading`). `epaint` places `row_height = ascent - descent + line_gap` with all
+/// `line_gap` below the baseline, which shifts glyphs upward by `0.5 * line_gap / upem` inside
+/// centered pills and buttons (for example, `Hiragino Sans GB.ttc` on macOS has `line_gap = 500`
+/// at `upem = 1000`, pushing text ~3.5 px too high without this offset).
+pub(crate) fn font_line_gap_y_offset_factor(bytes: &[u8], face_idx: u32) -> f32 {
+    let face_off = if bytes.get(0..4) == Some(b"ttcf") {
+        let Some(off) = read_u32_be(bytes, 12 + face_idx as usize * 4) else {
+            return 0.0;
+        };
+        off as usize
+    } else {
+        0
+    };
+    let Some(num_tables) = read_u16_be(bytes, face_off.saturating_add(4)) else {
+        return 0.0;
+    };
+    let records_start = face_off.saturating_add(12);
+    let mut head_off = None;
+    let mut hhea_off = None;
+    let mut os2_off = None;
+    for i in 0..num_tables.min(128) as usize {
+        let rec_off = records_start + i * 16;
+        match bytes.get(rec_off..rec_off + 4) {
+            Some(b"head") => head_off = read_u32_be(bytes, rec_off + 8).map(|v| v as usize),
+            Some(b"hhea") => hhea_off = read_u32_be(bytes, rec_off + 8).map(|v| v as usize),
+            Some(b"OS/2") => os2_off = read_u32_be(bytes, rec_off + 8).map(|v| v as usize),
+            _ => {}
+        }
+    }
+    let Some(upem) = head_off.and_then(|o| read_u16_be(bytes, o + 18)) else {
+        return 0.0;
+    };
+    if upem == 0 {
+        return 0.0;
+    }
+    // Match `skrifa::metrics::Metrics::new`: prefer OS/2 typo metrics when USE_TYPO_METRICS
+    // (fsSelection bit 7) is set, otherwise use hhea lineGap.
+    let use_typo = os2_off
+        .and_then(|o| read_u16_be(bytes, o + 62))
+        .is_some_and(|fs_sel| (fs_sel & (1 << 7)) != 0);
+    let leading = if use_typo {
+        os2_off.and_then(|o| read_i16_be(bytes, o + 72))
+    } else {
+        hhea_off.and_then(|o| read_i16_be(bytes, o + 8))
+    }
+    .unwrap_or(0);
+    if leading <= 0 {
+        return 0.0;
+    }
+    (0.5 * (leading as f32 / upem as f32)).clamp(0.0, 0.4)
 }
 
 /// Returns `true` if the OpenType/TrueType face at `face_off` contains at least one outline
@@ -838,6 +901,93 @@ mod tests {
                 .cloned();
             assert_eq!(mono_primary.as_deref(), Some("earth_mono_Menlo-Regular"));
         });
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_line_gap_compensation_centers_hiragino_and_shortcut_glyphs() {
+        let sfns = Path::new("/System/Library/Fonts/SFNS.ttf");
+        if sfns.is_file() {
+            let bytes = std::fs::read(sfns).unwrap();
+            assert!(
+                font_line_gap_y_offset_factor(&bytes, 0).abs() < 0.001,
+                "SFNS.ttf has zero line gap"
+            );
+        }
+
+        let hiragino = Path::new("/System/Library/Fonts/Hiragino Sans GB.ttc");
+        if hiragino.is_file() {
+            let bytes = std::fs::read(hiragino).unwrap();
+            let idx = resolve_rasterizable_ttc_face(&bytes, "HiraginoSansGB-W3")
+                .expect("HiraginoSansGB-W3 should resolve");
+            let offset = font_line_gap_y_offset_factor(&bytes, idx);
+            assert!(
+                (offset - 0.25).abs() < 0.02,
+                "expected ~0.25 line-gap centering offset for Hiragino Sans GB, got {offset}"
+            );
+
+            // Simulate macOS 27.0.1 fallback stack: SFNS + Hiragino Sans GB (no PingFang.ttc)
+            let ctx = egui::Context::default();
+            if let Some(h_data) = load_mmap_font_data(hiragino, "HiraginoSansGB-W3") {
+                ctx.add_font(FontInsert::new(
+                    "test_hiragino",
+                    h_data,
+                    vec![InsertFontFamily {
+                        family: FontFamily::Proportional,
+                        priority: FontPriority::Highest,
+                    }],
+                ));
+            }
+            if sfns.is_file()
+                && let Some(s_data) = load_mmap_font_data(sfns, ".SFNS-Regular")
+            {
+                ctx.add_font(FontInsert::new(
+                    "test_sfns",
+                    s_data,
+                    vec![InsertFontFamily {
+                        family: FontFamily::Proportional,
+                        priority: FontPriority::Highest,
+                    }],
+                ));
+            }
+
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                for sample in ["通用", "重置", "⇧⌘V", "⌥⌫"] {
+                    let galley = ui.painter().layout_no_wrap(
+                        sample.to_string(),
+                        FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
+                    let box_cy = galley.rect.center().y;
+                    let ink_cy = galley.mesh_bounds.center().y;
+                    assert!(
+                        (ink_cy - box_cy).abs() <= 1.6,
+                        "sample '{sample}' ink center ({ink_cy:.2}) drifted from box center ({box_cy:.2}) under SFNS+Hiragino"
+                    );
+                }
+            });
+            out.textures_delta.clear();
+        }
+
+        // Also verify default install_crisp_fonts stack keeps shortcut symbols and CJK centered
+        let ctx = egui::Context::default();
+        install_crisp_fonts(&ctx);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            for sample in ["通用", "检查更新", "⇧⌘V", "⌥P"] {
+                let galley = ui.painter().layout_no_wrap(
+                    sample.to_string(),
+                    FontId::proportional(14.0),
+                    Color32::WHITE,
+                );
+                let box_cy = galley.rect.center().y;
+                let ink_cy = galley.mesh_bounds.center().y;
+                assert!(
+                    (ink_cy - box_cy).abs() <= 1.6,
+                    "sample '{sample}' ink center ({ink_cy:.2}) drifted from box center ({box_cy:.2})"
+                );
+            }
+        });
+        out.textures_delta.clear();
     }
 
     #[test]

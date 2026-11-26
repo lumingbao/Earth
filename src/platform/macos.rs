@@ -507,6 +507,19 @@ pub fn resolve_font_path_by_postscript_name(ps_name: &str) -> Option<PathBuf> {
 
 pub fn preferred_system_fonts() -> PreferredSystemFonts {
     let mut ui = Vec::new();
+    // Always place Apple's native San Francisco UI font first when available: it ships on
+    // every macOS version with `glyf` outlines, zero line gap, and complete Latin + macOS
+    // shortcut symbol coverage (`⇧⌘⌥⌃⌫⏎⎋✓⚠`), preventing baseline jumps when PingFang is
+    // absent or `hvgl`-only on newer macOS releases.
+    let sfns_path = PathBuf::from("/System/Library/Fonts/SFNS.ttf");
+    if sfns_path.is_file() && crate::ui::theme::font_file_supports_face(&sfns_path, ".SFNS-Regular")
+    {
+        ui.push(SystemFontCandidate {
+            path: sfns_path,
+            postscript_name: ".SFNS-Regular",
+        });
+    }
+
     for (ps, fallback_path) in [
         ("PingFangSC-Regular", None),
         (
@@ -514,12 +527,12 @@ pub fn preferred_system_fonts() -> PreferredSystemFonts {
             Some("/System/Library/Fonts/Hiragino Sans GB.ttc"),
         ),
         (
-            "STHeitiSC-Light",
-            Some("/System/Library/Fonts/STHeiti Light.ttc"),
-        ),
-        (
             "STHeitiSC-Medium",
             Some("/System/Library/Fonts/STHeiti Medium.ttc"),
+        ),
+        (
+            "STHeitiSC-Light",
+            Some("/System/Library/Fonts/STHeiti Light.ttc"),
         ),
         (
             "ArialUnicodeMS",
