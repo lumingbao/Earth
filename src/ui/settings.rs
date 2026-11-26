@@ -2187,7 +2187,11 @@ mod tests {
             fn walk(shape: &egui::epaint::Shape, out: &mut Vec<(String, egui::Rect)>) {
                 match shape {
                     egui::epaint::Shape::Text(t) => {
-                        out.push((t.galley.text().to_string(), t.visual_bounding_rect()));
+                        // Compare line-box vertical centers rather than tight glyph ink bounds,
+                        // so descenders (e.g. "Fuzzy" vs "Search mode:" in Windows Segoe UI)
+                        // do not shift the measured centerline when baselines are identical.
+                        let line_rect = t.galley.rect.translate(t.pos.to_vec2());
+                        out.push((t.galley.text().to_string(), line_rect));
                     }
                     egui::epaint::Shape::Vec(v) => {
                         for child in v {
