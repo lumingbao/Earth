@@ -327,7 +327,24 @@ impl EarthApp {
         };
         app.sync_tray();
         app.recompute_search();
+        app.select_newest_result();
         app
+    }
+
+    fn select_newest_result(&mut self) {
+        if self.search_dirty {
+            self.recompute_search();
+        }
+        let newest = newest_result_id(&self.cached_results);
+        if self.popup_state.selected_id != newest {
+            self.popup_state.clear_sensitive_context();
+            self.popup_state.selected_id = newest;
+        }
+        self.popup_state.selection_changed_at = Instant::now();
+        self.popup_state.reset_list_navigation();
+        self.popup_state.list_scroll_y = 0.0;
+        self.popup_state.scroll_anim_target = Some(0.0);
+        self.popup_state.scroll_to_selection = true;
     }
 
     fn reload_items(&mut self) {
@@ -752,13 +769,12 @@ impl EarthApp {
         if mode == ViewMode::Launcher {
             self.popup_state.request_search_focus = true;
             self.popup_state.ime_composing = false;
-            self.popup_state.selection_changed_at = Instant::now();
             self.popup_state.preview_open = false;
             self.popup_state.active_transform = None;
             self.popup_state.inline_edit_text = None;
             self.popup_state.inline_edit_note = None;
             self.popup_state.qr_preview_id = None;
-            self.popup_state.reset_list_navigation();
+            self.select_newest_result();
         }
 
         let target_size = (COMPACT_WIDTH, WINDOW_HEIGHT);
@@ -1769,6 +1785,18 @@ fn has_reopen_entry(hotkey_available: bool, tray_visible: bool) -> bool {
     hotkey_available || tray_visible
 }
 
+fn newest_result_id(results: &[SearchResultItem]) -> Option<i64> {
+    results
+        .iter()
+        .max_by(|a, b| {
+            a.item
+                .last_copied_at
+                .cmp(&b.item.last_copied_at)
+                .then_with(|| a.item.id.cmp(&b.item.id))
+        })
+        .map(|r| r.item.id)
+}
+
 pub(crate) fn should_auto_hide_on_blur(s: &FocusBlurCheck) -> bool {
     s.visible
         && !s.focused
@@ -2227,5 +2255,63 @@ mod tests {
         }
         assert!(finished);
         assert_eq!(last_r, 1.0);
+    }
+
+    #[test]
+    fn newest_result_id_selects_latest_copy_even_with_pinned_items_at_top() {
+        use super::newest_result_id;
+        use crate::model::{ClipItem, ClipKind};
+        use crate::search::SearchResultItem;
+        use std::collections::HashSet;
+        use std::sync::Arc;
+
+        assert_eq!(newest_result_id(&[]), None);
+
+        let make_item = |id: i64, last_copied_at: i64, pinned: bool| SearchResultItem {
+            item: Arc::new(ClipItem {
+                id,
+                kind: ClipKind::Text,
+                content_hash: format!("h{id}"),
+                text_content: Some(format!("item {id}")),
+                html_content: None,
+                rtf_content: None,
+                image_path: None,
+                thumb_path: None,
+                image_width: None,
+                image_height: None,
+                files: Vec::new(),
+                byte_size: 8,
+                source_app: None,
+                source_bundle_id: None,
+                first_copied_at: last_copied_at,
+                last_copied_at,
+                copy_count: 1,
+                pinned,
+                collection_id: None,
+                note: None,
+                detected_color: None,
+                is_url: false,
+                sensitive_label: None,
+            }),
+            score: 0,
+            matched_indices: HashSet::new(),
+        };
+
+        // Pinned old item sits at index 0, newest unpinned copy sits below it.
+        let results = vec![
+            make_item(1, 1000, true),
+            make_item(2, 2000, true),
+            make_item(3, 5000, false),
+            make_item(4, 3000, false),
+        ];
+        assert_eq!(newest_result_id(&results), Some(3));
+
+        // When a pinned item itself was re-copied most recently, select that pinned item.
+        let recopied_pinned = vec![
+            make_item(1, 9000, true),
+            make_item(3, 5000, false),
+            make_item(4, 3000, false),
+        ];
+        assert_eq!(newest_result_id(&recopied_pinned), Some(1));
     }
 }
