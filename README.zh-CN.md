@@ -16,6 +16,8 @@
 <p align="center">
   <a href="https://github.com/lumingbao/Earth/releases/latest"><b>下载</b></a>
   &nbsp;·&nbsp;
+  <a href="#界面预览">界面预览</a>
+  &nbsp;·&nbsp;
   <a href="#核心特性">核心特性</a>
   &nbsp;·&nbsp;
   <a href="#快捷键">快捷键</a>
@@ -29,6 +31,52 @@ Earth 把极速键盘流剪贴板历史与双栏速览工作台带到一个以�
 `clipboard-rs` + `rusqlite`）为核心的轻量级原生桌面应用里。
 
 支持文本、富文本、图片、文件、内联编辑与备注、离线二维码、快捷内容加工、智能收藏分组、敏感信息脱敏与中英文多语言界面。提供 **macOS** 与 **Windows** 版本——无 Electron、无 Chromium、无 WebView 负担。
+
+## 界面预览
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/7.png" alt="双栏速览工作台"><br>
+      <sub><b>双栏速览工作台</b> · 详情预览、固定、备注、编辑与快捷加工</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/8.png" alt="离线二维码生成"><br>
+      <sub><b>离线二维码</b> · 本地生成高清二维码，支持一键复制或另存</sub>
+    </td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="assets/1.png" alt="剪贴板主列表"><br>
+      <sub><b>主面板列表</b> · 模糊搜索、分类筛选胶囊与来源应用标签</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="assets/2.png" alt="偏好设置 — 通用"><br>
+      <sub><b>通用设置</b> · 界面语言、更新检查、实时录制快捷键与点击模式</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="assets/3.png" alt="偏好设置 — 存储"><br>
+      <sub><b>存储设置</b> · 保存类型、单条体积上限、排序与 JSON 备份</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <img src="assets/4.png" alt="偏好设置 — 外观"><br>
+      <sub><b>外观设置</b> · 跟随系统 / 深浅色主题、弹窗位置与视觉选项</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="assets/5.png" alt="偏好设置 — 忽略与隐私"><br>
+      <sub><b>忽略与隐私</b> · 敏感信息脱敏、忽略应用、格式与正则规则</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="assets/6.png" alt="偏好设置 — 高级与收藏"><br>
+      <sub><b>高级与收藏</b> · 暂停监听控制与自定义颜色收藏分组</sub>
+    </td>
+  </tr>
+</table>
 
 ## 极致轻量
 

@@ -16,6 +16,8 @@
 <p align="center">
   <a href="https://github.com/lumingbao/Earth/releases/latest"><b>Download</b></a>
   &nbsp;·&nbsp;
+  <a href="#screenshots">Screenshots</a>
+  &nbsp;·&nbsp;
   <a href="#features">Features</a>
   &nbsp;·&nbsp;
   <a href="#shortcuts">Shortcuts</a>
@@ -32,6 +34,52 @@ workbench to a lightweight native app with a pure Rust core (`eframe / egui` +
 Text, rich text, images, files, inline editing, notes, offline QR codes, Quick
 Actions, smart collections, sensitive-data masking, and English / Chinese UI.
 Builds for **macOS** and **Windows** — no Electron, no Chromium, no WebView.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="assets/7.png" alt="Split-pane Quick-Preview Workbench"><br>
+      <sub><b>Quick-Preview Workbench</b> · Inspect, edit, pin, tag &amp; run Quick Actions</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="assets/8.png" alt="Offline QR Code Generator"><br>
+      <sub><b>Offline QR Code</b> · Generate, copy, or save QR images locally</sub>
+    </td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="assets/1.png" alt="Compact Clipboard Launcher"><br>
+      <sub><b>Compact Launcher</b> · Instant fuzzy search &amp; filter capsules</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="assets/2.png" alt="Preferences — General"><br>
+      <sub><b>General</b> · Language, updates, live shortcut recorder &amp; click mode</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="assets/3.png" alt="Preferences — Storage"><br>
+      <sub><b>Storage</b> · Capture types, limits, sorting &amp; JSON backups</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <img src="assets/4.png" alt="Preferences — Appearance"><br>
+      <sub><b>Appearance</b> · System / Dark / Light theme, positioning &amp; badges</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="assets/5.png" alt="Preferences — Ignore & Privacy"><br>
+      <sub><b>Ignore &amp; Privacy</b> · Secret masking, app rules &amp; regex filters</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="assets/6.png" alt="Preferences — Advanced & Collections"><br>
+      <sub><b>Advanced &amp; Collections</b> · Pause controls &amp; color-coded groups</sub>
+    </td>
+  </tr>
+</table>
 
 ## Lightweight by Design
 
